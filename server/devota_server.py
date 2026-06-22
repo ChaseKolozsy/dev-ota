@@ -409,9 +409,20 @@ def windows_current_user_is_administrator() -> bool:
     if not command_exists("powershell.exe"):
         return False
     script = (
-        "$id=[Security.Principal.WindowsIdentity]::GetCurrent(); "
-        "$id.Groups | ForEach-Object { $_.Value } | "
-        "Select-String -SimpleMatch 'S-1-5-32-544'"
+        "$groups = whoami /groups 2>$null; "
+        "if ($groups -match 'S-1-5-32-544') { 'true'; exit 0 }; "
+        "$user = [Environment]::UserName; "
+        "$domain = [Environment]::UserDomainName; "
+        "$computer = [Environment]::MachineName; "
+        "$names = @($user, \"$domain\\$user\", \"$computer\\$user\", \".\\$user\"); "
+        "$members = net localgroup Administrators 2>$null; "
+        "foreach ($line in $members) { "
+        "  $trim = $line.Trim(); "
+        "  foreach ($name in $names) { "
+        "    if ($trim -ieq $name) { 'true'; exit 0 } "
+        "  } "
+        "}; "
+        "'false'"
     )
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
@@ -419,7 +430,7 @@ def windows_current_user_is_administrator() -> bool:
         timeout=8,
         capture_output=True,
     )
-    return proc.returncode == 0 and "S-1-5-32-544" in proc.stdout
+    return proc.returncode == 0 and "true" in proc.stdout.lower()
 
 
 def repair_windows_acl(path: Path, administrators_file: bool = False) -> str | None:
