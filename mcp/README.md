@@ -44,6 +44,11 @@ Useful environment variables:
 ## Tool Groups
 
 - Build/install: `android_list_builds`, `android_build_apk`, `android_install_latest`, `android_rebuild_install_launch`.
+- Project board: `devota_projects_board`, `devota_projects_create_client`,
+  `devota_projects_create_project`, `devota_projects_create_template`,
+  `devota_projects_create_card`, `devota_projects_advance_card`,
+  `devota_projects_add_comment`, `devota_projects_send_card_email`,
+  `devota_projects_pull_replies`.
 - State capture: `android_status`, `android_collect_state`, `android_screenshot`, `android_ui_dump`, `android_logcat_capture`.
 - Interaction: `android_tap`, `android_long_tap`, `android_swipe`, `android_type_text`, `android_back`.
 - Whole-device navigation: `android_home`, `android_recents`, `android_open_settings`, `android_open_uri`.
@@ -52,3 +57,8 @@ Useful environment variables:
 Build commands are optional and disabled unless `DEVOTA_ENABLE_BUILD_COMMANDS=1`.
 The core DevOTA path is serving and installing APKs that already exist in the
 configured repo.
+
+The `devota_projects_*` tools require `DEVOTA_BUILD_SERVER_URL` because they
+use the build server's SQLite-backed project APIs. Email sending also requires
+Postmark settings to be saved from the DevOTA Projects tab or via
+`POST /projects/email/config`.

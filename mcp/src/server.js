@@ -166,6 +166,38 @@ function imageResult(base64, details) {
   };
 }
 
+function requireBuildServerUrl() {
+  if (!buildServerUrl) {
+    throw new Error("DEVOTA_BUILD_SERVER_URL is required for DevOTA project tools");
+  }
+  return buildServerUrl;
+}
+
+async function buildServerJson(pathname, options = {}) {
+  const base = requireBuildServerUrl();
+  const method = options.method || "GET";
+  const headers = { Accept: "application/json", ...(options.headers || {}) };
+  const init = { method, headers };
+  if (options.data !== undefined) {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(options.data);
+  }
+  const response = await fetch(`${base}${pathname}`, init);
+  const text = await response.text();
+  let payload = {};
+  if (text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`DevOTA build server ${method} ${pathname} returned HTTP ${response.status}: ${text.trim()}`);
+  }
+  return payload;
+}
+
 function adbArgs(serial, args) {
   return serial ? ["-s", serial, ...args] : args;
 }
@@ -694,6 +726,210 @@ server.registerTool(
     },
   },
   async ({ appId }) => textResult(await scanBuilds(appId)),
+);
+
+server.registerTool(
+  "devota_projects_board",
+  {
+    title: "Read DevOTA Project Board",
+    description: "Return clients, projects, phases, cards, comments, templates, and email configuration state from the DevOTA build server.",
+  },
+  async () => textResult(await buildServerJson("/projects/board")),
+);
+
+server.registerTool(
+  "devota_projects_create_client",
+  {
+    title: "Create DevOTA Client",
+    description: "Create a client record for the DevOTA Projects board.",
+    inputSchema: {
+      name: z.string(),
+      email: z.string().optional(),
+      notes: z.string().optional(),
+    },
+  },
+  async ({ name, email, notes }) => textResult(
+    await buildServerJson("/projects/clients", {
+      method: "POST",
+      data: { name, email, notes },
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_projects_create_project",
+  {
+    title: "Create DevOTA Project",
+    description: "Create a project. Pass clientId, or pass clientName/clientEmail to create the client first.",
+    inputSchema: {
+      clientId: z.number().optional(),
+      clientName: z.string().optional(),
+      clientEmail: z.string().optional(),
+      name: z.string(),
+      repoUrl: z.string().optional(),
+      buildAppId: z.string().optional(),
+      notes: z.string().optional(),
+      templateId: z.number().optional(),
+      applyTemplate: z.boolean().default(true),
+    },
+  },
+  async ({ clientId, clientName, clientEmail, name, repoUrl, buildAppId, notes, templateId, applyTemplate }) => {
+    let actualClientId = clientId;
+    let client = null;
+    if (!actualClientId) {
+      if (!clientName) throw new Error("clientId or clientName is required");
+      const created = await buildServerJson("/projects/clients", {
+        method: "POST",
+        data: { name: clientName, email: clientEmail || "" },
+      });
+      client = created.item;
+      actualClientId = client?.id;
+    }
+    const project = await buildServerJson("/projects/projects", {
+      method: "POST",
+      data: {
+        clientId: actualClientId,
+        name,
+        repoUrl,
+        buildAppId,
+        notes,
+        templateId,
+        applyTemplate,
+      },
+    });
+    return textResult({ status: "ok", client, project: project.item });
+  },
+);
+
+server.registerTool(
+  "devota_projects_create_template",
+  {
+    title: "Create DevOTA Phase Template",
+    description: "Create a reusable phase template for new projects.",
+    inputSchema: {
+      name: z.string(),
+      phases: z.array(z.string()).min(1),
+    },
+  },
+  async ({ name, phases }) => textResult(
+    await buildServerJson("/projects/templates", {
+      method: "POST",
+      data: { name, phases },
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_projects_create_card",
+  {
+    title: "Create DevOTA Card",
+    description: "Create a Kanban card under an existing phase.",
+    inputSchema: {
+      phaseId: z.number(),
+      title: z.string(),
+      body: z.string().optional(),
+      status: z.enum(["todo", "doing", "waiting_client", "review", "done"]).default("todo"),
+      clientActionRequired: z.boolean().default(false),
+    },
+  },
+  async ({ phaseId, title, body, status, clientActionRequired }) => textResult(
+    await buildServerJson("/projects/cards", {
+      method: "POST",
+      data: { phaseId, title, body, status, clientActionRequired },
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_projects_advance_card",
+  {
+    title: "Advance DevOTA Card",
+    description: "Move a card to a new status and optionally a new phase, with an optional comment.",
+    inputSchema: {
+      cardId: z.number(),
+      status: z.enum(["todo", "doing", "waiting_client", "review", "done"]),
+      phaseId: z.number().optional(),
+      clientActionRequired: z.boolean().optional(),
+      comment: z.string().optional(),
+    },
+  },
+  async ({ cardId, status, phaseId, clientActionRequired, comment }) => {
+    const data = { status };
+    if (phaseId !== undefined) data.phaseId = phaseId;
+    if (clientActionRequired !== undefined) data.clientActionRequired = clientActionRequired;
+    const updated = await buildServerJson(`/projects/cards/${cardId}`, {
+      method: "PATCH",
+      data,
+    });
+    let addedComment = null;
+    if (comment && comment.trim()) {
+      const result = await buildServerJson(`/projects/cards/${cardId}/comments`, {
+        method: "POST",
+        data: { authorType: "me", body: comment.trim(), source: "mcp" },
+      });
+      addedComment = result.item;
+    }
+    return textResult({ status: "ok", card: updated.item, comment: addedComment });
+  },
+);
+
+server.registerTool(
+  "devota_projects_add_comment",
+  {
+    title: "Add DevOTA Card Comment",
+    description: "Append a comment to a DevOTA card thread.",
+    inputSchema: {
+      cardId: z.number(),
+      body: z.string(),
+      authorType: z.enum(["me", "client", "system"]).default("me"),
+    },
+  },
+  async ({ cardId, body, authorType }) => textResult(
+    await buildServerJson(`/projects/cards/${cardId}/comments`, {
+      method: "POST",
+      data: { body, authorType, source: "mcp" },
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_projects_send_card_email",
+  {
+    title: "Send DevOTA Card Email",
+    description: "Preview or send a Postmark email tied to a card thread.",
+    inputSchema: {
+      cardId: z.number(),
+      event: z.enum(["update", "phase_started", "phase_completed", "client_action"]).default("update"),
+      subject: z.string().optional(),
+      message: z.string().optional(),
+      previewOnly: z.boolean().default(false),
+    },
+  },
+  async ({ cardId, event, subject, message, previewOnly }) => {
+    const path = previewOnly
+      ? `/projects/cards/${cardId}/email/preview`
+      : `/projects/cards/${cardId}/email/send`;
+    return textResult(
+      await buildServerJson(path, {
+        method: "POST",
+        data: { event, subject, message },
+      }),
+    );
+  },
+);
+
+server.registerTool(
+  "devota_projects_pull_replies",
+  {
+    title: "Pull DevOTA Email Replies",
+    description: "Pull inbound reply events from the configured public relay into DevOTA card comments.",
+  },
+  async () => textResult(
+    await buildServerJson("/projects/mail/pull", {
+      method: "POST",
+      data: {},
+    }),
+  ),
 );
 
 server.registerTool(

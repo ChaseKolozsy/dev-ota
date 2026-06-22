@@ -12,6 +12,7 @@ import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
 import 'openai_key_dialog.dart';
+import 'projects_tab.dart';
 import 'ssh_terminal_tab.dart';
 import 'voice_input_service.dart';
 
@@ -81,7 +82,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
     _loadServers();
     _loadIssues();
     _loadCommands();
@@ -1039,6 +1040,7 @@ class _BuildListScreenState extends State<BuildListScreen>
               tabs: const [
                 _CompactTab(icon: Icons.wifi_tethering, label: 'Connect'),
                 _CompactTab(icon: Icons.android, label: 'Builds'),
+                _CompactTab(icon: Icons.view_kanban, label: 'Projects'),
                 _CompactTab(icon: Icons.terminal, label: 'Terminal'),
                 _CompactTab(icon: Icons.terminal, label: 'Commands'),
                 _CompactTab(icon: Icons.hub, label: 'Agent'),
@@ -1058,6 +1060,7 @@ class _BuildListScreenState extends State<BuildListScreen>
             onServerSelected: _addAndSelectServer,
           ),
           _buildBuildsTab(),
+          ProjectsTab(dio: _dio, serverUrl: _baseUrl),
           SshTerminalTab(
             key: const PageStorageKey('ssh-terminal-tab'),
             dio: _dio,

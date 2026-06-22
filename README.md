@@ -6,7 +6,8 @@ testing APK builds from a phone. It combines:
 - a Flutter Android app for discovering build servers, opening network helper
   apps, browsing OTA builds, saving commands, collecting voice-transcribed
   issues, and pairing an on-phone control agent;
-- a small Python build server that serves APKs already produced by your repo;
+- a small Python build server that serves APKs already produced by your repo
+  and stores local project/client board data;
 - a Node MCP relay that lets an LLM inspect screenshots/UI trees and drive
   Android gestures through the paired phone agent.
 - an embedded SSH terminal for connecting back to your development machine.
@@ -16,6 +17,11 @@ relay on hardware you control, then pair the phone with an explicit token.
 The phone and computer only need a trusted network path between them: local
 Wi-Fi, a hotspot, Tailscale, ZeroTier, WireGuard, or another VPN are all just
 configuration choices.
+
+The optional project-board email reply flow can use a tiny public Cloudflare
+Worker relay for Postmark inbound webhooks. The relay is only a short-lived
+queue; the source of truth remains the local build server's SQLite database
+under `.devota-cache/`.
 
 ## Quick Start
 
@@ -85,6 +91,9 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
   ZeroTier, Tailscale, or WireGuard without making one provider mandatory.
 - **Builds**: groups APKs by app from `devota.yaml`, downloads gzip-compressed
   APKs, opens Android's package installer, and keeps cached APKs for retry.
+- **Projects**: local-first client/project Kanban board with phase templates,
+  cards, card comments, Postmark email drafts, manual send confirmation, and
+  inbound replies imported as card comments.
 - **Terminal**: SSH terminal using password or private-key auth, secure
   credential storage, generated phone-owned Ed25519 keys, public-key install
   through the build server, trust-on-first-use host-key verification, a
@@ -155,8 +164,32 @@ escaping its configured root. It does not build apps.
 - `POST /github/workflow/download`
 - `POST /clipboard`
 - `POST /ssh/authorized-key`
+- `GET /projects/board`
+- `GET/POST /projects/clients`
+- `GET/POST /projects/projects`
+- `GET/POST /projects/phases`
+- `GET/POST /projects/cards`
+- `GET/POST /projects/templates`
+- `GET/POST /projects/cards/<id>/comments`
+- `PATCH /projects/clients/<id>`
+- `PATCH /projects/projects/<id>`
+- `PATCH /projects/phases/<id>`
+- `PATCH /projects/cards/<id>`
+- `GET/POST /projects/email/config`
+- `POST /projects/cards/<id>/email/preview`
+- `POST /projects/cards/<id>/email/send`
+- `POST /projects/mail/import`
+- `POST /projects/mail/pull`
 
 Downloads are gzip-compressed and cached under `.devota-cache/`.
+
+Project-board data is stored in `.devota-cache/projects/devota-projects.sqlite3`.
+Postmark credentials and relay settings are stored in
+`.devota-cache/projects/email-config.json`, which is intentionally ignored by
+git. To receive client replies, deploy `workers/postmark-relay.js` with a KV
+binding named `DEVOTA_MAIL_EVENTS` and a secret named `DEVOTA_RELAY_TOKEN`, set
+Postmark's inbound webhook URL to `/postmark/inbound`, and set DevOTA's relay
+pull URL to `/events`.
 
 `POST /ssh/authorized-key` accepts a text public key or JSON such as
 `{"publicKey":"ssh-ed25519 ...","target":"auto"}`. In WSL, `auto` targets the
