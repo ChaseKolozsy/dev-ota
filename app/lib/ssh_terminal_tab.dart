@@ -159,9 +159,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _toggleTerminalTools() {
     setState(() => _terminalToolsVisible = !_terminalToolsVisible);
     unawaited(_saveTerminalToolVisibility());
-    if (!_terminalToolsVisible && _connected) {
-      _focusTerminalInput();
-    }
   }
 
   Future<void> _loadTerminalKeyUsage() async {
