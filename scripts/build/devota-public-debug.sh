@@ -16,7 +16,10 @@ rm -f "$DIST_DIR"/*.apk "$DIST_DIR"/*.sha256 "$DIST_DIR"/*.badging.txt
 )
 
 cp "$APK" "$DIST_DIR/devota-arm64-debug.apk"
-sha256sum "$DIST_DIR/devota-arm64-debug.apk" > "$DIST_DIR/devota-arm64-debug.apk.sha256"
+(
+  cd "$DIST_DIR"
+  sha256sum devota-arm64-debug.apk > devota-arm64-debug.apk.sha256
+)
 
 if [[ -n "${ANDROID_HOME:-}" ]]; then
   AAPT="$(find "$ANDROID_HOME/build-tools" -path '*/aapt' -type f | sort -V | tail -1)"
