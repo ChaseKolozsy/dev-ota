@@ -803,44 +803,7 @@ class _ProjectsTabState extends State<ProjectsTab> {
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
           child: Column(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Projects',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.refresh),
-                    tooltip: 'Refresh',
-                    onPressed: _loading ? null : _loadBoard,
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.mail_outline),
-                    tooltip: 'Email settings',
-                    onPressed: _emailSettingsDialog,
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.mark_email_read_outlined),
-                    tooltip: 'Pull replies',
-                    onPressed: _pullReplies,
-                  ),
-                  IconButton.filled(
-                    icon: const Icon(Icons.person_add_alt),
-                    tooltip: 'Add client',
-                    onPressed: _createClientDialog,
-                  ),
-                  const SizedBox(width: 6),
-                  IconButton.filled(
-                    icon: const Icon(Icons.add_task),
-                    tooltip: 'Add project',
-                    onPressed: _createProjectDialog,
-                  ),
-                ],
-              ),
+              _buildProjectsHeader(theme),
               const SizedBox(height: 8),
               _buildFilters(theme),
               if (_status != null)
@@ -867,6 +830,57 @@ class _ProjectsTabState extends State<ProjectsTab> {
     );
   }
 
+  Widget _buildProjectsHeader(ThemeData theme) {
+    final title = Text(
+      'Projects',
+      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+    );
+    final actions = [
+      IconButton.filledTonal(
+        icon: const Icon(Icons.refresh),
+        tooltip: 'Refresh',
+        onPressed: _loading ? null : _loadBoard,
+      ),
+      IconButton.filledTonal(
+        icon: const Icon(Icons.mail_outline),
+        tooltip: 'Email settings',
+        onPressed: _emailSettingsDialog,
+      ),
+      IconButton.filledTonal(
+        icon: const Icon(Icons.mark_email_read_outlined),
+        tooltip: 'Pull replies',
+        onPressed: _pullReplies,
+      ),
+      IconButton.filled(
+        icon: const Icon(Icons.person_add_alt),
+        tooltip: 'Add client',
+        onPressed: _createClientDialog,
+      ),
+      IconButton.filled(
+        icon: const Icon(Icons.add_task),
+        tooltip: 'Add project',
+        onPressed: _createProjectDialog,
+      ),
+    ];
+    final actionWrap = Wrap(spacing: 6, runSpacing: 6, children: actions);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 420) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [title, const SizedBox(height: 4), actionWrap],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: title),
+            actionWrap,
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildFilters(ThemeData theme) {
     final projectItems = _projects
         .where(
@@ -874,89 +888,97 @@ class _ProjectsTabState extends State<ProjectsTab> {
               _clientFilter == null || project['clientId'] == _clientFilter,
         )
         .toList();
+    final clientDropdown = DropdownButtonFormField<int?>(
+      initialValue: _clientFilter,
+      decoration: const InputDecoration(
+        labelText: 'Client',
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        const DropdownMenuItem<int?>(value: null, child: Text('All clients')),
+        ..._clients.map(
+          (client) => DropdownMenuItem<int?>(
+            value: _id(client),
+            child: Text(
+              client['name'].toString(),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ],
+      onChanged: (value) => setState(() {
+        _clientFilter = value;
+        if (value != null &&
+            _projectFilter != null &&
+            _projectById(_projectFilter!)?['clientId'] != value) {
+          _projectFilter = null;
+        }
+      }),
+    );
+    final projectDropdown = DropdownButtonFormField<int?>(
+      initialValue: _projectFilter,
+      decoration: const InputDecoration(
+        labelText: 'Project',
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        const DropdownMenuItem<int?>(value: null, child: Text('All projects')),
+        ...projectItems.map(
+          (project) => DropdownMenuItem<int?>(
+            value: _id(project),
+            child: Text(
+              project['name'].toString(),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ],
+      onChanged: (value) => setState(() => _projectFilter = value),
+    );
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<int?>(
-                initialValue: _clientFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Client',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  const DropdownMenuItem<int?>(
-                    value: null,
-                    child: Text('All clients'),
-                  ),
-                  ..._clients.map(
-                    (client) => DropdownMenuItem<int?>(
-                      value: _id(client),
-                      child: Text(
-                        client['name'].toString(),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 460) {
+              return Column(
+                children: [
+                  clientDropdown,
+                  const SizedBox(height: 8),
+                  projectDropdown,
                 ],
-                onChanged: (value) => setState(() {
-                  _clientFilter = value;
-                  if (value != null &&
-                      _projectFilter != null &&
-                      _projectById(_projectFilter!)?['clientId'] != value) {
-                    _projectFilter = null;
-                  }
-                }),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: DropdownButtonFormField<int?>(
-                initialValue: _projectFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Project',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  const DropdownMenuItem<int?>(
-                    value: null,
-                    child: Text('All projects'),
-                  ),
-                  ...projectItems.map(
-                    (project) => DropdownMenuItem<int?>(
-                      value: _id(project),
-                      child: Text(
-                        project['name'].toString(),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
-                onChanged: (value) => setState(() => _projectFilter = value),
-              ),
-            ),
-          ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: clientDropdown),
+                const SizedBox(width: 8),
+                Expanded(child: projectDropdown),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerLeft,
-          child: SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'client_project',
-                label: Text('Client -> Project'),
-              ),
-              ButtonSegment(
-                value: 'project_client',
-                label: Text('Project -> Client'),
-              ),
-            ],
-            selected: {_grouping},
-            onSelectionChanged: (values) =>
-                setState(() => _grouping = values.first),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'client_project',
+                  label: Text('Client -> Project'),
+                ),
+                ButtonSegment(
+                  value: 'project_client',
+                  label: Text('Project -> Client'),
+                ),
+              ],
+              selected: {_grouping},
+              onSelectionChanged: (values) =>
+                  setState(() => _grouping = values.first),
+            ),
           ),
         ),
       ],

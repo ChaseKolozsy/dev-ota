@@ -161,6 +161,20 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     unawaited(_saveTerminalToolVisibility());
   }
 
+  void _collapseTerminalToolsForScroll() {
+    if (!mounted) return;
+    if (!_terminalToolsVisible &&
+        !_terminalFocusNode.hasFocus &&
+        !_composerFocusNode.hasFocus) {
+      return;
+    }
+    if (_terminalToolsVisible) {
+      setState(() => _terminalToolsVisible = false);
+      unawaited(_saveTerminalToolVisibility());
+    }
+    _hideTerminalKeyboard();
+  }
+
   Future<void> _loadTerminalKeyUsage() async {
     final prefs = await SharedPreferences.getInstance();
     final countsJson = prefs.getString(_terminalKeyUsageCountsKey);
@@ -852,15 +866,19 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         children: [
           _buildConnectionPanel(theme),
           Expanded(
-            child: Container(
-              color: Colors.black,
-              child: TerminalView(
-                _terminal,
-                controller: _terminalController,
-                focusNode: _terminalFocusNode,
-                scrollController: _terminalScrollController,
-                autofocus: true,
-                readOnly: _tmuxScrollMode,
+            child: Listener(
+              onPointerMove: (_) => _collapseTerminalToolsForScroll(),
+              onPointerSignal: (_) => _collapseTerminalToolsForScroll(),
+              child: Container(
+                color: Colors.black,
+                child: TerminalView(
+                  _terminal,
+                  controller: _terminalController,
+                  focusNode: _terminalFocusNode,
+                  scrollController: _terminalScrollController,
+                  autofocus: true,
+                  readOnly: _tmuxScrollMode,
+                ),
               ),
             ),
           ),
