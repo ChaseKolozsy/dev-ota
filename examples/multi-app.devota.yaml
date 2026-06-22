@@ -1,0 +1,12 @@
+version: 1
+apps:
+  - id: app-one
+    label: App One
+    packageName: com.example.one
+    buildDirs:
+      - app_one/build/app/outputs/flutter-apk
+  - id: app-two
+    label: App Two
+    packageName: com.example.two
+    buildDirs:
+      - app_two/build/app/outputs/flutter-apk

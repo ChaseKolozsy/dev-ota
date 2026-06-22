@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+mcp/node_modules/
+mcp/artifacts/
+npm-debug.log*
+
+# Flutter
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.metadata
+app/build/
+app/android/.gradle/
+app/android/local.properties
+app/android/app/build/
+
+# Android outputs and local signing material
+*.apk
+*.aab
+*.jks
+*.keystore
+!app/keystores/dev.keystore
+
+# DevOTA runtime cache
+.devota-cache/
+
+# Editor/OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

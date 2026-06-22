@@ -1,0 +1,13 @@
+version: 1
+apps:
+  - id: devota
+    label: DevOTA
+    packageName: io.github.chasekolozsy.devota
+    notes: The DevOTA Android app itself.
+    buildDirs:
+      - app/build/app/outputs/flutter-apk
+      - app/build/app/outputs/apk/debug
+    build:
+      workingDir: app
+      commands:
+        debug: flutter build apk --debug

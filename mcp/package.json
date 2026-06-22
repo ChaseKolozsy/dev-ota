@@ -1,0 +1,23 @@
+{
+  "name": "devota-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first Android OTA and phone-control MCP relay for DevOTA",
+  "bin": {
+    "devota-mcp": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node ./src/server.js",
+    "check": "node --check ./src/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.21.0",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

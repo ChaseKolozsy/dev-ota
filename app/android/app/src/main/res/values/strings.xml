@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="control_accessibility_service_description">Allows the local DevOTA development agent to inspect and control this phone after you pair it over a network you trust.</string>
+</resources>

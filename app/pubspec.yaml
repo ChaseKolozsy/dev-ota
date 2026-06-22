@@ -1,0 +1,23 @@
+name: devota
+description: "Local-first Android OTA and remote development tool"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.4.0
+  path_provider: ^2.1.0
+  open_filex: ^4.5.0
+  shared_preferences: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
