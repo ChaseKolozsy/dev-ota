@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+from email import policy
+from email.parser import BytesParser
 import gzip
 import json
 import os
@@ -15,6 +17,7 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -41,6 +44,9 @@ PUBLIC_KEY_TYPES = {
     "ecdsa-sha2-nistp384",
     "ecdsa-sha2-nistp521",
 }
+TERMINAL_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+TERMINAL_UPLOAD_DEFAULT_NAME = "attachment.bin"
+TERMINAL_UPLOAD_NAME_MAX_CHARS = 120
 
 
 class ManifestError(ValueError):
@@ -68,6 +74,74 @@ def find_manifest(repo_root: Path, explicit: str | None) -> Path:
     )
 
 
+def _resolve_manifest_path(repo_root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (repo_root / path).resolve()
+
+
+def _normalize_manifest_roots(data: dict[str, Any], repo_root: Path) -> dict[str, dict[str, Any]]:
+    roots: dict[str, dict[str, Any]] = {
+        "default": {
+            "id": "default",
+            "path": ".",
+            "absolute": repo_root,
+        }
+    }
+    raw_roots = data.get("roots", {})
+    if raw_roots in (None, ""):
+        return roots
+
+    if isinstance(raw_roots, dict):
+        items = raw_roots.items()
+    elif isinstance(raw_roots, list):
+        parsed = []
+        for index, root in enumerate(raw_roots, start=1):
+            if not isinstance(root, dict):
+                raise ManifestError(f"roots[{index}] must be a mapping")
+            root_id = str(root.get("id") or "").strip()
+            root_path = str(root.get("path") or "").strip()
+            if not root_id or not root_path:
+                raise ManifestError(f"roots[{index}] must include id and path")
+            parsed.append((root_id, root_path))
+        items = parsed
+    else:
+        raise ManifestError("roots must be a mapping or list")
+
+    for root_id, root_spec in items:
+        root_id = str(root_id).strip()
+        if not root_id:
+            raise ManifestError("root id must not be empty")
+        if isinstance(root_spec, dict):
+            root_path = str(root_spec.get("path") or "").strip()
+        else:
+            root_path = str(root_spec).strip()
+        if not root_path:
+            raise ManifestError(f"root {root_id} must define a path")
+        roots[root_id] = {
+            "id": root_id,
+            "path": root_path,
+            "absolute": _resolve_manifest_path(repo_root, root_path),
+        }
+    return roots
+
+
+def _resolve_app_root(
+    app: dict[str, Any],
+    roots: dict[str, dict[str, Any]],
+    repo_root: Path,
+    app_id: str,
+) -> dict[str, Any]:
+    root_ref = str(app.get("root") or app.get("repoRoot") or "default").strip()
+    if root_ref in roots:
+        return roots[root_ref]
+    path = _resolve_manifest_path(repo_root, root_ref)
+    return {
+        "id": root_ref,
+        "path": root_ref,
+        "absolute": path,
+    }
+
+
 def load_manifest(path: Path, repo_root: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ManifestError(f"Manifest not found: {path}")
@@ -85,6 +159,7 @@ def load_manifest(path: Path, repo_root: Path) -> dict[str, Any]:
     if not isinstance(apps, list) or not apps:
         raise ManifestError("Manifest must define a non-empty apps list")
 
+    roots = _normalize_manifest_roots(data, repo_root)
     normalized = []
     seen = set()
     for index, app in enumerate(apps, start=1):
@@ -96,6 +171,8 @@ def load_manifest(path: Path, repo_root: Path) -> dict[str, Any]:
         if app_id in seen:
             raise ManifestError(f"duplicate app id: {app_id}")
         seen.add(app_id)
+        app_root = _resolve_app_root(app, roots, repo_root, app_id)
+        app_root_path = app_root["absolute"]
 
         build_dirs = app.get("buildDirs")
         if not isinstance(build_dirs, list) or not build_dirs:
@@ -105,9 +182,9 @@ def load_manifest(path: Path, repo_root: Path) -> dict[str, Any]:
             rel_text = str(rel).strip()
             if not rel_text:
                 continue
-            target = (repo_root / rel_text).resolve()
-            if not is_relative_to(target, repo_root):
-                raise ManifestError(f"{app_id}.buildDirs entry escapes repo root: {rel_text}")
+            target = _resolve_manifest_path(app_root_path, rel_text)
+            if not is_relative_to(target, app_root_path):
+                raise ManifestError(f"{app_id}.buildDirs entry escapes app root: {rel_text}")
             resolved_dirs.append({"relative": rel_text, "absolute": target})
 
         normalized.append({
@@ -115,11 +192,13 @@ def load_manifest(path: Path, repo_root: Path) -> dict[str, Any]:
             "label": str(app.get("label") or app_id),
             "packageName": str(app.get("packageName") or ""),
             "notes": str(app.get("notes") or ""),
+            "root": app_root,
             "buildDirs": resolved_dirs,
         })
 
     return {
         "version": data.get("version", 1),
+        "roots": roots,
         "apps": normalized,
     }
 
@@ -130,6 +209,8 @@ def public_app(app: dict[str, Any]) -> dict[str, Any]:
         "label": app["label"],
         "packageName": app["packageName"],
         "notes": app["notes"],
+        "root": app["root"]["id"],
+        "rootPath": str(app["root"]["absolute"]),
         "buildDirs": [entry["relative"] for entry in app["buildDirs"]],
     }
 
@@ -166,18 +247,20 @@ def scan_apks(repo_root: Path, manifest: dict[str, Any], app_id: str | None = No
     for app in manifest["apps"]:
         if app_id and app["id"] != app_id:
             continue
+        app_root = app["root"]["absolute"]
         for build_dir in app["buildDirs"]:
             apk_dir = build_dir["absolute"]
             if not apk_dir.is_dir():
                 continue
             for apk in apk_dir.rglob("*.apk"):
                 real = apk.resolve()
-                if real in seen or not is_relative_to(real, repo_root):
+                if real in seen or not is_relative_to(real, app_root):
                     continue
                 seen.add(real)
                 stat = apk.stat()
-                rel = apk.relative_to(repo_root).as_posix()
-                gz = ensure_gz(repo_root, apk, rel)
+                app_rel = apk.relative_to(app_root).as_posix()
+                virtual_path = f"apps/{app['id']}/{app_rel}"
+                gz = ensure_gz(repo_root, apk, virtual_path)
                 gz_stat = gz.stat()
                 builds.append({
                     "filename": apk.name,
@@ -185,7 +268,9 @@ def scan_apks(repo_root: Path, manifest: dict[str, Any], app_id: str | None = No
                     "compressed_size": gz_stat.st_size,
                     "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
                     "modifiedMs": int(stat.st_mtime * 1000),
-                    "path": rel,
+                    "path": virtual_path,
+                    "sourcePath": str(real),
+                    "rootPath": str(app_root),
                     "appId": app["id"],
                     "appLabel": app["label"],
                     "packageName": app["packageName"],
@@ -200,6 +285,34 @@ def scan_apks(repo_root: Path, manifest: dict[str, Any], app_id: str | None = No
 def latest_apk(repo_root: Path, manifest: dict[str, Any], app_id: str | None = None) -> dict[str, Any] | None:
     builds = scan_apks(repo_root, manifest, app_id)
     return builds[0] if builds else None
+
+
+def resolve_download_target(
+    repo_root: Path,
+    manifest: dict[str, Any],
+    rel: str,
+) -> tuple[Path, str]:
+    normalized = rel.lstrip("/")
+    if normalized.startswith("apps/"):
+        parts = normalized.split("/", 2)
+        if len(parts) != 3 or not parts[1] or not parts[2]:
+            raise ValueError("download path must be apps/<app-id>/<path>")
+        app_id = parts[1]
+        app_rel = parts[2]
+        app = next((item for item in manifest["apps"] if item["id"] == app_id), None)
+        if app is None:
+            raise FileNotFoundError(f"unknown app id: {app_id}")
+        app_root = app["root"]["absolute"]
+        target = (app_root / app_rel).resolve()
+        if not is_relative_to(target, app_root):
+            raise PermissionError("download path escapes app root")
+        return target, f"apps/{app_id}/{app_rel}"
+
+    # Backward-compatible path resolver for older clients/manifests.
+    target = (repo_root / normalized).resolve()
+    if not is_relative_to(target, repo_root):
+        raise PermissionError("download path escapes repo root")
+    return target, normalized
 
 
 def github_artifact_metadata(_apk: Path) -> dict[str, str]:
@@ -792,6 +905,78 @@ def parse_json_request(handler: SimpleHTTPRequestHandler, max_bytes: int = 64 * 
     return payload
 
 
+def _safe_terminal_upload_name(filename: str | None) -> str:
+    original = (filename or TERMINAL_UPLOAD_DEFAULT_NAME).replace("\\", "/")
+    safe_name = Path(original).name
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", safe_name).strip(".-")
+    if not safe_name:
+        return TERMINAL_UPLOAD_DEFAULT_NAME
+    if len(safe_name) <= TERMINAL_UPLOAD_NAME_MAX_CHARS:
+        return safe_name
+
+    path = Path(safe_name)
+    suffix = path.suffix[:32]
+    stem = path.stem[: TERMINAL_UPLOAD_NAME_MAX_CHARS - len(suffix)]
+    return f"{stem}{suffix}" if stem else TERMINAL_UPLOAD_DEFAULT_NAME
+
+
+def save_terminal_upload(
+    repo_root: Path,
+    content_type: str,
+    raw: bytes,
+) -> dict[str, Any]:
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise ValueError("terminal upload must be multipart/form-data")
+
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: "
+        + content_type.encode("utf-8")
+        + b"\r\nMIME-Version: 1.0\r\n\r\n"
+        + raw
+    )
+    if not message.is_multipart():
+        raise ValueError("terminal upload body is not multipart")
+
+    file_part = None
+    for part in message.iter_parts():
+        disposition = part.get_content_disposition()
+        if disposition == "form-data" and part.get_param("name", header="content-disposition") == "file":
+            file_part = part
+            break
+    if file_part is None:
+        raise ValueError("terminal upload is missing file field")
+
+    data = file_part.get_payload(decode=True)
+    if not data:
+        raise ValueError("terminal upload file is empty")
+    if len(data) > TERMINAL_UPLOAD_MAX_BYTES:
+        raise ValueError("terminal upload file is too large")
+
+    part_content_type = file_part.get_content_type() or "application/octet-stream"
+    safe_name = _safe_terminal_upload_name(file_part.get_filename())
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest_dir = repo_root / ".devota-cache" / "terminal-uploads" / time.strftime("%Y-%m-%d")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{stamp}-{uuid.uuid4().hex[:8]}-{safe_name}"
+    dest.write_bytes(data)
+    rel = dest.relative_to(repo_root).as_posix()
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "filename": dest.name,
+        "bytes": len(data),
+        "contentType": part_content_type,
+        "relativePath": rel,
+        "path": str(dest),
+        "terminalText": f"read this file: {dest}",
+    }
+    if is_wsl():
+        try:
+            payload["windowsPath"] = wsl_path_to_windows(dest)
+        except Exception:
+            pass
+    return payload
+
+
 def backup_path(repo_root: Path) -> Path:
     return repo_root / ".devota-cache" / "phone-backup" / "profile.json"
 
@@ -969,14 +1154,21 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
         def send_download(self, rel: str, head_only: bool = False):
             if rel.endswith(".gz"):
                 rel = rel[:-3]
-            target = (repo_root / rel).resolve()
-            if not is_relative_to(target, repo_root):
+            try:
+                target, cache_key = resolve_download_target(repo_root, manifest, rel)
+            except PermissionError:
                 self.send_error(403, "Forbidden")
+                return
+            except FileNotFoundError as exc:
+                self.send_error(404, str(exc))
+                return
+            except ValueError as exc:
+                self.send_error(400, str(exc))
                 return
             if not target.is_file() or target.suffix != ".apk":
                 self.send_error(404, "Not found")
                 return
-            gz_path = ensure_gz(repo_root, target, target.relative_to(repo_root).as_posix())
+            gz_path = ensure_gz(repo_root, target, cache_key)
             size = gz_path.stat().st_size
             self.send_response(200)
             self.send_header("Content-Type", "application/gzip")
@@ -1043,6 +1235,27 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_error(400, f"Profile backup failed: {exc}")
                 return
 
+            if path == "/terminal/upload":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length <= 0:
+                    self.send_error(400, "Empty body")
+                    return
+                if length > TERMINAL_UPLOAD_MAX_BYTES + (1024 * 1024):
+                    self.send_error(413, "Payload too large")
+                    return
+                try:
+                    raw = self.rfile.read(length)
+                    self.send_json(
+                        save_terminal_upload(
+                            repo_root,
+                            self.headers.get("Content-Type", ""),
+                            raw,
+                        )
+                    )
+                except Exception as exc:
+                    self.send_error(400, f"Terminal upload failed: {exc}")
+                return
+
             if path == "/ssh/authorized-key":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length <= 0:
@@ -1090,7 +1303,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     return
                 self.send_json({"status": "ok", "bytes": len(raw)})
                 return
-            self.send_error(404, "Not found. Use POST /clipboard")
+            self.send_error(404, "Not found. Use POST /clipboard or POST /terminal/upload")
 
         def do_HEAD(self):
             parsed = urlparse(self.path)
@@ -1163,7 +1376,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 self.send_download(path[len("/download/"):])
                 return
 
-            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /backup/profile, /download/<path>, or POST /clipboard")
+            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /backup/profile, /download/<path>, POST /clipboard, or POST /terminal/upload")
 
         def log_message(self, format, *args):
             print(f"[{self.log_date_time_string()}] {format % args}")

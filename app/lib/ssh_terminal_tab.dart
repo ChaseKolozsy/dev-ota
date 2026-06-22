@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import 'backup_service.dart';
+import 'openai_key_dialog.dart';
 import 'voice_input_service.dart';
 
 class _TerminalKeyBarItem {
@@ -733,6 +734,61 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     }
   }
 
+  Future<void> _attachFileToTerminal() async {
+    if (_busy) return;
+    final baseUrl = widget.serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (baseUrl.isEmpty) {
+      setState(() => _status = 'Select a build server before attaching files.');
+      return;
+    }
+    final picked = await FilePicker.pickFiles(withData: true);
+    final file = picked?.files.isNotEmpty == true ? picked!.files.first : null;
+    if (file == null) return;
+    if (file.bytes == null && file.path == null) {
+      setState(() => _status = 'Could not read selected file.');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _status = 'Uploading file to build server...';
+    });
+    try {
+      final upload = file.bytes != null
+          ? MultipartFile.fromBytes(file.bytes!, filename: file.name)
+          : await MultipartFile.fromFile(file.path!, filename: file.name);
+      final resp = await widget.dio.post(
+        '$baseUrl/terminal/upload',
+        data: FormData.fromMap({'file': upload}),
+        options: Options(
+          sendTimeout: const Duration(seconds: 45),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      final data = resp.data is Map
+          ? Map<String, dynamic>.from(resp.data as Map)
+          : const <String, dynamic>{};
+      final terminalText =
+          data['terminalText']?.toString() ?? data['path']?.toString() ?? '';
+      if (terminalText.isEmpty) {
+        throw StateError('Server did not return an uploaded path.');
+      }
+      if (_connected) {
+        _writeToSession(terminalText);
+        _focusTerminalInput();
+      } else {
+        _appendComposerText(terminalText);
+      }
+      if (mounted) {
+        setState(() => _status = 'File attached: $terminalText');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _status = 'File attach failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _startVoiceRecording() async {
     var key = await _voice.loadApiKey();
     if (key == null || key.isEmpty) {
@@ -779,38 +835,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<String?> _promptApiKey() async {
-    final controller = TextEditingController(
-      text: await _voice.loadApiKey() ?? '',
-    );
-    if (!mounted) {
-      controller.dispose();
-      return null;
-    }
-    final key = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('OpenAI API Key'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'sk-...',
-            border: OutlineInputBorder(),
-          ),
-          obscureText: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
+    final initialValue = await _voice.loadApiKey() ?? '';
+    if (!mounted) return null;
+    final key = await OpenAiKeyDialog.show(context, initialValue: initialValue);
     if (key != null && key.isNotEmpty) {
       await _voice.saveApiKey(key);
       _scheduleServerBackup();
@@ -1156,6 +1183,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     enabledWhenDisconnected: true,
                     minWidth: 34,
                   ),
+                  _terminalIconControlButton(
+                    'attach_file',
+                    Icons.add,
+                    'Attach file',
+                    () => unawaited(_attachFileToTerminal()),
+                    enabledWhenDisconnected: true,
+                  ),
                   _terminalControlButton(
                     'home',
                     'Home',
@@ -1284,6 +1318,32 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             ? () => _activateTerminalKeyButton(usageId, onPressed)
             : null,
         child: Text(label),
+      ),
+    );
+  }
+
+  Widget _terminalIconControlButton(
+    String usageId,
+    IconData icon,
+    String tooltip,
+    VoidCallback onPressed, {
+    bool enabledWhenDisconnected = false,
+  }) {
+    final enabled = _connected || enabledWhenDisconnected;
+    return Tooltip(
+      message: tooltip,
+      child: IconButton.outlined(
+        visualDensity: VisualDensity.compact,
+        style: IconButton.styleFrom(
+          fixedSize: const Size(30, 30),
+          minimumSize: const Size(30, 30),
+          padding: EdgeInsets.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: Icon(icon, size: 18),
+        onPressed: enabled
+            ? () => _activateTerminalKeyButton(usageId, onPressed)
+            : null,
       ),
     );
   }

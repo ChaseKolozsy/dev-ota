@@ -116,13 +116,31 @@ APKs.
 `devota.yaml` must contain one or more apps. Each app has:
 
 - `id`: stable machine-readable ID used by MCP tools and URLs.
+- `root`: optional named root from top-level `roots`, or a path. Defaults to
+  the manifest repo root.
 - `label`: display label in the Android app.
 - `packageName`: Android package for launch/logcat/app-scoped controls.
-- `buildDirs`: APK output directories relative to the repo root served by the
-  Python server.
+- `buildDirs`: APK output directories relative to that app's root.
 - optional `build`: MCP-only build command metadata for local workflows.
 
-The server only serves APKs inside `--repo-root`. It does not build apps.
+Top-level `roots` may define any number of named filesystem roots:
+
+```yaml
+roots:
+  cradlespeak: /home/chase/Cradlespeak
+  devota: /home/chase/dev-ota
+apps:
+  - id: cradlespeak
+    root: cradlespeak
+    buildDirs: [app/build/app/outputs/flutter-apk]
+  - id: devota
+    root: devota
+    buildDirs: [app/dist/public]
+```
+
+The server resolves downloads through virtual paths such as
+`apps/devota/app/dist/public/devota-arm64-debug.apk` and prevents each app from
+escaping its configured root. It does not build apps.
 
 ## HTTP API
 
@@ -132,7 +150,7 @@ The server only serves APKs inside `--repo-root`. It does not build apps.
 - `GET /builds?app=<id>`
 - `GET /latest?app=<id>`
 - `GET /github/workflow/runs?repo=<owner/name>&workflow=<file>`
-- `GET /download/<relative-apk-path>`
+- `GET /download/<virtual-apk-path>`
 - `POST /github/workflow/run`
 - `POST /github/workflow/download`
 - `POST /clipboard`

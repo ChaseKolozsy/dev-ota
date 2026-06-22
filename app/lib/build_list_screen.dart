@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
+import 'openai_key_dialog.dart';
 import 'ssh_terminal_tab.dart';
 import 'voice_input_service.dart';
 
@@ -382,40 +383,13 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<String?> _promptOpenAiKey() async {
-    final controller = TextEditingController(
-      text: await _voice.loadApiKey() ?? '',
-    );
-    if (!mounted) {
-      controller.dispose();
-      return null;
+    final initialValue = await _voice.loadApiKey() ?? '';
+    if (!mounted) return null;
+    final key = await OpenAiKeyDialog.show(context, initialValue: initialValue);
+    if (key != null && key.isNotEmpty) {
+      await _voice.saveApiKey(key);
+      _scheduleServerBackup();
     }
-    final key = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('OpenAI API Key'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'sk-...',
-            border: OutlineInputBorder(),
-          ),
-          obscureText: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (key != null && key.isNotEmpty) await _voice.saveApiKey(key);
-    _scheduleServerBackup();
     return key;
   }
 
