@@ -81,7 +81,9 @@ Open DevOTA on the phone:
    build server. In WSL, the server installs it into the Windows administrator
    key file when your Windows account is an administrator, requesting UAC if
    needed; otherwise it uses the Windows user's `authorized_keys`.
-5. Paste an agent prompt from [agent-prompts.md](agent-prompts.md) into the
+5. If Windows shows an administrator prompt, approve it on the computer, return
+   to DevOTA, and tap Connect again to verify key-based SSH works.
+6. Paste an agent prompt from [agent-prompts.md](agent-prompts.md) into the
    terminal agent you are using on the desktop.
 
 Optional MCP relay:

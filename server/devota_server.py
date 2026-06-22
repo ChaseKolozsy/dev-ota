@@ -655,7 +655,7 @@ def install_authorized_key(
             )
         approval_required = True
         warnings.append(
-            "Windows administrator approval requested. Accept the UAC prompt on the computer, then try SSH."
+            "Windows administrator approval requested. Accept the Windows prompt, then return to DevOTA and tap Connect."
         )
     paths.append({
         "target": target_name,

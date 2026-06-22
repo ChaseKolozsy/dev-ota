@@ -245,7 +245,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
       setState(() {
         if (approvalRequired) {
           _status =
-              'Windows administrator approval requested. Accept UAC on the computer, then try SSH.';
+              'Windows administrator approval requested. Accept the Windows prompt, return here, then tap Connect.';
         } else {
           _status = already
               ? 'Public key was already installed on $target.$warningText'

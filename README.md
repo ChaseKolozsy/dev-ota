@@ -148,9 +148,10 @@ Downloads are gzip-compressed and cached under `.devota-cache/`.
 `POST /ssh/authorized-key` accepts a text public key or JSON such as
 `{"publicKey":"ssh-ed25519 ...","target":"auto"}`. In WSL, `auto` targets the
 Windows administrator OpenSSH key file when the Windows account is an
-administrator, requesting UAC elevation if needed; otherwise it uses the Windows
-user's `authorized_keys`. Outside WSL, it targets the server user's
-`~/.ssh/authorized_keys`.
+administrator, requesting UAC elevation if needed. After approving the Windows
+prompt, return to DevOTA and tap Connect again to verify key-based SSH works.
+Otherwise it uses the Windows user's `authorized_keys`. Outside WSL, it targets
+the server user's `~/.ssh/authorized_keys`.
 
 ## License
 
