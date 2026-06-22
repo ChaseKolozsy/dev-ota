@@ -87,12 +87,34 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 - **Builds**: groups APKs by app from `devota.yaml`, downloads gzip-compressed
   APKs, opens Android's package installer, and keeps cached APKs for retry.
 - **Terminal**: SSH terminal using password or private-key auth, secure
-  credential storage, trust-on-first-use host-key verification, a lightweight
-  TCP ping, and voice-to-terminal command submission.
+  credential storage, generated phone-owned Ed25519 keys, public-key install
+  through the build server, trust-on-first-use host-key verification, a
+  lightweight TCP ping, and voice-to-terminal command submission.
+- **Backup**: export/import saved servers, commands, issues, agent settings,
+  OpenAI API keys, and SSH public/private keys for migration from the legacy
+  Build Installer package to DevOTA.
 - **Issues**: voice-transcribed notes that can be added to a numbered issue
   list, copied locally, or pushed to the PC clipboard endpoint.
 - **Commands** and **Agent**: saved command snippets and the Android MCP phone
   control agent.
+
+## GitHub Builds
+
+The `Android` GitHub Actions workflow builds two debug APK artifacts:
+
+- `devota-debug.apk`: the public DevOTA package,
+  `io.github.chasekolozsy.devota`.
+- `devota-build-installer-upgrade-debug.apk`: a transition build using the
+  legacy package, `com.arachnomind.devtools.build_installer`, so the old Build
+  Installer can update in place before you export/import settings.
+
+Use the Backup tab to export legacy app data before switching to the public
+DevOTA package.
+
+The Builds tab can ask the build server to dispatch this workflow through the
+server's authenticated `gh` CLI, list recent runs, and download the configured
+artifact into `.devota-cache/github-artifacts/` so it appears with the served
+APKs.
 
 ## Manifest
 
@@ -114,10 +136,21 @@ The server only serves APKs inside `--repo-root`. It does not build apps.
 - `GET /builds`
 - `GET /builds?app=<id>`
 - `GET /latest?app=<id>`
+- `GET /github/workflow/runs?repo=<owner/name>&workflow=<file>`
 - `GET /download/<relative-apk-path>`
+- `POST /github/workflow/run`
+- `POST /github/workflow/download`
 - `POST /clipboard`
+- `POST /ssh/authorized-key`
 
 Downloads are gzip-compressed and cached under `.devota-cache/`.
+
+`POST /ssh/authorized-key` accepts a text public key or JSON such as
+`{"publicKey":"ssh-ed25519 ...","target":"auto"}`. In WSL, `auto` targets the
+Windows administrator OpenSSH key file when the Windows account is an
+administrator, requesting UAC elevation if needed; otherwise it uses the Windows
+user's `authorized_keys`. Outside WSL, it targets the server user's
+`~/.ssh/authorized_keys`.
 
 ## License
 

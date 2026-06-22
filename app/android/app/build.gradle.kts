@@ -5,6 +5,11 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val devotaApplicationId: String = providers
+    .environmentVariable("DEVOTA_APPLICATION_ID")
+    .orElse("io.github.chasekolozsy.devota")
+    .get()
+
 android {
     namespace = "io.github.chasekolozsy.devota"
     compileSdk = flutter.compileSdkVersion
@@ -20,7 +25,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.chasekolozsy.devota"
+        applicationId = devotaApplicationId
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

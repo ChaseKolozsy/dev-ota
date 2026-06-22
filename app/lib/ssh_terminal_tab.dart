@@ -8,15 +8,17 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:pinenacl/ed25519.dart' as ed25519;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import 'voice_input_service.dart';
 
 class SshTerminalTab extends StatefulWidget {
-  const SshTerminalTab({super.key, required this.dio});
+  const SshTerminalTab({super.key, required this.dio, required this.serverUrl});
 
   final Dio dio;
+  final String serverUrl;
 
   @override
   State<SshTerminalTab> createState() => _SshTerminalTabState();
@@ -42,6 +44,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
   bool _transcribing = false;
   String? _status;
   String? _privateKeyName;
+  String? _generatedPublicKey;
 
   SSHClient? _client;
   SSHSession? _session;
@@ -84,6 +87,10 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
   String get _passwordStorageKey => '$_profilePrefix:password';
   String get _privateKeyStorageKey => '$_profilePrefix:private_key';
   String get _passphraseStorageKey => '$_profilePrefix:passphrase';
+  String get _generatedPrivateKeyStorageKey =>
+      'ssh_terminal_generated_private_key';
+  String get _generatedPublicKeyStorageKey =>
+      'ssh_terminal_generated_public_key';
 
   Future<void> _loadProfile() async {
     final prefs = await SharedPreferences.getInstance();
@@ -92,6 +99,9 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
     _usernameController.text = prefs.getString('ssh_username') ?? '';
     _usePrivateKey = prefs.getBool('ssh_use_private_key') ?? false;
     _privateKeyName = prefs.getString('ssh_private_key_name');
+    _generatedPublicKey = await _storage.read(
+      key: _generatedPublicKeyStorageKey,
+    );
     _passwordController.text =
         await _storage.read(key: _passwordStorageKey) ?? '';
     _passphraseController.text =
@@ -128,6 +138,151 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('ssh_private_key_name', file.name);
     setState(() => _privateKeyName = file.name);
+  }
+
+  String _publicKeyLine(SSHKeyPair keyPair) {
+    final comment = keyPair is OpenSSHEd25519KeyPair
+        ? keyPair.comment
+        : 'devota-phone';
+    return '${keyPair.name} ${base64.encode(keyPair.toPublicKey().encode())} $comment';
+  }
+
+  Future<void> _generateTerminalKey() async {
+    setState(() {
+      _busy = true;
+      _status = 'Generating Ed25519 key...';
+    });
+    try {
+      final signingKey = ed25519.SigningKey.generate();
+      final comment =
+          'devota-phone-${DateTime.now().toUtc().toIso8601String()}';
+      final keyPair = OpenSSHEd25519KeyPair(
+        Uint8List.fromList(signingKey.verifyKey.asTypedList),
+        Uint8List.fromList(signingKey.asTypedList),
+        comment,
+      );
+      final pem = keyPair.toPem();
+      final publicKey = _publicKeyLine(keyPair);
+      await _storage.write(key: _generatedPrivateKeyStorageKey, value: pem);
+      await _storage.write(
+        key: _generatedPublicKeyStorageKey,
+        value: publicKey,
+      );
+      await _storage.write(key: _privateKeyStorageKey, value: pem);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('ssh_use_private_key', true);
+      await prefs.setString('ssh_private_key_name', 'DevOTA phone key');
+      setState(() {
+        _usePrivateKey = true;
+        _privateKeyName = 'DevOTA phone key';
+        _generatedPublicKey = publicKey;
+        _status = 'Generated DevOTA phone key.';
+      });
+    } catch (e) {
+      setState(() => _status = 'Key generation failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _currentPrivateKeyPem() async {
+    final profilePem = await _storage.read(key: _privateKeyStorageKey);
+    if (profilePem != null && profilePem.trim().isNotEmpty) return profilePem;
+    return _storage.read(key: _generatedPrivateKeyStorageKey);
+  }
+
+  Future<void> _copyPublicKey() async {
+    final publicKey =
+        _generatedPublicKey ??
+        await _storage.read(key: _generatedPublicKeyStorageKey);
+    if (publicKey == null || publicKey.trim().isEmpty) {
+      setState(() => _status = 'Generate a key first.');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: publicKey));
+    setState(() => _status = 'Public key copied.');
+  }
+
+  Future<void> _sendPublicKeyToServer() async {
+    final publicKey =
+        _generatedPublicKey ??
+        await _storage.read(key: _generatedPublicKeyStorageKey);
+    if (publicKey == null || publicKey.trim().isEmpty) {
+      setState(() => _status = 'Generate a key first.');
+      return;
+    }
+    final baseUrl = widget.serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (baseUrl.isEmpty) {
+      setState(() => _status = 'Select a build server first.');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _status = 'Sending public key to build server...';
+    });
+    try {
+      final resp = await widget.dio.post(
+        '$baseUrl/ssh/authorized-key',
+        data: {'publicKey': publicKey, 'target': 'auto'},
+        options: Options(
+          headers: {'Content-Type': 'application/json'},
+          sendTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 12),
+        ),
+      );
+      final data = resp.data is Map
+          ? Map<String, dynamic>.from(resp.data as Map)
+          : const <String, dynamic>{};
+      final target = data['target']?.toString() ?? 'server';
+      final path = data['path']?.toString();
+      final already = data['alreadyPresent'] == true;
+      final approvalRequired = data['approvalRequired'] == true;
+      final warnings = data['warnings'] is List
+          ? (data['warnings'] as List).map((item) => item.toString()).toList()
+          : const <String>[];
+      final warningText = warnings.isEmpty ? '' : ' Warning: ${warnings.first}';
+      setState(() {
+        if (approvalRequired) {
+          _status =
+              'Windows administrator approval requested. Accept UAC on the computer, then try SSH.';
+        } else {
+          _status = already
+              ? 'Public key was already installed on $target.$warningText'
+              : 'Public key installed on $target${path == null ? '' : ' at $path'}.$warningText';
+        }
+      });
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        await _sendPublicKeyToServerClipboard(baseUrl, publicKey);
+      } else {
+        setState(() => _status = 'Public key push failed: ${e.message}');
+      }
+    } catch (e) {
+      setState(() => _status = 'Public key push failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _sendPublicKeyToServerClipboard(
+    String baseUrl,
+    String publicKey,
+  ) async {
+    final resp = await widget.dio.post(
+      '$baseUrl/clipboard',
+      data: publicKey,
+      options: Options(
+        headers: {'Content-Type': 'text/plain; charset=utf-8'},
+        sendTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+      ),
+    );
+    setState(() {
+      _status = resp.statusCode == 200
+          ? 'Public key sent to PC clipboard.'
+          : 'Clipboard push returned HTTP ${resp.statusCode}.';
+    });
   }
 
   Future<void> _ping() async {
@@ -218,9 +373,9 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
     try {
       List<SSHKeyPair>? identities;
       if (_usePrivateKey) {
-        final pem = await _storage.read(key: _privateKeyStorageKey);
+        final pem = await _currentPrivateKeyPem();
         if (pem == null || pem.trim().isEmpty) {
-          throw StateError('Import a private key first.');
+          throw StateError('Import or generate a private key first.');
         }
         identities = SSHKeyPair.fromPem(
           pem,
@@ -459,6 +614,25 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
                     icon: const Icon(Icons.network_ping),
                     label: const Text('Ping'),
                     onPressed: _busy ? null : _ping,
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Key'),
+                    onPressed: _busy ? null : _generateTerminalKey,
+                  ),
+                  IconButton.filledTonal(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy generated public key',
+                    onPressed: _generatedPublicKey == null
+                        ? null
+                        : _copyPublicKey,
+                  ),
+                  IconButton.filledTonal(
+                    icon: const Icon(Icons.upload),
+                    tooltip: 'Install public key through build server',
+                    onPressed: _busy || _generatedPublicKey == null
+                        ? null
+                        : _sendPublicKeyToServer,
                   ),
                   IconButton.filledTonal(
                     icon: const Icon(Icons.key),

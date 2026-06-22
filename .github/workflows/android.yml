@@ -1,0 +1,77 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APKs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build public DevOTA APK
+        run: |
+          mkdir -p dist
+          flutter build apk --debug
+          cp build/app/outputs/flutter-apk/app-debug.apk dist/devota-debug.apk
+          sha256sum dist/devota-debug.apk > dist/devota-debug.apk.sha256
+
+      - name: Verify public package id
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -path '*/aapt' -type f | sort -V | tail -1)"
+          "$AAPT" dump badging dist/devota-debug.apk | tee dist/devota-debug.badging.txt
+          grep "package: name='io.github.chasekolozsy.devota'" dist/devota-debug.badging.txt
+
+      - name: Build legacy Build Installer upgrade APK
+        env:
+          DEVOTA_APPLICATION_ID: com.arachnomind.devtools.build_installer
+        run: |
+          flutter build apk --debug
+          cp build/app/outputs/flutter-apk/app-debug.apk dist/devota-build-installer-upgrade-debug.apk
+          sha256sum dist/devota-build-installer-upgrade-debug.apk > dist/devota-build-installer-upgrade-debug.apk.sha256
+
+      - name: Verify legacy package id
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -path '*/aapt' -type f | sort -V | tail -1)"
+          "$AAPT" dump badging dist/devota-build-installer-upgrade-debug.apk | tee dist/devota-build-installer-upgrade-debug.badging.txt
+          grep "package: name='com.arachnomind.devtools.build_installer'" dist/devota-build-installer-upgrade-debug.badging.txt
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devota-android-debug-apks
+          path: |
+            app/dist/*.apk
+            app/dist/*.sha256
+            app/dist/*.badging.txt

@@ -77,7 +77,11 @@ Open DevOTA on the phone:
 1. Use Connect to scan the LAN for `_devota._tcp.local.` servers.
 2. If discovery does not find the server, save `http://<computer-ip>:8082`.
 3. Use Terminal to SSH into `<computer-ip>` on port `22`.
-4. Paste an agent prompt from [agent-prompts.md](agent-prompts.md) into the
+4. In Terminal, generate a DevOTA phone key and send its public key to the
+   build server. In WSL, the server installs it into the Windows administrator
+   key file when your Windows account is an administrator, requesting UAC if
+   needed; otherwise it uses the Windows user's `authorized_keys`.
+5. Paste an agent prompt from [agent-prompts.md](agent-prompts.md) into the
    terminal agent you are using on the desktop.
 
 Optional MCP relay:
@@ -97,6 +101,18 @@ Then open DevOTA's Agent tab and connect to:
 ws://<computer-ip>:8083/phone
 ```
 
+## Migrating From Build Installer
+
+The GitHub `Android` workflow publishes a normal DevOTA APK and a legacy package
+upgrade APK. Install the legacy upgrade first if you need access to saved Build
+Installer data. Open Backup, export settings with secrets enabled if you want
+OpenAI keys and SSH private keys included, then import the backup in the public
+DevOTA package.
+
+After the desktop build server is running, the Builds tab can use the desktop
+`gh` login to run that workflow and download the APK artifact back into the
+served build cache.
+
 ## Remote Networking
 
 The app is provider-neutral. ZeroTier can be the preferred remote path, but it
@@ -115,6 +131,8 @@ browser approval steps.
 
 - SSH exposes a login surface to the selected network. Use a strong local
   password or SSH key, and keep the network private.
+- The public-key install endpoint is for trusted LAN/VPN use. Do not expose the
+  build server to the public internet.
 - DevOTA does not need inbound public internet access. Prefer LAN, hotspot, or a
   private VPN address.
 - Pair the MCP phone-control relay with an explicit token.

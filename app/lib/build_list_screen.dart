@@ -6,6 +6,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'backup_tab.dart';
 import 'connect_tab.dart';
 import 'ssh_terminal_tab.dart';
 import 'voice_input_service.dart';
@@ -55,19 +56,27 @@ class _BuildListScreenState extends State<BuildListScreen>
   final _commandController = TextEditingController();
   final _agentUrlController = TextEditingController();
   final _agentTokenController = TextEditingController();
+  final _githubRepoController = TextEditingController();
+  final _githubWorkflowController = TextEditingController();
+  final _githubRefController = TextEditingController();
+  final _githubArtifactController = TextEditingController();
   bool _agentWholeDevice = false;
   bool _agentBusy = false;
   Map<String, dynamic>? _agentStatus;
+  bool _githubBusy = false;
+  String? _githubStatus;
+  List<Map<String, dynamic>> _githubRuns = [];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     _loadServers();
     _loadIssues();
     _loadCommands();
     _loadAgentSettings();
+    _loadGithubSettings();
     _refreshCachedApks();
   }
 
@@ -79,6 +88,10 @@ class _BuildListScreenState extends State<BuildListScreen>
     _commandController.dispose();
     _agentUrlController.dispose();
     _agentTokenController.dispose();
+    _githubRepoController.dispose();
+    _githubWorkflowController.dispose();
+    _githubRefController.dispose();
+    _githubArtifactController.dispose();
     _voice.dispose();
     _dio.close();
     super.dispose();
@@ -335,6 +348,144 @@ class _BuildListScreenState extends State<BuildListScreen>
     _agentWholeDevice = prefs.getBool('agent_whole_device') ?? false;
     if (mounted) setState(() {});
     _refreshAgentStatus();
+  }
+
+  Future<void> _loadGithubSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    _githubRepoController.text =
+        prefs.getString('github_repo') ?? 'ChaseKolozsy/dev-ota';
+    _githubWorkflowController.text =
+        prefs.getString('github_workflow') ?? 'android.yml';
+    _githubRefController.text = prefs.getString('github_ref') ?? 'main';
+    _githubArtifactController.text =
+        prefs.getString('github_artifact') ?? 'devota-android-debug-apks';
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _saveGithubSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('github_repo', _githubRepoController.text.trim());
+    await prefs.setString(
+      'github_workflow',
+      _githubWorkflowController.text.trim(),
+    );
+    await prefs.setString('github_ref', _githubRefController.text.trim());
+    await prefs.setString(
+      'github_artifact',
+      _githubArtifactController.text.trim(),
+    );
+  }
+
+  Future<void> _runGithubWorkflow() async {
+    await _saveGithubSettings();
+    if (!mounted) return;
+    setState(() {
+      _githubBusy = true;
+      _githubStatus = 'Dispatching workflow...';
+    });
+    try {
+      final resp = await _dio.post(
+        '$_baseUrl/github/workflow/run',
+        data: {
+          'repo': _githubRepoController.text.trim(),
+          'workflow': _githubWorkflowController.text.trim(),
+          'ref': _githubRefController.text.trim(),
+        },
+        options: Options(sendTimeout: const Duration(seconds: 15)),
+      );
+      final data = Map<String, dynamic>.from(resp.data as Map);
+      final runs = data['runs'] is List ? data['runs'] as List : const [];
+      setState(() {
+        _githubRuns = runs
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        _githubStatus = 'Workflow dispatched.';
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _githubStatus =
+              'Workflow dispatch failed: ${_briefErrorMessage(e)}',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _githubBusy = false);
+    }
+  }
+
+  Future<void> _refreshGithubRuns() async {
+    await _saveGithubSettings();
+    if (!mounted) return;
+    setState(() {
+      _githubBusy = true;
+      _githubStatus = 'Loading workflow runs...';
+    });
+    try {
+      final resp = await _dio.get(
+        '$_baseUrl/github/workflow/runs',
+        queryParameters: {
+          'repo': _githubRepoController.text.trim(),
+          'workflow': _githubWorkflowController.text.trim(),
+          'limit': '5',
+        },
+      );
+      final data = Map<String, dynamic>.from(resp.data as Map);
+      final runs = data['runs'] is List ? data['runs'] as List : const [];
+      setState(() {
+        _githubRuns = runs
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        _githubStatus = 'Loaded ${_githubRuns.length} run(s).';
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () =>
+              _githubStatus = 'Workflow list failed: ${_briefErrorMessage(e)}',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _githubBusy = false);
+    }
+  }
+
+  Future<void> _downloadGithubArtifact({int? runId}) async {
+    await _saveGithubSettings();
+    if (!mounted) return;
+    setState(() {
+      _githubBusy = true;
+      _githubStatus = 'Downloading artifact...';
+    });
+    try {
+      final payload = <String, Object>{
+        'repo': _githubRepoController.text.trim(),
+        'workflow': _githubWorkflowController.text.trim(),
+        'artifactName': _githubArtifactController.text.trim(),
+      };
+      if (runId != null) payload['runId'] = runId;
+      final resp = await _dio.post(
+        '$_baseUrl/github/workflow/download',
+        data: payload,
+        options: Options(receiveTimeout: const Duration(minutes: 3)),
+      );
+      final data = Map<String, dynamic>.from(resp.data as Map);
+      final apks = data['apks'] is List ? data['apks'] as List : const [];
+      setState(() {
+        _githubStatus = 'Downloaded ${apks.length} APK artifact(s).';
+      });
+      await _fetchBuilds();
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _githubStatus =
+              'Artifact download failed: ${_briefErrorMessage(e)}',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _githubBusy = false);
+    }
   }
 
   Future<void> _saveAgentSettings() async {
@@ -717,6 +868,7 @@ class _BuildListScreenState extends State<BuildListScreen>
             Tab(icon: Icon(Icons.terminal), text: 'Terminal'),
             Tab(icon: Icon(Icons.terminal), text: 'Commands'),
             Tab(icon: Icon(Icons.hub), text: 'Agent'),
+            Tab(icon: Icon(Icons.sync), text: 'Backup'),
           ],
         ),
       ),
@@ -730,12 +882,21 @@ class _BuildListScreenState extends State<BuildListScreen>
             onServerSelected: _addAndSelectServer,
           ),
           _buildBuildsTab(),
-          SshTerminalTab(dio: _dio),
+          SshTerminalTab(dio: _dio, serverUrl: _baseUrl),
           _buildCommandsTab(),
           _buildAgentTab(),
+          BackupTab(onImported: _reloadImportedSettings),
         ],
       ),
     );
+  }
+
+  Future<void> _reloadImportedSettings() async {
+    await _loadServers();
+    await _loadIssues();
+    await _loadCommands();
+    await _loadAgentSettings();
+    await _loadGithubSettings();
   }
 
   Widget _buildBuildsTab() {
@@ -791,9 +952,181 @@ class _BuildListScreenState extends State<BuildListScreen>
             ],
           ),
         ),
+        _buildGithubActionsPanel(),
         Expanded(child: _buildBody()),
         _buildNotesSection(),
       ],
+    );
+  }
+
+  Widget _buildGithubActionsPanel() {
+    final subtitle = _githubStatus ?? 'Run workflow and download APK artifacts';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ExpansionTile(
+          leading: const Icon(Icons.cloud_download),
+          title: const Text('GitHub Actions'),
+          subtitle: Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final narrow = constraints.maxWidth < 620;
+                final fields = [
+                  _buildGithubTextField(
+                    controller: _githubRepoController,
+                    label: 'Repo',
+                    hint: 'owner/name',
+                  ),
+                  _buildGithubTextField(
+                    controller: _githubWorkflowController,
+                    label: 'Workflow',
+                    hint: 'android.yml',
+                  ),
+                  _buildGithubTextField(
+                    controller: _githubRefController,
+                    label: 'Ref',
+                    hint: 'main',
+                  ),
+                  _buildGithubTextField(
+                    controller: _githubArtifactController,
+                    label: 'Artifact',
+                    hint: 'devota-android-debug-apks',
+                  ),
+                ];
+                if (narrow) {
+                  return Column(
+                    children: [
+                      for (var i = 0; i < fields.length; i++) ...[
+                        fields[i],
+                        if (i != fields.length - 1) const SizedBox(height: 8),
+                      ],
+                    ],
+                  );
+                }
+                return Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: fields[0]),
+                        const SizedBox(width: 8),
+                        Expanded(child: fields[1]),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(child: fields[2]),
+                        const SizedBox(width: 8),
+                        Expanded(child: fields[3]),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                FilledButton.icon(
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Run'),
+                  onPressed: _githubBusy ? null : _runGithubWorkflow,
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Runs'),
+                  onPressed: _githubBusy ? null : _refreshGithubRuns,
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.download),
+                  label: const Text('Latest'),
+                  onPressed: _githubBusy
+                      ? null
+                      : () => _downloadGithubArtifact(),
+                ),
+              ],
+            ),
+            if (_githubBusy)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: LinearProgressIndicator(),
+              ),
+            if (_githubRuns.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ..._githubRuns.take(3).map(_buildGithubRunTile),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGithubTextField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+  }) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      keyboardType: label == 'Repo' ? TextInputType.url : TextInputType.text,
+      textInputAction: TextInputAction.next,
+      onChanged: (_) => _saveGithubSettings(),
+    );
+  }
+
+  Widget _buildGithubRunTile(Map<String, dynamic> run) {
+    final title = (run['displayTitle'] ?? 'Workflow run').toString();
+    final status = (run['status'] ?? 'unknown').toString();
+    final conclusion = run['conclusion']?.toString();
+    final branch = run['headBranch']?.toString();
+    final updated = run['updatedAt']?.toString();
+    final runId = _asInt(run['databaseId']);
+    final isSuccess = conclusion == 'success';
+    final subtitleParts = [
+      status,
+      if (conclusion != null && conclusion.isNotEmpty) conclusion,
+      if (branch != null && branch.isNotEmpty) branch,
+      if (updated != null && updated.isNotEmpty) updated,
+    ];
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        isSuccess
+            ? Icons.check_circle
+            : status == 'in_progress'
+            ? Icons.pending
+            : Icons.history,
+      ),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        subtitleParts.join('  •  '),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.download),
+        tooltip: 'Download artifact',
+        onPressed: _githubBusy || !isSuccess || runId == null
+            ? null
+            : () => _downloadGithubArtifact(runId: runId),
+      ),
     );
   }
 
