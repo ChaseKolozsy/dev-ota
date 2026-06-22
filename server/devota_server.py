@@ -8,6 +8,8 @@ import gzip
 import json
 import os
 import platform
+import re
+import socket
 import subprocess
 import threading
 import time
@@ -21,7 +23,14 @@ try:
 except ImportError:  # pragma: no cover - exercised by users without PyYAML.
     yaml = None
 
+try:
+    from zeroconf import ServiceInfo, Zeroconf
+except ImportError:  # pragma: no cover - exercised by users without zeroconf.
+    ServiceInfo = None
+    Zeroconf = None
+
 DEFAULT_MANIFEST_NAMES = ("devota.yaml", "devota.yml", "devota.json")
+MDNS_TYPE = "_devota._tcp.local."
 GZIP_LOCK = threading.Lock()
 
 
@@ -180,6 +189,58 @@ def scan_apks(repo_root: Path, manifest: dict[str, Any], app_id: str | None = No
 def latest_apk(repo_root: Path, manifest: dict[str, Any], app_id: str | None = None) -> dict[str, Any] | None:
     builds = scan_apks(repo_root, manifest, app_id)
     return builds[0] if builds else None
+
+
+def advertised_ipv4_addresses(host: str) -> list[str]:
+    candidates: set[str] = set()
+
+    def add(address: str):
+        if not address or address.startswith("127."):
+            return
+        candidates.add(address)
+
+    if host not in ("", "0.0.0.0", "::"):
+        try:
+            add(socket.gethostbyname(host))
+        except OSError:
+            pass
+    else:
+        try:
+            for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                add(item[4][0])
+        except OSError:
+            pass
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(("8.8.8.8", 80))
+                add(probe.getsockname()[0])
+        except OSError:
+            pass
+    return sorted(candidates) or ["127.0.0.1"]
+
+
+def start_mdns(host: str, port: int, name: str, manifest: dict[str, Any]):
+    if Zeroconf is None or ServiceInfo is None:
+        print("mDNS disabled: install zeroconf to advertise DevOTA discovery.")
+        return None, None
+    safe_name = re.sub(r"[^A-Za-z0-9 -]+", "-", name).strip() or "DevOTA"
+    addresses = [socket.inet_aton(addr) for addr in advertised_ipv4_addresses(host)]
+    properties = {
+        "version": "1",
+        "apps": ",".join(app["id"] for app in manifest["apps"]),
+    }
+    info = ServiceInfo(
+        MDNS_TYPE,
+        f"{safe_name}.{MDNS_TYPE}",
+        addresses=addresses,
+        port=port,
+        properties=properties,
+        server=f"{socket.gethostname().split('.')[0]}.local.",
+    )
+    zeroconf = Zeroconf()
+    zeroconf.register_service(info)
+    print(f"mDNS advertising {safe_name} on {MDNS_TYPE} at port {port}")
+    return zeroconf, info
 
 
 def set_host_clipboard(text: str) -> tuple[bool, str]:
@@ -360,6 +421,8 @@ def main():
     parser.add_argument("--port", type=int, default=8082)
     parser.add_argument("--repo-root", default=".", help="Repository containing devota.yaml and APK outputs")
     parser.add_argument("--manifest", help="Manifest path, relative to --repo-root unless absolute")
+    parser.add_argument("--no-mdns", action="store_true", help="Disable LAN discovery advertisement")
+    parser.add_argument("--mdns-name", default="DevOTA", help="LAN discovery service name")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).expanduser().resolve()
@@ -375,10 +438,19 @@ def main():
     print(f"Repo root: {repo_root}")
     print(f"Manifest: {manifest_path}")
     print(f"Apps: {', '.join(app['id'] for app in manifest['apps'])}")
+    zeroconf = info = None
+    if not args.no_mdns:
+        zeroconf, info = start_mdns(args.host, args.port, args.mdns_name, manifest)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+    finally:
+        if zeroconf is not None and info is not None:
+            try:
+                zeroconf.unregister_service(info)
+            finally:
+                zeroconf.close()
         server.server_close()
 
 

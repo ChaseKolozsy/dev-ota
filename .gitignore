@@ -16,6 +16,7 @@ app/.flutter-plugins-dependencies
 app/.metadata
 app/build/
 app/android/.gradle/
+app/android/build/
 app/android/local.properties
 app/android/app/build/
 

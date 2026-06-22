@@ -6,6 +6,9 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'connect_tab.dart';
+import 'ssh_terminal_tab.dart';
+import 'voice_input_service.dart';
 
 class BuildListScreen extends StatefulWidget {
   const BuildListScreen({super.key});
@@ -23,10 +26,12 @@ class _BuildListScreenState extends State<BuildListScreen>
   late final TabController _tabController;
   List<String> _servers = [];
   String _activeServer = _defaultServerUrl;
-  final _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(minutes: 5),
-  ));
+  final _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(minutes: 5),
+    ),
+  );
   List<Map<String, dynamic>> _builds = [];
   bool _loading = false;
   String? _error;
@@ -34,6 +39,11 @@ class _BuildListScreenState extends State<BuildListScreen>
   final Map<String, bool> _downloading = {};
   final Map<String, String> _downloadStatus = {};
   final Map<String, Stopwatch> _downloadTimers = {};
+  final _noteController = TextEditingController();
+  late final _voice = VoiceInputService(_dio);
+  List<String> _issues = [];
+  bool _isRecording = false;
+  bool _isTranscribing = false;
   // Cached APKs that have been downloaded but not yet deleted.
   // Keyed by sanitized build path so common names like app-debug.apk do not
   // collide across apps.
@@ -53,8 +63,9 @@ class _BuildListScreenState extends State<BuildListScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadServers();
+    _loadIssues();
     _loadCommands();
     _loadAgentSettings();
     _refreshCachedApks();
@@ -64,9 +75,11 @@ class _BuildListScreenState extends State<BuildListScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
+    _noteController.dispose();
     _commandController.dispose();
     _agentUrlController.dispose();
     _agentTokenController.dispose();
+    _voice.dispose();
     _dio.close();
     super.dispose();
   }
@@ -92,10 +105,9 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Future<void> _refreshCachedApks() async {
     final dir = await _getApkCacheDir();
-    final files = dir
-        .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.apk'));
+    final files = dir.listSync().whereType<File>().where(
+      (f) => f.path.endsWith('.apk'),
+    );
     final names = files.map((f) {
       final segs = f.path.split(RegExp(r'[\\/]'));
       return segs.last;
@@ -140,9 +152,9 @@ class _BuildListScreenState extends State<BuildListScreen>
     } catch (_) {}
     await _refreshCachedApks();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted $filename')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Deleted $filename')));
     }
   }
 
@@ -182,10 +194,143 @@ class _BuildListScreenState extends State<BuildListScreen>
     );
   }
 
+  String _issuesAsText() {
+    return _issues
+        .asMap()
+        .entries
+        .map((e) => '${e.key + 1}. ${e.value}')
+        .join('\n');
+  }
+
+  Future<void> _loadIssues() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('issues');
+    if (saved != null && mounted) {
+      setState(() => _issues = saved);
+    }
+  }
+
+  Future<void> _saveIssues() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('issues', _issues);
+  }
+
+  void _addIssue() {
+    final text = _noteController.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _issues.add(text));
+    _noteController.clear();
+    _saveIssues();
+  }
+
+  void _removeIssue(int index) {
+    setState(() => _issues.removeAt(index));
+    _saveIssues();
+  }
+
+  void _copyAllIssues() {
+    if (_issues.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _issuesAsText()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${_issues.length} issue(s) copied')),
+    );
+  }
+
+  void _clearAllIssues() {
+    setState(() => _issues.clear());
+    _saveIssues();
+  }
+
+  Future<String?> _promptOpenAiKey() async {
+    final controller = TextEditingController(
+      text: await _voice.loadApiKey() ?? '',
+    );
+    if (!mounted) {
+      controller.dispose();
+      return null;
+    }
+    final key = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('OpenAI API Key'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'sk-...',
+            border: OutlineInputBorder(),
+          ),
+          obscureText: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (key != null && key.isNotEmpty) await _voice.saveApiKey(key);
+    return key;
+  }
+
+  Future<void> _toggleIssueRecording() async {
+    if (_isRecording) {
+      final path = await _voice.stopRecording();
+      if (!mounted) return;
+      setState(() {
+        _isRecording = false;
+        _isTranscribing = true;
+      });
+      try {
+        final key = await _voice.loadApiKey();
+        if (key == null || key.isEmpty) return;
+        final text = path == null ? '' : await _voice.transcribe(path, key);
+        if (text.isNotEmpty) {
+          final existing = _noteController.text;
+          _noteController.text = existing.isEmpty ? text : '$existing $text';
+          _noteController.selection = TextSelection.fromPosition(
+            TextPosition(offset: _noteController.text.length),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Transcription failed: $e')));
+        }
+      } finally {
+        await VoiceInputService.deleteRecording(path);
+        if (mounted) setState(() => _isTranscribing = false);
+      }
+      return;
+    }
+
+    var key = await _voice.loadApiKey();
+    if (key == null || key.isEmpty) {
+      key = await _promptOpenAiKey();
+      if (key == null || key.isEmpty) return;
+    }
+    final ok = await _voice.requestMicrophone();
+    if (!ok) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission required')),
+        );
+      }
+      return;
+    }
+    await _voice.startRecording('issue_voice_note.m4a');
+    if (mounted) setState(() => _isRecording = true);
+  }
+
   Future<void> _loadAgentSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    _agentUrlController.text = prefs.getString('agent_ws_url')
-        ?? '';
+    _agentUrlController.text = prefs.getString('agent_ws_url') ?? '';
     _agentTokenController.text = prefs.getString('agent_pair_token') ?? '';
     _agentWholeDevice = prefs.getBool('agent_whole_device') ?? false;
     if (mounted) setState(() {});
@@ -195,7 +340,10 @@ class _BuildListScreenState extends State<BuildListScreen>
   Future<void> _saveAgentSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agent_ws_url', _agentUrlController.text.trim());
-    await prefs.setString('agent_pair_token', _agentTokenController.text.trim());
+    await prefs.setString(
+      'agent_pair_token',
+      _agentTokenController.text.trim(),
+    );
     await prefs.setBool('agent_whole_device', _agentWholeDevice);
   }
 
@@ -220,9 +368,9 @@ class _BuildListScreenState extends State<BuildListScreen>
       await _refreshAgentStatus();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Agent start failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Agent start failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _agentBusy = false);
@@ -237,9 +385,9 @@ class _BuildListScreenState extends State<BuildListScreen>
       await _refreshAgentStatus();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Agent stop failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Agent stop failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _agentBusy = false);
@@ -252,7 +400,10 @@ class _BuildListScreenState extends State<BuildListScreen>
         'getAgentStatus',
       );
       if (!mounted) return;
-      setState(() => _agentStatus = raw == null ? null : Map<String, dynamic>.from(raw));
+      setState(
+        () =>
+            _agentStatus = raw == null ? null : Map<String, dynamic>.from(raw),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _agentStatus = {'error': e.toString()});
@@ -263,7 +414,10 @@ class _BuildListScreenState extends State<BuildListScreen>
     await _controlAgentChannel.invokeMethod('openAccessibilitySettings');
   }
 
-  Future<void> _pushToServerClipboard(String text, {String label = 'clipboard'}) async {
+  Future<void> _pushToServerClipboard(
+    String text, {
+    String label = 'clipboard',
+  }) async {
     try {
       final resp = await _dio.post(
         '$_baseUrl/clipboard',
@@ -290,7 +444,9 @@ class _BuildListScreenState extends State<BuildListScreen>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('PC clipboard push failed: ${_briefErrorMessage(e)}')),
+        SnackBar(
+          content: Text('PC clipboard push failed: ${_briefErrorMessage(e)}'),
+        ),
       );
     }
   }
@@ -324,6 +480,17 @@ class _BuildListScreenState extends State<BuildListScreen>
   void _setActiveServer(String url) {
     if (!_servers.contains(url) || url == _activeServer) return;
     setState(() => _activeServer = url);
+    _saveServers();
+    _fetchBuilds();
+  }
+
+  void _addAndSelectServer(String url) {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) return;
+    setState(() {
+      if (!_servers.contains(clean)) _servers.add(clean);
+      _activeServer = clean;
+    });
     _saveServers();
     _fetchBuilds();
   }
@@ -466,7 +633,8 @@ class _BuildListScreenState extends State<BuildListScreen>
 
       // Decompress .gz -> .apk
       setState(() {
-        _downloadStatus[path] = 'Decompressing... (downloaded in ${downloadSecs}s)';
+        _downloadStatus[path] =
+            'Decompressing... (downloaded in ${downloadSecs}s)';
         _downloadProgress[path] = 0.9;
       });
 
@@ -489,15 +657,24 @@ class _BuildListScreenState extends State<BuildListScreen>
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Done in ${totalSecs}s (download: ${downloadSecs}s, decompress: ${totalSecs - downloadSecs}s)')),
+          SnackBar(
+            content: Text(
+              'Done in ${totalSecs}s (download: ${downloadSecs}s, decompress: ${totalSecs - downloadSecs}s)',
+            ),
+          ),
         );
       }
 
       await _refreshCachedApks();
-      final result = await OpenFilex.open(apkPath, type: 'application/vnd.android.package-archive');
+      final result = await OpenFilex.open(
+        apkPath,
+        type: 'application/vnd.android.package-archive',
+      );
       if (result.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open installer: ${result.message}')),
+          SnackBar(
+            content: Text('Could not open installer: ${result.message}'),
+          ),
         );
       }
     } catch (e) {
@@ -507,9 +684,9 @@ class _BuildListScreenState extends State<BuildListScreen>
         _downloadStatus.remove(path);
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
       }
     }
   }
@@ -523,7 +700,7 @@ class _BuildListScreenState extends State<BuildListScreen>
           AnimatedBuilder(
             animation: _tabController,
             builder: (context, _) {
-              if (_tabController.index != 0) return const SizedBox.shrink();
+              if (_tabController.index != 1) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: _loading ? null : _fetchBuilds,
@@ -535,7 +712,9 @@ class _BuildListScreenState extends State<BuildListScreen>
           controller: _tabController,
           isScrollable: true,
           tabs: const [
+            Tab(icon: Icon(Icons.wifi_tethering), text: 'Connect'),
             Tab(icon: Icon(Icons.android), text: 'Builds'),
+            Tab(icon: Icon(Icons.terminal), text: 'Terminal'),
             Tab(icon: Icon(Icons.terminal), text: 'Commands'),
             Tab(icon: Icon(Icons.hub), text: 'Agent'),
           ],
@@ -544,7 +723,14 @@ class _BuildListScreenState extends State<BuildListScreen>
       body: TabBarView(
         controller: _tabController,
         children: [
+          ConnectTab(
+            channel: _controlAgentChannel,
+            servers: _servers,
+            activeServer: _activeServer,
+            onServerSelected: _addAndSelectServer,
+          ),
           _buildBuildsTab(),
+          SshTerminalTab(dio: _dio),
           _buildCommandsTab(),
           _buildAgentTab(),
         ],
@@ -565,8 +751,10 @@ class _BuildListScreenState extends State<BuildListScreen>
                     labelText: 'Server',
                     border: OutlineInputBorder(),
                     isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
@@ -576,14 +764,16 @@ class _BuildListScreenState extends State<BuildListScreen>
                       isExpanded: true,
                       isDense: true,
                       items: _servers
-                          .map((s) => DropdownMenuItem(
-                                value: s,
-                                child: Text(
-                                  s,
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                              ))
+                          .map(
+                            (s) => DropdownMenuItem(
+                              value: s,
+                              child: Text(
+                                s,
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            ),
+                          )
                           .toList(),
                       onChanged: (v) {
                         if (v != null) _setActiveServer(v);
@@ -602,6 +792,7 @@ class _BuildListScreenState extends State<BuildListScreen>
           ),
         ),
         Expanded(child: _buildBody()),
+        _buildNotesSection(),
       ],
     );
   }
@@ -648,13 +839,16 @@ class _BuildListScreenState extends State<BuildListScreen>
                       'No commands yet.\nAdd one above, then tap to copy.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
                   itemCount: _commands.length,
                   itemBuilder: (context, index) {
                     final cmd = _commands[index];
@@ -683,10 +877,16 @@ class _BuildListScreenState extends State<BuildListScreen>
                               IconButton(
                                 icon: const Icon(Icons.computer, size: 20),
                                 tooltip: 'Push to PC clipboard',
-                                onPressed: () => _pushToServerClipboard(cmd, label: 'clipboard'),
+                                onPressed: () => _pushToServerClipboard(
+                                  cmd,
+                                  label: 'clipboard',
+                                ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.delete_outline, size: 20),
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  size: 20,
+                                ),
                                 tooltip: 'Delete',
                                 onPressed: () => _removeCommand(index),
                               ),
@@ -781,14 +981,22 @@ class _BuildListScreenState extends State<BuildListScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _statusRow('Service', running ? 'running' : 'stopped',
-                    running ? Icons.check_circle : Icons.radio_button_unchecked),
-                _statusRow('Relay', connected ? 'connected' : 'disconnected',
-                    connected ? Icons.link : Icons.link_off),
+                _statusRow(
+                  'Service',
+                  running ? 'running' : 'stopped',
+                  running ? Icons.check_circle : Icons.radio_button_unchecked,
+                ),
+                _statusRow(
+                  'Relay',
+                  connected ? 'connected' : 'disconnected',
+                  connected ? Icons.link : Icons.link_off,
+                ),
                 _statusRow(
                   'Accessibility',
                   accessibilityEnabled ? 'enabled' : 'disabled',
-                  accessibilityEnabled ? Icons.visibility : Icons.visibility_off,
+                  accessibilityEnabled
+                      ? Icons.visibility
+                      : Icons.visibility_off,
                 ),
                 if (accessibility['activePackage'] != null)
                   _statusRow(
@@ -816,7 +1024,10 @@ class _BuildListScreenState extends State<BuildListScreen>
           const SizedBox(width: 8),
           SizedBox(
             width: 92,
-            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           ),
           Expanded(child: SelectableText(value)),
         ],
@@ -889,7 +1100,11 @@ class _BuildListScreenState extends State<BuildListScreen>
     }
     final grouped = _groupBuildsByApp();
     final appIds = grouped.keys.toList()
-      ..sort((a, b) => _buildAppLabel(grouped[a]!.first).compareTo(_buildAppLabel(grouped[b]!.first)));
+      ..sort(
+        (a, b) => _buildAppLabel(
+          grouped[a]!.first,
+        ).compareTo(_buildAppLabel(grouped[b]!.first)),
+      );
     return ListView.builder(
       itemCount: appIds.length,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -987,6 +1202,154 @@ class _BuildListScreenState extends State<BuildListScreen>
     );
   }
 
+  Widget _buildNotesSection() {
+    final media = MediaQuery.of(context);
+    final usable = media.size.height - media.viewInsets.bottom;
+    return Container(
+      constraints: BoxConstraints(maxHeight: usable * 0.4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 4, 4),
+            child: Row(
+              children: [
+                Text('Issues', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(width: 4),
+                Text(
+                  '(${_issues.length})',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 20),
+                  tooltip: 'Copy all to phone clipboard',
+                  onPressed: _issues.isEmpty ? null : _copyAllIssues,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.computer, size: 20),
+                  tooltip: 'Push all to PC clipboard',
+                  onPressed: _issues.isEmpty
+                      ? null
+                      : () => _pushToServerClipboard(
+                          _issuesAsText(),
+                          label: 'clipboard',
+                        ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.key, size: 20),
+                  tooltip: 'Set OpenAI key',
+                  onPressed: _promptOpenAiKey,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_sweep, size: 20),
+                  tooltip: 'Clear all',
+                  onPressed: _issues.isEmpty
+                      ? null
+                      : () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Clear all issues?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    _clearAllIssues();
+                                  },
+                                  child: const Text('Clear'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _noteController,
+                    decoration: const InputDecoration(
+                      hintText: 'Describe an issue...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 4,
+                    minLines: 3,
+                    textInputAction: TextInputAction.newline,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filled(
+                      icon: Icon(
+                        _isRecording ? Icons.stop : Icons.mic,
+                        color: _isRecording ? Colors.red : null,
+                      ),
+                      tooltip: _isRecording ? 'Stop recording' : 'Voice input',
+                      onPressed: _isTranscribing ? null : _toggleIssueRecording,
+                    ),
+                    const SizedBox(height: 4),
+                    IconButton.filled(
+                      icon: _isTranscribing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add),
+                      onPressed: _isTranscribing ? null : _addIssue,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (_issues.isNotEmpty)
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                itemCount: _issues.length,
+                itemBuilder: (context, index) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${index + 1}. ',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        Expanded(child: Text(_issues[index])),
+                        GestureDetector(
+                          onTap: () => _removeIssue(index),
+                          child: const Icon(Icons.close, size: 16),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          if (_issues.isEmpty)
+            const Padding(padding: EdgeInsets.only(bottom: 12)),
+        ],
+      ),
+    );
+  }
 }
 
 class _ManageServersResult {
@@ -1045,8 +1408,7 @@ class _ManageServersDialogState extends State<_ManageServersDialog> {
       !_servers.every(_originalServers.contains);
 
   void _doAdd() {
-    final url =
-        _addController.text.trim().replaceAll(RegExp(r'/+$'), '');
+    final url = _addController.text.trim().replaceAll(RegExp(r'/+$'), '');
     if (url.isEmpty || _servers.contains(url)) return;
     setState(() {
       _servers.add(url);
@@ -1104,10 +1466,7 @@ class _ManageServersDialogState extends State<_ManageServersDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Manage servers',
-                style: theme.textTheme.titleLarge,
-              ),
+              Text('Manage servers', style: theme.textTheme.titleLarge),
               const SizedBox(height: 16),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -1151,8 +1510,9 @@ class _ManageServersDialogState extends State<_ManageServersDialog> {
                         url,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontWeight:
-                              isActive ? FontWeight.bold : FontWeight.normal,
+                          fontWeight: isActive
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                         ),
                       ),
                       onTap: () => _doActivate(url),
@@ -1178,10 +1538,7 @@ class _ManageServersDialogState extends State<_ManageServersDialog> {
                     onPressed: _doReset,
                     child: const Text('Reset to default'),
                   ),
-                  TextButton(
-                    onPressed: _close,
-                    child: const Text('Done'),
-                  ),
+                  TextButton(onPressed: _close, child: const Text('Done')),
                 ],
               ),
             ],
