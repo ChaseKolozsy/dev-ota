@@ -509,6 +509,7 @@ def request_elevated_windows_admin_key_install(public_key: str) -> tuple[bool, s
         stamp = str(int(time.time() * 1000))
         key_path = temp_dir / f"devota-authorized-key-{stamp}.pub"
         script_path = temp_dir / f"install-devota-admin-key-{stamp}.ps1"
+        launcher_path = temp_dir / f"launch-devota-admin-key-{stamp}.ps1"
         key_path.write_text(public_key + "\n", encoding="utf-8", newline="\n")
         script_path.write_text(
             r'''
@@ -543,18 +544,46 @@ Remove-Item -Force -ErrorAction SilentlyContinue $PSCommandPath
         )
         script_win = wsl_path_to_windows(script_path)
         key_win = wsl_path_to_windows(key_path)
-        command = (
-            "Start-Process -FilePath powershell.exe -Verb RunAs "
-            f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','{script_win}','-KeyFile','{key_win}')"
+        launcher_path.write_text(
+            r'''
+param(
+  [Parameter(Mandatory=$true)][string]$InstallScript,
+  [Parameter(Mandatory=$true)][string]$KeyFile
+)
+$ErrorActionPreference = "Stop"
+Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList @(
+  '-NoProfile',
+  '-ExecutionPolicy',
+  'Bypass',
+  '-File',
+  $InstallScript,
+  '-KeyFile',
+  $KeyFile
+)
+Remove-Item -Force -ErrorAction SilentlyContinue $PSCommandPath
+'''.lstrip(),
+            encoding="utf-8",
+            newline="\r\n",
         )
-        proc = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", command],
-            text=True,
-            timeout=12,
-            capture_output=True,
+        launcher_win = wsl_path_to_windows(launcher_path)
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                launcher_win,
+                "-InstallScript",
+                script_win,
+                "-KeyFile",
+                key_win,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
         )
-        if proc.returncode != 0:
-            return False, proc.stderr.strip() or f"Start-Process exited {proc.returncode}"
         return True, None
     except Exception as exc:
         return False, str(exc)

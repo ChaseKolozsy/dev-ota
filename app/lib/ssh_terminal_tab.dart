@@ -256,13 +256,36 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
       if (e.response?.statusCode == 404) {
         await _sendPublicKeyToServerClipboard(baseUrl, publicKey);
       } else {
-        setState(() => _status = 'Public key push failed: ${e.message}');
+        setState(() => _status = 'Public key push failed: ${_dioError(e)}');
       }
     } catch (e) {
       setState(() => _status = 'Public key push failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _dioError(DioException e) {
+    final code = e.response?.statusCode;
+    final reason = e.response?.statusMessage;
+    if (code != null && reason != null && reason.trim().isNotEmpty) {
+      return 'HTTP $code: $reason';
+    }
+    final data = e.response?.data;
+    if (code != null && data != null) {
+      final text = data
+          .toString()
+          .replaceAll(RegExp(r'<[^>]+>'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (text.isNotEmpty) {
+        return 'HTTP $code: ${text.length > 180 ? '${text.substring(0, 180)}...' : text}';
+      }
+      return 'HTTP $code';
+    }
+    final message = e.message;
+    if (message != null && message.trim().isNotEmpty) return message;
+    return e.type.name;
   }
 
   Future<void> _sendPublicKeyToServerClipboard(
