@@ -24,11 +24,14 @@ class SshTerminalTab extends StatefulWidget {
   State<SshTerminalTab> createState() => _SshTerminalTabState();
 }
 
-class _SshTerminalTabState extends State<SshTerminalTab> {
+class _SshTerminalTabState extends State<SshTerminalTab>
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin<SshTerminalTab> {
   final _storage = const FlutterSecureStorage();
   late final _voice = VoiceInputService(widget.dio);
   late final _terminal = Terminal(maxLines: 10000);
   final _terminalController = TerminalController();
+  final _terminalFocusNode = FocusNode();
+  final _terminalScrollController = ScrollController();
 
   final _hostController = TextEditingController();
   final _portController = TextEditingController(text: '22');
@@ -45,6 +48,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
   String? _status;
   String? _privateKeyName;
   String? _generatedPublicKey;
+  int _terminalViewGeneration = 0;
 
   SSHClient? _client;
   SSHSession? _session;
@@ -54,6 +58,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _terminal.write('DevOTA SSH terminal\r\n');
     _terminal.onOutput = (data) =>
         _session?.write(Uint8List.fromList(utf8.encode(data)));
@@ -65,6 +70,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _disconnect();
     _hostController.dispose();
     _portController.dispose();
@@ -74,8 +80,23 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
     _composerController.dispose();
     _stdoutSub?.cancel();
     _stderrSub?.cancel();
+    _terminalFocusNode.dispose();
+    _terminalScrollController.dispose();
     _voice.dispose();
     super.dispose();
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _terminalViewGeneration++);
+      if (_connected) _terminalFocusNode.requestFocus();
+    });
   }
 
   String get _host => _hostController.text.trim();
@@ -472,10 +493,35 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
     if (mounted) setState(() => _connected = false);
   }
 
+  void _writeToSession(String text) {
+    if (!_connected) return;
+    _session?.write(Uint8List.fromList(utf8.encode(text)));
+  }
+
+  void _sendTerminalKey(String sequence, {String? fallbackText}) {
+    if (_connected) {
+      _writeToSession(sequence);
+      return;
+    }
+    if (fallbackText != null) _insertComposerText(fallbackText);
+  }
+
+  void _insertComposerText(String text) {
+    final selection = _composerController.selection;
+    final value = _composerController.text;
+    final start = selection.isValid ? selection.start : value.length;
+    final end = selection.isValid ? selection.end : value.length;
+    final next = value.replaceRange(start, end, text);
+    _composerController.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
+  }
+
   void _submitComposer() {
     final text = _composerController.text.trim();
     if (text.isEmpty || !_connected) return;
-    _session?.write(Uint8List.fromList(utf8.encode('$text\n')));
+    _writeToSession('$text\n');
     _composerController.clear();
   }
 
@@ -560,154 +606,255 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(child: _field(_hostController, 'Host')),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 86,
-                    child: _field(
-                      _portController,
-                      'Port',
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(child: _field(_usernameController, 'User')),
-                ],
+    return SafeArea(
+      top: false,
+      child: Column(
+        children: [
+          _buildConnectionPanel(theme),
+          Expanded(
+            child: Container(
+              color: Colors.black,
+              child: TerminalView(
+                key: ValueKey('ssh-terminal-view-$_terminalViewGeneration'),
+                _terminal,
+                controller: _terminalController,
+                focusNode: _terminalFocusNode,
+                scrollController: _terminalScrollController,
+                autofocus: true,
               ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _usePrivateKey
-                        ? TextField(
-                            controller: _passphraseController,
-                            obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Key passphrase',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                          )
-                        : TextField(
-                            controller: _passwordController,
-                            obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Password',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                          ),
-                  ),
-                  const SizedBox(width: 8),
-                  FilterChip(
-                    label: const Text('Key'),
-                    selected: _usePrivateKey,
-                    onSelected: (v) => setState(() => _usePrivateKey = v),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.key),
-                    tooltip: _privateKeyName ?? 'Import private key',
-                    onPressed: _pickPrivateKey,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilledButton.icon(
-                    icon: Icon(_connected ? Icons.link_off : Icons.link),
-                    label: Text(_connected ? 'Disconnect' : 'Connect'),
-                    onPressed: _busy
-                        ? null
-                        : (_connected ? _disconnect : _connect),
-                  ),
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.network_ping),
-                    label: const Text('Ping'),
-                    onPressed: _busy ? null : _ping,
-                  ),
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text('Key'),
-                    onPressed: _busy ? null : _generateTerminalKey,
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.copy),
-                    tooltip: 'Copy generated public key',
-                    onPressed: _generatedPublicKey == null
-                        ? null
-                        : _copyPublicKey,
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.upload),
-                    tooltip: 'Install public key through build server',
-                    onPressed: _busy || _generatedPublicKey == null
-                        ? null
-                        : _sendPublicKeyToServer,
-                  ),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.key),
-                    tooltip: 'Set OpenAI key',
-                    onPressed: _promptApiKey,
-                  ),
-                ],
-              ),
-              if (_status != null) ...[
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _status!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        Expanded(
-          child: Container(
-            color: Colors.black,
-            child: TerminalView(
-              _terminal,
-              controller: _terminalController,
-              autofocus: true,
             ),
           ),
+          _buildTerminalKeyBar(theme),
+          _buildComposer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionPanel(ThemeData theme) {
+    final connectionLabel = _host.isEmpty
+        ? 'No SSH host saved'
+        : '${_username.isEmpty ? 'user' : _username}@$_host:$_port';
+    final subtitle = _status ?? connectionLabel;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          leading: Icon(_connected ? Icons.link : Icons.link_off),
+          title: Text(_connected ? 'SSH connected' : 'SSH connection'),
+          subtitle: Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          children: [
+            Row(
+              children: [
+                Expanded(child: _field(_hostController, 'Host')),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 86,
+                  child: _field(
+                    _portController,
+                    'Port',
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: _field(_usernameController, 'User')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _usePrivateKey
+                      ? TextField(
+                          controller: _passphraseController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Key passphrase',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (_) => _saveProfile(),
+                        )
+                      : TextField(
+                          controller: _passwordController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (_) => _saveProfile(),
+                        ),
+                ),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: const Text('Key'),
+                  selected: _usePrivateKey,
+                  onSelected: (v) => setState(() => _usePrivateKey = v),
+                ),
+                const SizedBox(width: 4),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.key),
+                  tooltip: _privateKeyName ?? 'Import private key',
+                  onPressed: _pickPrivateKey,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  icon: Icon(_connected ? Icons.link_off : Icons.link),
+                  label: Text(_connected ? 'Disconnect' : 'Connect'),
+                  onPressed: _busy
+                      ? null
+                      : (_connected ? _disconnect : _connect),
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.network_ping),
+                  label: const Text('Ping'),
+                  onPressed: _busy ? null : _ping,
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.add),
+                  label: const Text('Key'),
+                  onPressed: _busy ? null : _generateTerminalKey,
+                ),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy generated public key',
+                  onPressed: _generatedPublicKey == null
+                      ? null
+                      : _copyPublicKey,
+                ),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.upload),
+                  tooltip: 'Install public key through build server',
+                  onPressed: _busy || _generatedPublicKey == null
+                      ? null
+                      : _sendPublicKeyToServer,
+                ),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.key),
+                  tooltip: 'Set OpenAI key',
+                  onPressed: _promptApiKey,
+                ),
+              ],
+            ),
+            if (_status != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _status!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      ),
+    );
+  }
+
+  Widget _buildTerminalKeyBar(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: SizedBox(
+        height: 40,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          children: [
+            _terminalKeyButton('Tab', () => _sendTerminalKey('\t')),
+            _terminalKeyButton('Esc', () => _sendTerminalKey('\x1B')),
+            _terminalKeyButton(
+              '/',
+              () => _sendTerminalKey('/', fallbackText: '/'),
+            ),
+            _terminalKeyButton('Home', () => _sendTerminalKey('\x1B[H')),
+            _terminalKeyButton('End', () => _sendTerminalKey('\x1B[F')),
+            _terminalIconKey(Icons.keyboard_arrow_left, 'Left', '\x1B[D'),
+            _terminalIconKey(Icons.keyboard_arrow_up, 'Up', '\x1B[A'),
+            _terminalIconKey(Icons.keyboard_arrow_down, 'Down', '\x1B[B'),
+            _terminalIconKey(Icons.keyboard_arrow_right, 'Right', '\x1B[C'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _terminalIconKey(IconData icon, String tooltip, String sequence) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Tooltip(
+        message: tooltip,
+        child: IconButton.filledTonal(
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon),
+          onPressed: _connected ? () => _sendTerminalKey(sequence) : null,
+        ),
+      ),
+    );
+  }
+
+  Widget _terminalKeyButton(String label, VoidCallback onPressed) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: SizedBox(
+        height: 32,
+        child: OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+          ),
+          onPressed: _connected || label == '/' ? onPressed : null,
+          child: Text(label),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildComposer() {
+    return Material(
+      elevation: 3,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
                 child: TextField(
                   controller: _composerController,
                   decoration: const InputDecoration(
-                    hintText: 'Speak or type a terminal command...',
+                    hintText: 'Type command',
                     border: OutlineInputBorder(),
                     isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                   ),
-                  minLines: 1,
-                  maxLines: 3,
+                  maxLines: 1,
+                  textInputAction: TextInputAction.send,
                   onSubmitted: (_) => _submitComposer(),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               IconButton.filled(
                 icon: Icon(
                   _recording ? Icons.stop : Icons.mic,
@@ -716,7 +863,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
                 tooltip: _recording ? 'Stop recording' : 'Voice input',
                 onPressed: _transcribing ? null : _toggleVoice,
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
               IconButton.filled(
                 icon: _transcribing
                     ? const SizedBox(
@@ -733,7 +880,7 @@ class _SshTerminalTabState extends State<SshTerminalTab> {
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 

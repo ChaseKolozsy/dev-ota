@@ -882,7 +882,11 @@ class _BuildListScreenState extends State<BuildListScreen>
             onServerSelected: _addAndSelectServer,
           ),
           _buildBuildsTab(),
-          SshTerminalTab(dio: _dio, serverUrl: _baseUrl),
+          SshTerminalTab(
+            key: const PageStorageKey('ssh-terminal-tab'),
+            dio: _dio,
+            serverUrl: _baseUrl,
+          ),
           _buildCommandsTab(),
           _buildAgentTab(),
           BackupTab(onImported: _reloadImportedSettings),
