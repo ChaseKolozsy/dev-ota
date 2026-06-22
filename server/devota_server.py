@@ -792,6 +792,36 @@ def parse_json_request(handler: SimpleHTTPRequestHandler, max_bytes: int = 64 * 
     return payload
 
 
+def backup_path(repo_root: Path) -> Path:
+    return repo_root / ".devota-cache" / "phone-backup" / "profile.json"
+
+
+def read_profile_backup(repo_root: Path) -> dict[str, Any]:
+    path = backup_path(repo_root)
+    if not path.is_file():
+        raise FileNotFoundError("no DevOTA profile backup has been saved")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("format") != "devota-backup":
+        raise ValueError("saved profile backup is invalid")
+    return data
+
+
+def write_profile_backup(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("format") != "devota-backup":
+        raise ValueError("not a DevOTA backup")
+    path = backup_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    text = json.dumps(payload, indent=2)
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+    return {
+        "status": "ok",
+        "path": str(path),
+        "bytes": path.stat().st_size,
+    }
+
+
 def validate_github_repo(repo: str) -> str:
     value = repo.strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
@@ -1005,6 +1035,14 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_error(400, f"GitHub artifact download failed: {exc}")
                 return
 
+            if path == "/backup/profile":
+                try:
+                    payload = parse_json_request(self, max_bytes=2 * 1024 * 1024)
+                    self.send_json(write_profile_backup(repo_root, payload))
+                except Exception as exc:
+                    self.send_error(400, f"Profile backup failed: {exc}")
+                return
+
             if path == "/ssh/authorized-key":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length <= 0:
@@ -1060,7 +1098,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):], head_only=True)
                 return
-            if path in ("/health", "/apps", "/builds", "/latest"):
+            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile"):
                 self.do_GET()
                 return
             self.send_error(404, "Not found")
@@ -1112,11 +1150,20 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_error(400, f"GitHub workflow list failed: {exc}")
                 return
 
+            if path == "/backup/profile":
+                try:
+                    self.send_json(read_profile_backup(repo_root))
+                except FileNotFoundError as exc:
+                    self.send_error(404, str(exc))
+                except Exception as exc:
+                    self.send_error(500, f"Profile backup read failed: {exc}")
+                return
+
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):])
                 return
 
-            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /download/<path>, or POST /clipboard")
+            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /backup/profile, /download/<path>, or POST /clipboard")
 
         def log_message(self, format, *args):
             print(f"[{self.log_date_time_string()}] {format % args}")

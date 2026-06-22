@@ -1,16 +1,22 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'voice_input_service.dart';
+import 'backup_service.dart';
 
 class BackupTab extends StatefulWidget {
-  const BackupTab({super.key, required this.onImported});
+  const BackupTab({
+    super.key,
+    required this.dio,
+    required this.serverUrl,
+    required this.onImported,
+  });
 
+  final Dio dio;
+  final String serverUrl;
   final Future<void> Function() onImported;
 
   @override
@@ -18,88 +24,29 @@ class BackupTab extends StatefulWidget {
 }
 
 class _BackupTabState extends State<BackupTab> {
-  static const _stringListPreferenceKeys = ['commands', 'issues', 'servers'];
-  static const _stringPreferenceKeys = [
-    'active_server',
-    'agent_ws_url',
-    'agent_pair_token',
-    'ssh_host',
-    'ssh_port',
-    'ssh_username',
-    'ssh_private_key_name',
-    'github_repo',
-    'github_workflow',
-    'github_ref',
-    'github_artifact',
-  ];
-  static const _boolPreferenceKeys = [
-    'agent_whole_device',
-    'ssh_use_private_key',
-  ];
-
-  final _storage = const FlutterSecureStorage();
-
   bool _includeSecrets = true;
   bool _busy = false;
   String? _status;
 
-  bool _isExportableSecret(String key) {
-    return key == VoiceInputService.apiKeyStorageKey ||
-        key.startsWith('ssh_profile:') ||
-        key.startsWith('ssh_terminal_generated_');
-  }
-
-  Future<Map<String, dynamic>> _buildBackup() async {
-    final prefs = await SharedPreferences.getInstance();
-    final shared = <String, Object?>{};
-
-    for (final key in _stringListPreferenceKeys) {
-      final value = prefs.getStringList(key);
-      if (value != null) shared[key] = value;
-    }
-    for (final key in _stringPreferenceKeys) {
-      final value = prefs.getString(key);
-      if (value != null) shared[key] = value;
-    }
-    for (final key in _boolPreferenceKeys) {
-      final value = prefs.getBool(key);
-      if (value != null) shared[key] = value;
-    }
-
-    final secure = <String, String>{};
-    if (_includeSecrets) {
-      final values = await _storage.readAll();
-      for (final entry in values.entries) {
-        if (_isExportableSecret(entry.key)) {
-          secure[entry.key] = entry.value;
-        }
-      }
-    }
-
-    return {
-      'format': 'devota-backup',
-      'version': 1,
-      'exportedAt': DateTime.now().toUtc().toIso8601String(),
-      'sharedPreferences': shared,
-      'secureStorage': secure,
-    };
-  }
-
-  String _prettyJson(Map<String, dynamic> value) {
-    return const JsonEncoder.withIndent('  ').convert(value);
-  }
-
   Future<void> _copyBackup() async {
     await _run('Export copied.', () async {
-      final backup = await _buildBackup();
-      await Clipboard.setData(ClipboardData(text: _prettyJson(backup)));
+      final backup = await BackupService.buildBackup(
+        includeSecrets: _includeSecrets,
+      );
+      await Clipboard.setData(
+        ClipboardData(text: BackupService.prettyJson(backup)),
+      );
     });
   }
 
   Future<void> _saveBackupFile() async {
     await _run('Backup file saved.', () async {
-      final backup = await _buildBackup();
-      final bytes = Uint8List.fromList(utf8.encode(_prettyJson(backup)));
+      final backup = await BackupService.buildBackup(
+        includeSecrets: _includeSecrets,
+      );
+      final bytes = Uint8List.fromList(
+        utf8.encode(BackupService.prettyJson(backup)),
+      );
       final timestamp = DateTime.now().toUtc().toIso8601String().replaceAll(
         RegExp(r'[:.]'),
         '-',
@@ -113,6 +60,29 @@ class _BackupTabState extends State<BackupTab> {
       if (path == null) {
         throw StateError('Save cancelled.');
       }
+    });
+  }
+
+  Future<void> _saveBackupToServer() async {
+    await _run('Backup saved to server.', () async {
+      final ok = await BackupService.saveToServer(
+        widget.dio,
+        widget.serverUrl,
+        includeSecrets: _includeSecrets,
+      );
+      if (!ok) throw StateError('Server did not accept backup.');
+    });
+  }
+
+  Future<void> _restoreBackupFromServer() async {
+    await _run('Backup restored from server.', () async {
+      final ok = await BackupService.restoreFromServer(
+        widget.dio,
+        widget.serverUrl,
+        includeSecrets: _includeSecrets,
+      );
+      if (!ok) throw StateError('No server backup found.');
+      await widget.onImported();
     });
   }
 
@@ -142,48 +112,17 @@ class _BackupTabState extends State<BackupTab> {
   }
 
   Future<void> _importBackupText(String text) async {
-    final decoded = json.decode(text);
-    if (decoded is! Map) {
-      throw const FormatException('Backup must be a JSON object.');
-    }
-    final backup = Map<String, dynamic>.from(decoded);
-    if (backup['format'] != 'devota-backup') {
-      throw const FormatException('Not a DevOTA backup.');
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    final shared = backup['sharedPreferences'];
-    if (shared is Map) {
-      for (final entry in shared.entries) {
-        final key = entry.key.toString();
-        final value = entry.value;
-        if (_stringListPreferenceKeys.contains(key) && value is List) {
-          await prefs.setStringList(
-            key,
-            value.map((item) => item.toString()).toList(),
-          );
-        } else if (_stringPreferenceKeys.contains(key) && value != null) {
-          await prefs.setString(key, value.toString());
-        } else if (_boolPreferenceKeys.contains(key) && value is bool) {
-          await prefs.setBool(key, value);
-        }
-      }
-    }
-
-    if (_includeSecrets) {
-      final secure = backup['secureStorage'];
-      if (secure is Map) {
-        for (final entry in secure.entries) {
-          final key = entry.key.toString();
-          final value = entry.value;
-          if (value is String && _isExportableSecret(key)) {
-            await _storage.write(key: key, value: value);
-          }
-        }
-      }
-    }
-
+    await BackupService.importBackupText(text, includeSecrets: _includeSecrets);
     await widget.onImported();
+    try {
+      await BackupService.saveToServer(
+        widget.dio,
+        widget.serverUrl,
+        includeSecrets: _includeSecrets,
+      );
+    } catch (_) {
+      // Manual import still succeeds when the server is unavailable.
+    }
   }
 
   Future<void> _run(String success, Future<void> Function() action) async {
@@ -230,6 +169,16 @@ class _BackupTabState extends State<BackupTab> {
               icon: const Icon(Icons.save_alt),
               label: const Text('Save File'),
               onPressed: _busy ? null : _saveBackupFile,
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.cloud_upload),
+              label: const Text('Save Server'),
+              onPressed: _busy ? null : _saveBackupToServer,
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.cloud_download),
+              label: const Text('Restore Server'),
+              onPressed: _busy ? null : _restoreBackupFromServer,
             ),
             OutlinedButton.icon(
               icon: const Icon(Icons.content_paste),

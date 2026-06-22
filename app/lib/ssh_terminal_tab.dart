@@ -12,13 +12,22 @@ import 'package:pinenacl/ed25519.dart' as ed25519;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
+import 'backup_service.dart';
 import 'voice_input_service.dart';
 
 class SshTerminalTab extends StatefulWidget {
-  const SshTerminalTab({super.key, required this.dio, required this.serverUrl});
+  const SshTerminalTab({
+    super.key,
+    required this.dio,
+    required this.serverUrl,
+    this.quickCommands = const [],
+    this.onCommandUsed,
+  });
 
   final Dio dio;
   final String serverUrl;
+  final List<String> quickCommands;
+  final ValueChanged<String>? onCommandUsed;
 
   @override
   State<SshTerminalTab> createState() => _SshTerminalTabState();
@@ -32,6 +41,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   final _terminalController = TerminalController();
   final _terminalFocusNode = FocusNode();
   final _terminalScrollController = ScrollController();
+  final _composerFocusNode = FocusNode();
 
   final _hostController = TextEditingController();
   final _portController = TextEditingController(text: '22');
@@ -45,15 +55,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _connected = false;
   bool _recording = false;
   bool _transcribing = false;
+  bool _tmuxScrollMode = false;
   String? _status;
   String? _privateKeyName;
   String? _generatedPublicKey;
-  int _terminalViewGeneration = 0;
 
   SSHClient? _client;
   SSHSession? _session;
   StreamSubscription<String>? _stdoutSub;
   StreamSubscription<String>? _stderrSub;
+  Timer? _backupDebounce;
 
   @override
   void initState() {
@@ -80,8 +91,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _composerController.dispose();
     _stdoutSub?.cancel();
     _stderrSub?.cancel();
+    _backupDebounce?.cancel();
     _terminalFocusNode.dispose();
     _terminalScrollController.dispose();
+    _composerFocusNode.dispose();
     _voice.dispose();
     super.dispose();
   }
@@ -94,7 +107,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (state != AppLifecycleState.resumed || !mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      setState(() => _terminalViewGeneration++);
       if (_connected) _terminalFocusNode.requestFocus();
     });
   }
@@ -147,6 +159,23 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       key: _passphraseStorageKey,
       value: _passphraseController.text,
     );
+    _scheduleServerBackup();
+  }
+
+  void _scheduleServerBackup() {
+    _backupDebounce?.cancel();
+    _backupDebounce = Timer(const Duration(seconds: 2), () {
+      _saveBackupToServerSilently();
+    });
+  }
+
+  Future<void> _saveBackupToServerSilently() async {
+    try {
+      if (!await BackupService.hasLocalRestorableData()) return;
+      await BackupService.saveToServer(widget.dio, widget.serverUrl);
+    } catch (_) {
+      // Keep terminal edits local even when the server is unavailable.
+    }
   }
 
   Future<void> _pickPrivateKey() async {
@@ -159,6 +188,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('ssh_private_key_name', file.name);
     setState(() => _privateKeyName = file.name);
+    _scheduleServerBackup();
   }
 
   String _publicKeyLine(SSHKeyPair keyPair) {
@@ -199,6 +229,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _generatedPublicKey = publicKey;
         _status = 'Generated DevOTA phone key.';
       });
+      _scheduleServerBackup();
     } catch (e) {
       setState(() => _status = 'Key generation failed: $e');
     } finally {
@@ -498,12 +529,46 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _session?.write(Uint8List.fromList(utf8.encode(text)));
   }
 
+  void _focusTerminalInput() {
+    _composerFocusNode.unfocus();
+    _terminalFocusNode.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_connected) return;
+      _terminalFocusNode.requestFocus();
+    });
+  }
+
   void _sendTerminalKey(String sequence, {String? fallbackText}) {
     if (_connected) {
       _writeToSession(sequence);
       return;
     }
     if (fallbackText != null) _insertComposerText(fallbackText);
+  }
+
+  void _sendTmuxCommand(String command) {
+    _sendTerminalKey('\x02$command');
+  }
+
+  void _enterTmuxScrollMode() {
+    _sendTmuxCommand('[');
+    if (mounted) {
+      setState(() {
+        _tmuxScrollMode = true;
+        _status = 'tmux scroll mode: tap Exit scroll or Esc to type again.';
+      });
+    }
+  }
+
+  void _exitTmuxScrollMode() {
+    _sendTerminalKey('q');
+    if (mounted) {
+      setState(() {
+        _tmuxScrollMode = false;
+        _status = 'Exited tmux scroll mode.';
+      });
+    }
+    _terminalFocusNode.requestFocus();
   }
 
   void _insertComposerText(String text) {
@@ -521,38 +586,39 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _submitComposer() {
     final text = _composerController.text.trim();
     if (text.isEmpty || !_connected) return;
-    _writeToSession('$text\n');
-    _composerController.clear();
+    _submitTextToTerminal(text);
   }
 
-  Future<void> _toggleVoice() async {
-    if (_recording) {
-      final path = await _voice.stopRecording();
-      setState(() {
-        _recording = false;
-        _transcribing = true;
-      });
-      try {
-        final key = await _voice.loadApiKey();
-        if (key == null || key.isEmpty) return;
-        final text = path == null ? '' : await _voice.transcribe(path, key);
-        if (text.isNotEmpty) {
-          final existing = _composerController.text;
-          _composerController.text = existing.isEmpty
-              ? text
-              : '$existing $text';
-          _composerController.selection = TextSelection.fromPosition(
-            TextPosition(offset: _composerController.text.length),
-          );
-        }
-      } catch (e) {
-        if (mounted) setState(() => _status = 'Transcription failed: $e');
-      } finally {
-        await VoiceInputService.deleteRecording(path);
-        if (mounted) setState(() => _transcribing = false);
-      }
-      return;
+  void _appendComposerText(String text) {
+    if (text.trim().isEmpty) return;
+    final existing = _composerController.text;
+    _composerController.text = existing.isEmpty ? text : '$existing $text';
+    _composerController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _composerController.text.length),
+    );
+  }
+
+  void _submitTextToTerminal(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || !_connected) return;
+    _writeToSession('$trimmed\n');
+    _composerController.clear();
+    _focusTerminalInput();
+  }
+
+  void _runSavedCommand(String command) {
+    final trimmed = command.trim();
+    if (trimmed.isEmpty) return;
+    widget.onCommandUsed?.call(trimmed);
+    if (_connected) {
+      _submitTextToTerminal(trimmed);
+    } else {
+      _appendComposerText(trimmed);
+      setState(() => _status = 'Command inserted. Connect before submitting.');
     }
+  }
+
+  Future<void> _startVoiceRecording() async {
     var key = await _voice.loadApiKey();
     if (key == null || key.isEmpty) {
       key = await _promptApiKey();
@@ -564,7 +630,37 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       return;
     }
     await _voice.startRecording('terminal_voice.m4a');
-    setState(() => _recording = true);
+    setState(() {
+      _recording = true;
+      _status = 'Recording voice input...';
+    });
+  }
+
+  Future<void> _finishVoiceRecording() async {
+    final path = await _voice.stopRecording();
+    if (!mounted) {
+      await VoiceInputService.deleteRecording(path);
+      return;
+    }
+    setState(() {
+      _recording = false;
+      _transcribing = true;
+      _status = 'Transcribing voice input...';
+    });
+    try {
+      final key = await _voice.loadApiKey();
+      if (key == null || key.isEmpty) return;
+      final text = path == null ? '' : await _voice.transcribe(path, key);
+      if (text.isEmpty) return;
+      _appendComposerText(text);
+      _composerFocusNode.requestFocus();
+      if (mounted) setState(() => _status = 'Transcript added.');
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Transcription failed: $e');
+    } finally {
+      await VoiceInputService.deleteRecording(path);
+      if (mounted) setState(() => _transcribing = false);
+    }
   }
 
   Future<String?> _promptApiKey() async {
@@ -600,7 +696,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       ),
     );
     controller.dispose();
-    if (key != null && key.isNotEmpty) await _voice.saveApiKey(key);
+    if (key != null && key.isNotEmpty) {
+      await _voice.saveApiKey(key);
+      _scheduleServerBackup();
+    }
     return key;
   }
 
@@ -617,7 +716,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             child: Container(
               color: Colors.black,
               child: TerminalView(
-                key: ValueKey('ssh-terminal-view-$_terminalViewGeneration'),
                 _terminal,
                 controller: _terminalController,
                 focusNode: _terminalFocusNode,
@@ -627,6 +725,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             ),
           ),
           _buildTerminalKeyBar(theme),
+          if (widget.quickCommands.isNotEmpty) _buildSavedCommandBar(theme),
           _buildComposer(),
         ],
       ),
@@ -640,134 +739,212 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final subtitle = _status ?? connectionLabel;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: ExpansionTile(
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          leading: Icon(_connected ? Icons.link : Icons.link_off),
-          title: Text(_connected ? 'SSH connected' : 'SSH connection'),
-          subtitle: Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          children: [
-            Row(
-              children: [
-                Expanded(child: _field(_hostController, 'Host')),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 86,
-                  child: _field(
-                    _portController,
-                    'Port',
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(child: _field(_usernameController, 'User')),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _usePrivateKey
-                      ? TextField(
-                          controller: _passphraseController,
-                          obscureText: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Key passphrase',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          onChanged: (_) => _saveProfile(),
-                        )
-                      : TextField(
-                          controller: _passwordController,
-                          obscureText: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Password',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          onChanged: (_) => _saveProfile(),
-                        ),
-                ),
-                const SizedBox(width: 8),
-                FilterChip(
-                  label: const Text('Key'),
-                  selected: _usePrivateKey,
-                  onSelected: (v) => setState(() => _usePrivateKey = v),
-                ),
-                const SizedBox(width: 4),
-                IconButton.filledTonal(
-                  icon: const Icon(Icons.key),
-                  tooltip: _privateKeyName ?? 'Import private key',
-                  onPressed: _pickPrivateKey,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.icon(
-                  icon: Icon(_connected ? Icons.link_off : Icons.link),
-                  label: Text(_connected ? 'Disconnect' : 'Connect'),
-                  onPressed: _busy
-                      ? null
-                      : (_connected ? _disconnect : _connect),
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.network_ping),
-                  label: const Text('Ping'),
-                  onPressed: _busy ? null : _ping,
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.add),
-                  label: const Text('Key'),
-                  onPressed: _busy ? null : _generateTerminalKey,
-                ),
-                IconButton.filledTonal(
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy generated public key',
-                  onPressed: _generatedPublicKey == null
-                      ? null
-                      : _copyPublicKey,
-                ),
-                IconButton.filledTonal(
-                  icon: const Icon(Icons.upload),
-                  tooltip: 'Install public key through build server',
-                  onPressed: _busy || _generatedPublicKey == null
-                      ? null
-                      : _sendPublicKeyToServer,
-                ),
-                IconButton.filledTonal(
-                  icon: const Icon(Icons.key),
-                  tooltip: 'Set OpenAI key',
-                  onPressed: _promptApiKey,
-                ),
-              ],
-            ),
-            if (_status != null) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _status!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+      child: Material(
+        color: theme.colorScheme.surface,
+        elevation: 1,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+          child: Row(
+            children: [
+              Icon(
+                _connected ? Icons.link : Icons.link_off,
+                size: 20,
+                color: _connected ? theme.colorScheme.primary : null,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _connected ? 'SSH connected' : connectionLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge,
+                    ),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              IconButton(
+                icon: Icon(_connected ? Icons.link_off : Icons.link),
+                tooltip: _connected ? 'Disconnect' : 'Connect',
+                onPressed: _busy ? null : (_connected ? _disconnect : _connect),
+              ),
+              IconButton(
+                icon: const Icon(Icons.settings),
+                tooltip: 'SSH settings',
+                onPressed: _showConnectionSheet,
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _showConnectionSheet() async {
+    final theme = Theme.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'SSH Settings',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(child: _field(_hostController, 'Host')),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 86,
+                          child: _field(
+                            _portController,
+                            'Port',
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _field(_usernameController, 'User'),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _usePrivateKey
+                              ? TextField(
+                                  controller: _passphraseController,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Key passphrase',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (_) => _saveProfile(),
+                                )
+                              : TextField(
+                                  controller: _passwordController,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Password',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (_) => _saveProfile(),
+                                ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilterChip(
+                          label: const Text('Key'),
+                          selected: _usePrivateKey,
+                          onSelected: (v) {
+                            setState(() => _usePrivateKey = v);
+                            setSheetState(() {});
+                            _saveProfile();
+                          },
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton.filledTonal(
+                          icon: const Icon(Icons.key),
+                          tooltip: _privateKeyName ?? 'Import private key',
+                          onPressed: _pickPrivateKey,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          icon: Icon(_connected ? Icons.link_off : Icons.link),
+                          label: Text(_connected ? 'Disconnect' : 'Connect'),
+                          onPressed: _busy
+                              ? null
+                              : (_connected ? _disconnect : _connect),
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.network_ping),
+                          label: const Text('Ping'),
+                          onPressed: _busy ? null : _ping,
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('Key'),
+                          onPressed: _busy ? null : _generateTerminalKey,
+                        ),
+                        IconButton.filledTonal(
+                          icon: const Icon(Icons.copy),
+                          tooltip: 'Copy generated public key',
+                          onPressed: _generatedPublicKey == null
+                              ? null
+                              : _copyPublicKey,
+                        ),
+                        IconButton.filledTonal(
+                          icon: const Icon(Icons.upload),
+                          tooltip: 'Install public key through build server',
+                          onPressed: _busy || _generatedPublicKey == null
+                              ? null
+                              : _sendPublicKeyToServer,
+                        ),
+                        IconButton.filledTonal(
+                          icon: const Icon(Icons.key),
+                          tooltip: 'Set OpenAI key',
+                          onPressed: _promptApiKey,
+                        ),
+                      ],
+                    ),
+                    if (_status != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _status!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (mounted) setState(() {});
   }
 
   Widget _buildTerminalKeyBar(ThemeData theme) {
@@ -780,18 +957,134 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           children: [
             _terminalKeyButton('Tab', () => _sendTerminalKey('\t')),
-            _terminalKeyButton('Esc', () => _sendTerminalKey('\x1B')),
+            _terminalKeyButton('Esc', () {
+              _sendTerminalKey('\x1B');
+              if (_tmuxScrollMode) setState(() => _tmuxScrollMode = false);
+            }),
             _terminalKeyButton(
               '/',
               () => _sendTerminalKey('/', fallbackText: '/'),
+              enabledWhenDisconnected: true,
             ),
             _terminalKeyButton('Home', () => _sendTerminalKey('\x1B[H')),
             _terminalKeyButton('End', () => _sendTerminalKey('\x1B[F')),
+            _terminalKeyButton('PgUp', () => _sendTerminalKey('\x1B[5~')),
+            _terminalKeyButton('PgDn', () => _sendTerminalKey('\x1B[6~')),
             _terminalIconKey(Icons.keyboard_arrow_left, 'Left', '\x1B[D'),
             _terminalIconKey(Icons.keyboard_arrow_up, 'Up', '\x1B[A'),
             _terminalIconKey(Icons.keyboard_arrow_down, 'Down', '\x1B[B'),
             _terminalIconKey(Icons.keyboard_arrow_right, 'Right', '\x1B[C'),
+            _terminalKeyGroupLabel(theme, 'tmux'),
+            _terminalKeyButton(
+              'New',
+              () => _sendTmuxCommand('c'),
+              tooltip: 'tmux new window',
+            ),
+            _terminalKeyButton(
+              'Prev',
+              () => _sendTmuxCommand('p'),
+              tooltip: 'tmux previous window',
+            ),
+            _terminalKeyButton(
+              'Next',
+              () => _sendTmuxCommand('n'),
+              tooltip: 'tmux next window',
+            ),
+            _terminalKeyButton(
+              'List',
+              () => _sendTmuxCommand('w'),
+              tooltip: 'tmux window list',
+            ),
+            if (_tmuxScrollMode)
+              _terminalKeyButton(
+                'Exit scroll',
+                _exitTmuxScrollMode,
+                tooltip: 'Exit tmux copy/scroll mode',
+              )
+            else
+              _terminalKeyButton(
+                'Scroll',
+                _enterTmuxScrollMode,
+                tooltip: 'tmux copy/scroll mode',
+              ),
+            _terminalKeyButton(
+              'Split |',
+              () => _sendTmuxCommand('%'),
+              tooltip: 'tmux split pane side by side',
+            ),
+            _terminalKeyButton(
+              'Split -',
+              () => _sendTmuxCommand('"'),
+              tooltip: 'tmux split pane top and bottom',
+            ),
+            _terminalKeyButton(
+              'Detach',
+              () => _sendTmuxCommand('d'),
+              tooltip: 'tmux detach session',
+            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _terminalKeyGroupLabel(ThemeData theme, String label) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4, right: 10),
+        child: Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSavedCommandBar(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      child: SizedBox(
+        height: 40,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          children: [
+            _terminalKeyGroupLabel(theme, 'cmds'),
+            for (final command in widget.quickCommands)
+              _terminalCommandButton(command),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _terminalCommandButton(String command) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Tooltip(
+        message: command,
+        child: SizedBox(
+          height: 32,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: const Icon(Icons.keyboard_return, size: 16),
+            onPressed: () => _runSavedCommand(command),
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 180),
+              child: Text(
+                command,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -804,6 +1097,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         message: tooltip,
         child: IconButton.filledTonal(
           visualDensity: VisualDensity.compact,
+          style: IconButton.styleFrom(
+            fixedSize: const Size(32, 32),
+            minimumSize: const Size(32, 32),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
           icon: Icon(icon),
           onPressed: _connected ? () => _sendTerminalKey(sequence) : null,
         ),
@@ -811,71 +1110,100 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _terminalKeyButton(String label, VoidCallback onPressed) {
+  Widget _terminalKeyButton(
+    String label,
+    VoidCallback onPressed, {
+    String? tooltip,
+    bool enabledWhenDisconnected = false,
+  }) {
+    final enabled = _connected || enabledWhenDisconnected;
+    final button = SizedBox(
+      height: 32,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: enabled ? onPressed : null,
+        child: Text(label),
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(right: 6),
-      child: SizedBox(
-        height: 32,
-        child: OutlinedButton(
-          style: OutlinedButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-          ),
-          onPressed: _connected || label == '/' ? onPressed : null,
-          child: Text(label),
-        ),
-      ),
+      child: tooltip == null
+          ? button
+          : Tooltip(message: tooltip, child: button),
     );
   }
 
   Widget _buildComposer() {
+    final theme = Theme.of(context);
     return Material(
       elevation: 3,
       child: SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _composerController,
-                  decoration: const InputDecoration(
-                    hintText: 'Type command',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _composerController,
+                      focusNode: _composerFocusNode,
+                      decoration: const InputDecoration(
+                        hintText: 'Type command',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                      ),
+                      maxLines: 1,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      smartDashesType: SmartDashesType.disabled,
+                      smartQuotesType: SmartQuotesType.disabled,
+                      textCapitalization: TextCapitalization.none,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _submitComposer(),
                     ),
                   ),
-                  maxLines: 1,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _submitComposer(),
-                ),
-              ),
-              const SizedBox(width: 6),
-              IconButton.filled(
-                icon: Icon(
-                  _recording ? Icons.stop : Icons.mic,
-                  color: _recording ? Colors.red : null,
-                ),
-                tooltip: _recording ? 'Stop recording' : 'Voice input',
-                onPressed: _transcribing ? null : _toggleVoice,
-              ),
-              const SizedBox(width: 2),
-              IconButton.filled(
-                icon: _transcribing
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.send),
-                tooltip: 'Submit to SSH',
-                onPressed: _connected && !_transcribing
-                    ? _submitComposer
-                    : null,
+                  const SizedBox(width: 6),
+                  IconButton.filled(
+                    icon: Icon(_recording ? Icons.stop : Icons.mic),
+                    tooltip: _recording ? 'Stop recording' : 'Voice input',
+                    style: _recording
+                        ? IconButton.styleFrom(
+                            backgroundColor: theme.colorScheme.errorContainer,
+                            foregroundColor: theme.colorScheme.onErrorContainer,
+                          )
+                        : null,
+                    onPressed: _transcribing
+                        ? null
+                        : (_recording
+                              ? _finishVoiceRecording
+                              : _startVoiceRecording),
+                  ),
+                  const SizedBox(width: 2),
+                  IconButton.filled(
+                    icon: _transcribing
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                    tooltip: 'Submit to SSH',
+                    onPressed: _connected && !_transcribing && !_recording
+                        ? _submitComposer
+                        : null,
+                  ),
+                ],
               ),
             ],
           ),

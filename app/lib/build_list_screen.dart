@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
 import 'ssh_terminal_tab.dart';
@@ -40,6 +43,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   final Map<String, bool> _downloading = {};
   final Map<String, String> _downloadStatus = {};
   final Map<String, Stopwatch> _downloadTimers = {};
+  Set<String> _installedPackages = {};
   final _noteController = TextEditingController();
   late final _voice = VoiceInputService(_dio);
   List<String> _issues = [];
@@ -53,6 +57,7 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   // Copy-paste command snippets shown on the Commands tab.
   List<String> _commands = [];
+  Map<String, int> _commandUseCounts = {};
   final _commandController = TextEditingController();
   final _agentUrlController = TextEditingController();
   final _agentTokenController = TextEditingController();
@@ -66,6 +71,8 @@ class _BuildListScreenState extends State<BuildListScreen>
   bool _githubBusy = false;
   String? _githubStatus;
   List<Map<String, dynamic>> _githubRuns = [];
+  Timer? _backupDebounce;
+  String? _serverRestoreAttemptedFor;
 
   @override
   void initState() {
@@ -92,6 +99,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     _githubWorkflowController.dispose();
     _githubRefController.dispose();
     _githubArtifactController.dispose();
+    _backupDebounce?.cancel();
     _voice.dispose();
     _dio.close();
     super.dispose();
@@ -104,6 +112,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     // install without re-downloading. Deletion is now manual via the trash icon.
     if (state == AppLifecycleState.resumed) {
       _refreshCachedApks();
+      _refreshInstalledPackages();
     }
   }
 
@@ -135,6 +144,61 @@ class _BuildListScreenState extends State<BuildListScreen>
     return safe.endsWith('.apk') ? safe : '$safe.apk';
   }
 
+  String _buildPackageName(Map<String, dynamic> build) {
+    return (build['packageName'] ?? '').toString().trim();
+  }
+
+  Future<void> _refreshInstalledPackages([
+    Iterable<Map<String, dynamic>>? builds,
+  ]) async {
+    final source = builds ?? _builds;
+    final packages = source
+        .map(_buildPackageName)
+        .where((packageName) => packageName.isNotEmpty)
+        .toSet();
+    if (packages.isEmpty) {
+      if (mounted) setState(() => _installedPackages = {});
+      return;
+    }
+    final installed = <String>{};
+    for (final packageName in packages) {
+      try {
+        final ok = await _controlAgentChannel.invokeMethod<bool>(
+          'isPackageInstalled',
+          {'packageName': packageName},
+        );
+        if (ok == true) installed.add(packageName);
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _installedPackages = installed);
+  }
+
+  Future<void> _openInstalledBuildApp(Map<String, dynamic> build) async {
+    final packageName = _buildPackageName(build);
+    if (packageName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Build does not declare a package name')),
+      );
+      return;
+    }
+    try {
+      final opened = await _controlAgentChannel.invokeMethod<bool>(
+        'openPackage',
+        {'packageName': packageName},
+      );
+      if (opened != true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No launcher found for $packageName')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Open failed: ${_briefErrorMessage(e)}')),
+      );
+    }
+  }
+
   Future<void> _installCachedApk(Map<String, dynamic> build) async {
     final filename = _cacheFileName(build);
     final dir = await _getApkCacheDir();
@@ -154,6 +218,8 @@ class _BuildListScreenState extends State<BuildListScreen>
         SnackBar(content: Text('Could not open installer: ${result.message}')),
       );
     }
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _refreshInstalledPackages();
   }
 
   Future<void> _deleteCachedApk(Map<String, dynamic> build) async {
@@ -174,6 +240,22 @@ class _BuildListScreenState extends State<BuildListScreen>
   Future<void> _loadCommands() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList('commands');
+    final countsJson = prefs.getString('command_usage_counts_json');
+    if (countsJson != null && countsJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(countsJson);
+        if (decoded is Map) {
+          _commandUseCounts = decoded.map(
+            (key, value) => MapEntry(
+              key.toString(),
+              value is int ? value : int.tryParse(value.toString()) ?? 0,
+            ),
+          );
+        }
+      } catch (_) {
+        _commandUseCounts = {};
+      }
+    }
     if (saved != null && mounted) {
       setState(() => _commands = saved);
     }
@@ -182,7 +264,26 @@ class _BuildListScreenState extends State<BuildListScreen>
   Future<void> _saveCommands() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('commands', _commands);
+    await prefs.setString(
+      'command_usage_counts_json',
+      jsonEncode(_commandUseCounts),
+    );
+    _scheduleServerBackup();
   }
+
+  List<String> get _rankedCommands {
+    final indexed = _commands.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final usage = (_commandUseCounts[b.value] ?? 0).compareTo(
+        _commandUseCounts[a.value] ?? 0,
+      );
+      if (usage != 0) return usage;
+      return a.key.compareTo(b.key);
+    });
+    return indexed.map((entry) => entry.value).toList();
+  }
+
+  List<String> get _quickCommands => _rankedCommands.take(12).toList();
 
   void _addCommand() {
     final text = _commandController.text.trim();
@@ -193,11 +294,29 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   void _removeCommand(int index) {
-    setState(() => _commands.removeAt(index));
+    final command = _commands[index];
+    setState(() {
+      _commands.removeAt(index);
+      if (!_commands.contains(command)) _commandUseCounts.remove(command);
+    });
+    _saveCommands();
+  }
+
+  void _removeCommandValue(String command) {
+    final index = _commands.indexOf(command);
+    if (index >= 0) _removeCommand(index);
+  }
+
+  void _recordCommandUse(String cmd) {
+    if (cmd.trim().isEmpty) return;
+    setState(() {
+      _commandUseCounts[cmd] = (_commandUseCounts[cmd] ?? 0) + 1;
+    });
     _saveCommands();
   }
 
   void _copyCommand(String cmd) {
+    _recordCommandUse(cmd);
     Clipboard.setData(ClipboardData(text: cmd));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -205,6 +324,11 @@ class _BuildListScreenState extends State<BuildListScreen>
         duration: Duration(milliseconds: 900),
       ),
     );
+  }
+
+  void _pushCommandToServerClipboard(String cmd) {
+    _recordCommandUse(cmd);
+    _pushToServerClipboard(cmd, label: 'clipboard');
   }
 
   String _issuesAsText() {
@@ -226,6 +350,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   Future<void> _saveIssues() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('issues', _issues);
+    _scheduleServerBackup();
   }
 
   void _addIssue() {
@@ -288,6 +413,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     );
     controller.dispose();
     if (key != null && key.isNotEmpty) await _voice.saveApiKey(key);
+    _scheduleServerBackup();
     return key;
   }
 
@@ -374,6 +500,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       'github_artifact',
       _githubArtifactController.text.trim(),
     );
+    _scheduleServerBackup();
   }
 
   Future<void> _runGithubWorkflow() async {
@@ -496,6 +623,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       _agentTokenController.text.trim(),
     );
     await prefs.setBool('agent_whole_device', _agentWholeDevice);
+    _scheduleServerBackup();
   }
 
   Future<void> _startAgent() async {
@@ -604,6 +732,40 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   String get _baseUrl => _activeServer.trim().replaceAll(RegExp(r'/+$'), '');
 
+  void _scheduleServerBackup() {
+    _backupDebounce?.cancel();
+    _backupDebounce = Timer(const Duration(seconds: 2), () {
+      _saveBackupToServerSilently();
+    });
+  }
+
+  Future<void> _saveBackupToServerSilently() async {
+    try {
+      if (!await BackupService.hasLocalRestorableData()) return;
+      await BackupService.saveToServer(_dio, _baseUrl);
+    } catch (_) {
+      // Server backup is opportunistic; local saves should never depend on it.
+    }
+  }
+
+  Future<void> _restoreBackupFromServerIfEmpty() async {
+    final server = _baseUrl;
+    if (_serverRestoreAttemptedFor == server) return;
+    _serverRestoreAttemptedFor = server;
+    try {
+      if (await BackupService.hasLocalRestorableData()) return;
+      final restored = await BackupService.restoreFromServer(_dio, server);
+      if (!restored || !mounted) return;
+      await _reloadImportedSettings();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Restored DevOTA backup from server')),
+      );
+    } catch (_) {
+      // A missing/unreachable backup is normal on first setup.
+    }
+  }
+
   Future<void> _loadServers() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList('servers') ?? [];
@@ -620,12 +782,14 @@ class _BuildListScreenState extends State<BuildListScreen>
     });
     await _saveServers();
     _fetchBuilds();
+    _restoreBackupFromServerIfEmpty();
   }
 
   Future<void> _saveServers() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('servers', _servers);
     await prefs.setString('active_server', _activeServer);
+    _scheduleServerBackup();
   }
 
   void _setActiveServer(String url) {
@@ -633,6 +797,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     setState(() => _activeServer = url);
     _saveServers();
     _fetchBuilds();
+    _restoreBackupFromServerIfEmpty();
   }
 
   void _addAndSelectServer(String url) {
@@ -644,6 +809,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     });
     _saveServers();
     _fetchBuilds();
+    _restoreBackupFromServerIfEmpty();
   }
 
   Future<void> _showManageServersDialog() async {
@@ -667,7 +833,10 @@ class _BuildListScreenState extends State<BuildListScreen>
             : result.servers.first;
       });
       _saveServers();
-      if (_activeServer != originalActive) _fetchBuilds();
+      if (_activeServer != originalActive) {
+        _fetchBuilds();
+        _restoreBackupFromServerIfEmpty();
+      }
     });
   }
 
@@ -686,10 +855,12 @@ class _BuildListScreenState extends State<BuildListScreen>
     try {
       final resp = await _dio.get('$_baseUrl/builds');
       final data = resp.data as List;
+      final builds = data.cast<Map<String, dynamic>>();
       setState(() {
-        _builds = data.cast<Map<String, dynamic>>();
+        _builds = builds;
         _loading = false;
       });
+      _refreshInstalledPackages(builds);
     } catch (e) {
       setState(() {
         _error = _briefErrorMessage(e);
@@ -828,6 +999,8 @@ class _BuildListScreenState extends State<BuildListScreen>
           ),
         );
       }
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _refreshInstalledPackages();
     } catch (e) {
       setState(() {
         _downloading[path] = false;
@@ -886,10 +1059,16 @@ class _BuildListScreenState extends State<BuildListScreen>
             key: const PageStorageKey('ssh-terminal-tab'),
             dio: _dio,
             serverUrl: _baseUrl,
+            quickCommands: _quickCommands,
+            onCommandUsed: _recordCommandUse,
           ),
           _buildCommandsTab(),
           _buildAgentTab(),
-          BackupTab(onImported: _reloadImportedSettings),
+          BackupTab(
+            dio: _dio,
+            serverUrl: _baseUrl,
+            onImported: _reloadImportedSettings,
+          ),
         ],
       ),
     );
@@ -1135,6 +1314,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Widget _buildCommandsTab() {
+    final rankedCommands = _rankedCommands;
     return Column(
       children: [
         Padding(
@@ -1168,7 +1348,7 @@ class _BuildListScreenState extends State<BuildListScreen>
           ),
         ),
         Expanded(
-          child: _commands.isEmpty
+          child: rankedCommands.isEmpty
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
@@ -1186,9 +1366,10 @@ class _BuildListScreenState extends State<BuildListScreen>
                     horizontal: 12,
                     vertical: 4,
                   ),
-                  itemCount: _commands.length,
+                  itemCount: rankedCommands.length,
                   itemBuilder: (context, index) {
-                    final cmd = _commands[index];
+                    final cmd = rankedCommands[index];
+                    final uses = _commandUseCounts[cmd] ?? 0;
                     return Card(
                       child: InkWell(
                         onTap: () => _copyCommand(cmd),
@@ -1206,6 +1387,16 @@ class _BuildListScreenState extends State<BuildListScreen>
                                   ),
                                 ),
                               ),
+                              if (uses > 0) ...[
+                                const SizedBox(width: 6),
+                                Tooltip(
+                                  message: 'Uses',
+                                  child: Chip(
+                                    visualDensity: VisualDensity.compact,
+                                    label: Text('$uses'),
+                                  ),
+                                ),
+                              ],
                               IconButton(
                                 icon: const Icon(Icons.copy, size: 20),
                                 tooltip: 'Copy to phone clipboard',
@@ -1214,10 +1405,8 @@ class _BuildListScreenState extends State<BuildListScreen>
                               IconButton(
                                 icon: const Icon(Icons.computer, size: 20),
                                 tooltip: 'Push to PC clipboard',
-                                onPressed: () => _pushToServerClipboard(
-                                  cmd,
-                                  label: 'clipboard',
-                                ),
+                                onPressed: () =>
+                                    _pushCommandToServerClipboard(cmd),
                               ),
                               IconButton(
                                 icon: const Icon(
@@ -1225,7 +1414,7 @@ class _BuildListScreenState extends State<BuildListScreen>
                                   size: 20,
                                 ),
                                 tooltip: 'Delete',
-                                onPressed: () => _removeCommand(index),
+                                onPressed: () => _removeCommandValue(cmd),
                               ),
                             ],
                           ),
@@ -1474,6 +1663,9 @@ class _BuildListScreenState extends State<BuildListScreen>
     final size = _asInt(build['size']) ?? 0;
     final compressedSize = _asInt(build['compressed_size']);
     final isCached = _cachedApks.contains(_cacheFileName(build));
+    final packageName = _buildPackageName(build);
+    final isInstalled =
+        packageName.isNotEmpty && _installedPackages.contains(packageName);
 
     Widget trailing;
     if (isDownloading) {
@@ -1486,6 +1678,12 @@ class _BuildListScreenState extends State<BuildListScreen>
       trailing = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (isInstalled)
+            IconButton(
+              icon: const Icon(Icons.open_in_new),
+              tooltip: 'Open installed app',
+              onPressed: () => _openInstalledBuildApp(build),
+            ),
           IconButton(
             icon: const Icon(Icons.install_mobile),
             tooltip: 'Install cached APK',
@@ -1499,10 +1697,21 @@ class _BuildListScreenState extends State<BuildListScreen>
         ],
       );
     } else {
-      trailing = IconButton(
-        icon: const Icon(Icons.download),
-        tooltip: 'Download and install',
-        onPressed: () => _downloadAndInstall(build),
+      trailing = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isInstalled)
+            IconButton(
+              icon: const Icon(Icons.open_in_new),
+              tooltip: 'Open installed app',
+              onPressed: () => _openInstalledBuildApp(build),
+            ),
+          IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'Download and install',
+            onPressed: () => _downloadAndInstall(build),
+          ),
+        ],
       );
     }
 
@@ -1519,8 +1728,17 @@ class _BuildListScreenState extends State<BuildListScreen>
             '${_formatSize(size)}'
             '${compressedSize != null ? '  ->  ${_formatSize(compressedSize)} gz' : ''}'
             '  •  ${build['modified']}'
-            '${isCached ? '  •  cached' : ''}',
+            '${isCached ? '  •  cached' : ''}'
+            '${isInstalled ? '  •  installed' : ''}',
           ),
+          if (packageName.isNotEmpty)
+            Text(
+              packageName,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontFamily: 'monospace',
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           if (isDownloading && status != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),

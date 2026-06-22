@@ -1,8 +1,10 @@
 package io.github.chasekolozsy.devota
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.GestureDescription
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class ControlAccessibilityService : AccessibilityService() {
+    private var accessibilityButtonCallback: AccessibilityButtonController.AccessibilityButtonCallback? = null
+
     companion object {
         private const val MAX_NODES = 700
 
@@ -119,6 +123,7 @@ class ControlAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         active = this
+        registerAccessibilityButton()
         super.onServiceConnected()
     }
 
@@ -130,8 +135,44 @@ class ControlAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        unregisterAccessibilityButton()
         if (active === this) active = null
         super.onDestroy()
+    }
+
+    @SuppressLint("NewApi")
+    private fun registerAccessibilityButton() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (accessibilityButtonCallback != null) return
+        val callback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
+            override fun onClicked(controller: AccessibilityButtonController) {
+                launchDevota()
+            }
+        }
+        accessibilityButtonController.registerAccessibilityButtonCallback(
+            callback,
+            Handler(Looper.getMainLooper()),
+        )
+        accessibilityButtonCallback = callback
+    }
+
+    @SuppressLint("NewApi")
+    private fun unregisterAccessibilityButton() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val callback = accessibilityButtonCallback ?: return
+        accessibilityButtonController.unregisterAccessibilityButtonCallback(callback)
+        accessibilityButtonCallback = null
+    }
+
+    private fun launchDevota() {
+        val launch = packageManager.getLaunchIntentForPackage(packageNameForSelf())
+            ?: Intent(this, MainActivity::class.java)
+        launch.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
+        startActivity(launch)
     }
 
     private fun requireScope(packageName: String?, allowWholeDevice: Boolean) {
