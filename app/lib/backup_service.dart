@@ -17,6 +17,7 @@ class BackupService {
     'ssh_username',
     'ssh_private_key_name',
     'command_usage_counts_json',
+    'terminal_key_usage_counts_json',
     'github_repo',
     'github_workflow',
     'github_ref',
@@ -25,6 +26,7 @@ class BackupService {
   static const _boolPreferenceKeys = [
     'agent_whole_device',
     'ssh_use_private_key',
+    'terminal_tools_visible',
   ];
   static const _serverPath = '/backup/profile';
 

@@ -64,13 +64,16 @@ chmod +x scripts/setup/linux-devota-prereqs.sh
 
 ## Start DevOTA Services
 
-Start the HTTP build server from this repo, pointed at the app repo whose APKs
-you want to serve:
+To serve DevOTA itself from this checkout:
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 server/devota_server.py --repo-root /path/to/app/repo --host 0.0.0.0 --port 8082
+scripts/build/devota-public-debug.sh
+python3 server/devota_server.py --repo-root . --host 0.0.0.0 --port 8082
 ```
+
+To serve another app repo, add a `devota.yaml` to that repo and point
+`--repo-root` at that checkout instead.
 
 Open DevOTA on the phone:
 
@@ -102,14 +105,6 @@ Then open DevOTA's Agent tab and connect to:
 ```text
 ws://<computer-ip>:8083/phone
 ```
-
-## Migrating From Build Installer
-
-The GitHub `Android` workflow publishes a normal DevOTA APK and a legacy package
-upgrade APK. Install the legacy upgrade first if you need access to saved Build
-Installer data. Open Backup, export settings with secrets enabled if you want
-OpenAI keys and SSH private keys included, then import the backup in the public
-DevOTA package.
 
 After the desktop build server is running, the Builds tab can use the desktop
 `gh` login to run that workflow and download the APK artifact back into the

@@ -24,6 +24,8 @@ class BuildListScreen extends StatefulWidget {
 class _BuildListScreenState extends State<BuildListScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   static const String _defaultServerUrl = 'http://127.0.0.1:8082';
+  static const double _appToolbarHeight = 36;
+  static const double _tabStripHeight = 38;
   static const MethodChannel _controlAgentChannel = MethodChannel(
     'io.github.chasekolozsy.devota/control_agent',
   );
@@ -1017,32 +1019,59 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DevOTA'),
+        toolbarHeight: _appToolbarHeight,
+        titleSpacing: 12,
+        title: Text(
+          'DevOTA',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         actions: [
           AnimatedBuilder(
             animation: _tabController,
             builder: (context, _) {
               if (_tabController.index != 1) return const SizedBox.shrink();
-              return IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _loading ? null : _fetchBuilds,
+              return SizedBox(
+                width: _appToolbarHeight,
+                height: _appToolbarHeight,
+                child: IconButton(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  onPressed: _loading ? null : _fetchBuilds,
+                ),
               );
             },
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: const [
-            Tab(icon: Icon(Icons.wifi_tethering), text: 'Connect'),
-            Tab(icon: Icon(Icons.android), text: 'Builds'),
-            Tab(icon: Icon(Icons.terminal), text: 'Terminal'),
-            Tab(icon: Icon(Icons.terminal), text: 'Commands'),
-            Tab(icon: Icon(Icons.hub), text: 'Agent'),
-            Tab(icon: Icon(Icons.sync), text: 'Backup'),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(_tabStripHeight),
+          child: SizedBox(
+            height: _tabStripHeight,
+            child: TabBar(
+              controller: _tabController,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              indicatorSize: TabBarIndicatorSize.label,
+              labelPadding: const EdgeInsets.symmetric(horizontal: 8),
+              labelStyle: theme.textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+              unselectedLabelStyle: theme.textTheme.labelSmall,
+              tabs: const [
+                _CompactTab(icon: Icons.wifi_tethering, label: 'Connect'),
+                _CompactTab(icon: Icons.android, label: 'Builds'),
+                _CompactTab(icon: Icons.terminal, label: 'Terminal'),
+                _CompactTab(icon: Icons.terminal, label: 'Commands'),
+                _CompactTab(icon: Icons.hub, label: 'Agent'),
+                _CompactTab(icon: Icons.sync, label: 'Backup'),
+              ],
+            ),
+          ),
         ),
       ),
       body: TabBarView(
@@ -1901,6 +1930,28 @@ class _BuildListScreenState extends State<BuildListScreen>
             ),
           if (_issues.isEmpty)
             const Padding(padding: EdgeInsets.only(bottom: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactTab extends StatelessWidget {
+  const _CompactTab({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: _BuildListScreenState._tabStripHeight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16),
+          const SizedBox(width: 4),
+          Text(label, maxLines: 1, overflow: TextOverflow.fade),
         ],
       ),
     );

@@ -45,8 +45,7 @@ python3 server/devota_server.py --repo-root /path/to/your/app/repo --host 0.0.0.
 3. Build and install the DevOTA Android app:
 
 ```bash
-cd app
-flutter build apk --debug
+scripts/build/devota-public-debug.sh
 ```
 
 4. Open DevOTA on the phone. Use the Connect tab to scan for a LAN server, or
@@ -91,8 +90,7 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
   through the build server, trust-on-first-use host-key verification, a
   lightweight TCP ping, and voice-to-terminal command submission.
 - **Backup**: export/import saved servers, commands, issues, agent settings,
-  OpenAI API keys, and SSH public/private keys for migration from the legacy
-  Build Installer package to DevOTA.
+  OpenAI API keys, and SSH public/private keys.
 - **Issues**: voice-transcribed notes that can be added to a numbered issue
   list, copied locally, or pushed to the PC clipboard endpoint.
 - **Commands** and **Agent**: saved command snippets and the Android MCP phone
@@ -100,16 +98,13 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 
 ## GitHub Builds
 
-The `Android` GitHub Actions workflow builds two debug APK artifacts:
+The `Android` GitHub Actions workflow builds one public debug APK artifact:
 
-- `devota-debug.apk`: the public DevOTA package,
+- `devota-arm64-debug.apk`: the public ARM64 DevOTA package,
   `io.github.chasekolozsy.devota`.
-- `devota-build-installer-upgrade-debug.apk`: a transition build using the
-  legacy package, `com.arachnomind.devtools.build_installer`, so the old Build
-  Installer can update in place before you export/import settings.
 
-Use the Backup tab to export legacy app data before switching to the public
-DevOTA package.
+The default `devota.yaml` serves only the public DevOTA staged output from
+`app/dist/public`.
 
 The Builds tab can ask the build server to dispatch this workflow through the
 server's authenticated `gh` CLI, list recent runs, and download the configured

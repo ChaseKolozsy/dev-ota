@@ -191,7 +191,8 @@ def scan_apks(repo_root: Path, manifest: dict[str, Any], app_id: str | None = No
                     "packageName": app["packageName"],
                     "kind": app["id"],
                 })
-    builds.extend(scan_github_artifact_apks(repo_root, app_id))
+    allowed_app_ids = {app["id"] for app in manifest["apps"]}
+    builds.extend(scan_github_artifact_apks(repo_root, app_id, allowed_app_ids))
     builds.sort(key=lambda item: item["modifiedMs"], reverse=True)
     return builds
 
@@ -201,14 +202,7 @@ def latest_apk(repo_root: Path, manifest: dict[str, Any], app_id: str | None = N
     return builds[0] if builds else None
 
 
-def github_artifact_metadata(apk: Path) -> dict[str, str]:
-    name = apk.name.lower()
-    if "build-installer" in name or "legacy" in name or "upgrade" in name:
-        return {
-            "appId": "build_installer",
-            "appLabel": "DevOTA Legacy Upgrade",
-            "packageName": "com.arachnomind.devtools.build_installer",
-        }
+def github_artifact_metadata(_apk: Path) -> dict[str, str]:
     return {
         "appId": "devota",
         "appLabel": "DevOTA",
@@ -216,7 +210,11 @@ def github_artifact_metadata(apk: Path) -> dict[str, str]:
     }
 
 
-def scan_github_artifact_apks(repo_root: Path, app_id: str | None = None) -> list[dict[str, Any]]:
+def scan_github_artifact_apks(
+    repo_root: Path,
+    app_id: str | None = None,
+    allowed_app_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     root = repo_root / ".devota-cache" / "github-artifacts"
     if not root.is_dir():
         return []
@@ -228,6 +226,8 @@ def scan_github_artifact_apks(repo_root: Path, app_id: str | None = None) -> lis
         stat = apk.stat()
         rel = apk.relative_to(repo_root).as_posix()
         metadata = github_artifact_metadata(apk)
+        if allowed_app_ids is not None and metadata["appId"] not in allowed_app_ids:
+            continue
         if app_id and metadata["appId"] != app_id:
             continue
         gz = ensure_gz(repo_root, apk, rel)

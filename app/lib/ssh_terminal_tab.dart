@@ -15,6 +15,18 @@ import 'package:xterm/xterm.dart';
 import 'backup_service.dart';
 import 'voice_input_service.dart';
 
+class _TerminalKeyBarItem {
+  const _TerminalKeyBarItem({
+    required this.originalIndex,
+    required this.useCount,
+    required this.build,
+  });
+
+  final int originalIndex;
+  final int useCount;
+  final Widget Function() build;
+}
+
 class SshTerminalTab extends StatefulWidget {
   const SshTerminalTab({
     super.key,
@@ -56,6 +68,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _recording = false;
   bool _transcribing = false;
   bool _tmuxScrollMode = false;
+  bool _terminalToolsVisible = true;
+  Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
   String? _privateKeyName;
   String? _generatedPublicKey;
@@ -77,6 +91,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       _session?.resizeTerminal(width, height, pixelWidth, pixelHeight);
     };
     _loadProfile();
+    _loadTerminalKeyUsage();
+    _loadTerminalToolVisibility();
   }
 
   @override
@@ -124,6 +140,71 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       'ssh_terminal_generated_private_key';
   String get _generatedPublicKeyStorageKey =>
       'ssh_terminal_generated_public_key';
+  static const _terminalKeyUsageCountsKey = 'terminal_key_usage_counts_json';
+  static const _terminalToolsVisibleKey = 'terminal_tools_visible';
+
+  Future<void> _loadTerminalToolVisibility() async {
+    final prefs = await SharedPreferences.getInstance();
+    final visible = prefs.getBool(_terminalToolsVisibleKey) ?? true;
+    if (mounted) setState(() => _terminalToolsVisible = visible);
+  }
+
+  Future<void> _saveTerminalToolVisibility() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_terminalToolsVisibleKey, _terminalToolsVisible);
+    _scheduleServerBackup();
+  }
+
+  void _toggleTerminalTools() {
+    setState(() => _terminalToolsVisible = !_terminalToolsVisible);
+    unawaited(_saveTerminalToolVisibility());
+    if (!_terminalToolsVisible && _connected) {
+      _focusTerminalInput();
+    }
+  }
+
+  Future<void> _loadTerminalKeyUsage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final countsJson = prefs.getString(_terminalKeyUsageCountsKey);
+    if (countsJson == null || countsJson.isEmpty) return;
+    try {
+      final decoded = jsonDecode(countsJson);
+      if (decoded is! Map) return;
+      final counts = decoded.map(
+        (key, value) => MapEntry(
+          key.toString(),
+          value is int ? value : int.tryParse(value.toString()) ?? 0,
+        ),
+      );
+      if (mounted) setState(() => _terminalKeyUseCounts = counts);
+    } catch (_) {
+      if (mounted) setState(() => _terminalKeyUseCounts = {});
+    }
+  }
+
+  void _recordTerminalKeyUse(String id) {
+    setState(() {
+      _terminalKeyUseCounts = {
+        ..._terminalKeyUseCounts,
+        id: (_terminalKeyUseCounts[id] ?? 0) + 1,
+      };
+    });
+    unawaited(_saveTerminalKeyUsage());
+  }
+
+  Future<void> _saveTerminalKeyUsage() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _terminalKeyUsageCountsKey,
+      jsonEncode(_terminalKeyUseCounts),
+    );
+    _scheduleServerBackup();
+  }
+
+  void _activateTerminalKeyButton(String id, VoidCallback action) {
+    _recordTerminalKeyUse(id);
+    action();
+  }
 
   Future<void> _loadProfile() async {
     final prefs = await SharedPreferences.getInstance();
@@ -531,11 +612,33 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _focusTerminalInput() {
     _composerFocusNode.unfocus();
-    _terminalFocusNode.requestFocus();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_connected) return;
+    void requestTerminalFocus() {
+      if (!mounted || !_connected || _tmuxScrollMode) return;
+      FocusScope.of(context).requestFocus(_terminalFocusNode);
       _terminalFocusNode.requestFocus();
+      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.show'));
+    }
+
+    requestTerminalFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      requestTerminalFocus();
     });
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 90), () {
+        requestTerminalFocus();
+      }),
+    );
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 220), () {
+        requestTerminalFocus();
+      }),
+    );
+  }
+
+  void _hideTerminalKeyboard() {
+    _terminalFocusNode.unfocus();
+    _composerFocusNode.unfocus();
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
   }
 
   void _sendTerminalKey(String sequence, {String? fallbackText}) {
@@ -552,6 +655,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _enterTmuxScrollMode() {
     _sendTmuxCommand('[');
+    _hideTerminalKeyboard();
     if (mounted) {
       setState(() {
         _tmuxScrollMode = true;
@@ -568,7 +672,18 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _status = 'Exited tmux scroll mode.';
       });
     }
-    _terminalFocusNode.requestFocus();
+    _focusTerminalInput();
+  }
+
+  void _exitTmuxScrollModeWithEsc() {
+    _sendTerminalKey('\x1B');
+    if (mounted) {
+      setState(() {
+        _tmuxScrollMode = false;
+        _status = 'Exited tmux scroll mode.';
+      });
+    }
+    _focusTerminalInput();
   }
 
   void _insertComposerText(String text) {
@@ -721,11 +836,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 focusNode: _terminalFocusNode,
                 scrollController: _terminalScrollController,
                 autofocus: true,
+                readOnly: _tmuxScrollMode,
               ),
             ),
           ),
-          _buildTerminalKeyBar(theme),
-          if (widget.quickCommands.isNotEmpty) _buildSavedCommandBar(theme),
+          _buildTerminalToolsHeader(theme),
+          if (_terminalToolsVisible) ...[
+            _buildTerminalControlPad(theme),
+            _buildTmuxKeyBar(theme),
+            if (widget.quickCommands.isNotEmpty) _buildSavedCommandBar(theme),
+          ],
           _buildComposer(),
         ],
       ),
@@ -947,7 +1067,325 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (mounted) setState(() {});
   }
 
-  Widget _buildTerminalKeyBar(ThemeData theme) {
+  Widget _buildTerminalToolsHeader(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainer,
+      child: InkWell(
+        onTap: _toggleTerminalTools,
+        child: SizedBox(
+          height: 34,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(
+                  _terminalToolsVisible
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_right,
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Tools',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _terminalToolsVisible
+                        ? 'Terminal, tmux, commands'
+                        : 'Tap to show terminal controls',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                if (_tmuxScrollMode)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _exitTmuxScrollMode,
+                    child: const Text('Exit scroll'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTerminalControlPad(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        child: Row(
+          children: [
+            _buildArrowCluster(),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  _terminalControlButton(
+                    'tab',
+                    'Tab',
+                    () => _sendTerminalKey('\t'),
+                    minWidth: 44,
+                  ),
+                  _terminalControlButton('esc', 'Esc', () {
+                    if (_tmuxScrollMode) {
+                      _exitTmuxScrollModeWithEsc();
+                    } else {
+                      _sendTerminalKey('\x1B');
+                    }
+                  }, minWidth: 44),
+                  _terminalControlButton(
+                    'slash',
+                    '/',
+                    () => _sendTerminalKey('/', fallbackText: '/'),
+                    enabledWhenDisconnected: true,
+                    minWidth: 34,
+                  ),
+                  _terminalControlButton(
+                    'home',
+                    'Home',
+                    () => _sendTerminalKey('\x1B[H'),
+                    minWidth: 54,
+                  ),
+                  _terminalControlButton(
+                    'end',
+                    'End',
+                    () => _sendTerminalKey('\x1B[F'),
+                    minWidth: 46,
+                  ),
+                  _terminalControlButton(
+                    'page_up',
+                    'PgUp',
+                    () => _sendTerminalKey('\x1B[5~'),
+                    minWidth: 52,
+                  ),
+                  _terminalControlButton(
+                    'page_down',
+                    'PgDn',
+                    () => _sendTerminalKey('\x1B[6~'),
+                    minWidth: 52,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildArrowCluster() {
+    return SizedBox(
+      width: 94,
+      height: 64,
+      child: Stack(
+        children: [
+          Align(
+            alignment: Alignment.topCenter,
+            child: _terminalArrowButton(
+              'up',
+              Icons.keyboard_arrow_up,
+              'Up',
+              '\x1B[A',
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomLeft,
+            child: _terminalArrowButton(
+              'left',
+              Icons.keyboard_arrow_left,
+              'Left',
+              '\x1B[D',
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: _terminalArrowButton(
+              'down',
+              Icons.keyboard_arrow_down,
+              'Down',
+              '\x1B[B',
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomRight,
+            child: _terminalArrowButton(
+              'right',
+              Icons.keyboard_arrow_right,
+              'Right',
+              '\x1B[C',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _terminalArrowButton(
+    String usageId,
+    IconData icon,
+    String tooltip,
+    String sequence,
+  ) {
+    return Tooltip(
+      message: tooltip,
+      child: IconButton.filledTonal(
+        visualDensity: VisualDensity.compact,
+        style: IconButton.styleFrom(
+          fixedSize: const Size(30, 30),
+          minimumSize: const Size(30, 30),
+          padding: EdgeInsets.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: Icon(icon, size: 20),
+        onPressed: _connected
+            ? () => _activateTerminalKeyButton(
+                usageId,
+                () => _sendTerminalKey(sequence),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _terminalControlButton(
+    String usageId,
+    String label,
+    VoidCallback onPressed, {
+    bool enabledWhenDisconnected = false,
+    double minWidth = 44,
+  }) {
+    final enabled = _connected || enabledWhenDisconnected;
+    return SizedBox(
+      height: 30,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          minimumSize: Size(minWidth, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: enabled
+            ? () => _activateTerminalKeyButton(usageId, onPressed)
+            : null,
+        child: Text(label),
+      ),
+    );
+  }
+
+  Widget _buildTmuxKeyBar(ThemeData theme) {
+    var index = 0;
+    _TerminalKeyBarItem item(String id, Widget Function() build) {
+      return _TerminalKeyBarItem(
+        originalIndex: index++,
+        useCount: _terminalKeyUseCounts[id] ?? 0,
+        build: build,
+      );
+    }
+
+    final items = <_TerminalKeyBarItem>[
+      item(
+        'tmux_new',
+        () => _terminalKeyButton(
+          'tmux_new',
+          'New',
+          () => _sendTmuxCommand('c'),
+          tooltip: 'tmux new window',
+        ),
+      ),
+      item(
+        'tmux_prev',
+        () => _terminalKeyButton(
+          'tmux_prev',
+          'Prev',
+          () => _sendTmuxCommand('p'),
+          tooltip: 'tmux previous window',
+        ),
+      ),
+      item(
+        'tmux_next',
+        () => _terminalKeyButton(
+          'tmux_next',
+          'Next',
+          () => _sendTmuxCommand('n'),
+          tooltip: 'tmux next window',
+        ),
+      ),
+      item(
+        'tmux_list',
+        () => _terminalKeyButton(
+          'tmux_list',
+          'List',
+          () => _sendTmuxCommand('w'),
+          tooltip: 'tmux window list',
+        ),
+      ),
+      item(
+        'tmux_scroll',
+        () => _tmuxScrollMode
+            ? _terminalKeyButton(
+                'tmux_scroll',
+                'Exit scroll',
+                _exitTmuxScrollMode,
+                tooltip: 'Exit tmux copy/scroll mode',
+              )
+            : _terminalKeyButton(
+                'tmux_scroll',
+                'Scroll',
+                _enterTmuxScrollMode,
+                tooltip: 'tmux copy/scroll mode',
+              ),
+      ),
+      item(
+        'tmux_split_vertical',
+        () => _terminalKeyButton(
+          'tmux_split_vertical',
+          'Split |',
+          () => _sendTmuxCommand('%'),
+          tooltip: 'tmux split pane side by side',
+        ),
+      ),
+      item(
+        'tmux_split_horizontal',
+        () => _terminalKeyButton(
+          'tmux_split_horizontal',
+          'Split -',
+          () => _sendTmuxCommand('"'),
+          tooltip: 'tmux split pane top and bottom',
+        ),
+      ),
+      item(
+        'tmux_detach',
+        () => _terminalKeyButton(
+          'tmux_detach',
+          'Detach',
+          () => _sendTmuxCommand('d'),
+          tooltip: 'tmux detach session',
+        ),
+      ),
+    ];
+
+    items.sort((a, b) {
+      final usage = b.useCount.compareTo(a.useCount);
+      if (usage != 0) return usage;
+      return a.originalIndex.compareTo(b.originalIndex);
+    });
+
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
       child: SizedBox(
@@ -956,72 +1394,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           children: [
-            _terminalKeyButton('Tab', () => _sendTerminalKey('\t')),
-            _terminalKeyButton('Esc', () {
-              _sendTerminalKey('\x1B');
-              if (_tmuxScrollMode) setState(() => _tmuxScrollMode = false);
-            }),
-            _terminalKeyButton(
-              '/',
-              () => _sendTerminalKey('/', fallbackText: '/'),
-              enabledWhenDisconnected: true,
-            ),
-            _terminalKeyButton('Home', () => _sendTerminalKey('\x1B[H')),
-            _terminalKeyButton('End', () => _sendTerminalKey('\x1B[F')),
-            _terminalKeyButton('PgUp', () => _sendTerminalKey('\x1B[5~')),
-            _terminalKeyButton('PgDn', () => _sendTerminalKey('\x1B[6~')),
-            _terminalIconKey(Icons.keyboard_arrow_left, 'Left', '\x1B[D'),
-            _terminalIconKey(Icons.keyboard_arrow_up, 'Up', '\x1B[A'),
-            _terminalIconKey(Icons.keyboard_arrow_down, 'Down', '\x1B[B'),
-            _terminalIconKey(Icons.keyboard_arrow_right, 'Right', '\x1B[C'),
             _terminalKeyGroupLabel(theme, 'tmux'),
-            _terminalKeyButton(
-              'New',
-              () => _sendTmuxCommand('c'),
-              tooltip: 'tmux new window',
-            ),
-            _terminalKeyButton(
-              'Prev',
-              () => _sendTmuxCommand('p'),
-              tooltip: 'tmux previous window',
-            ),
-            _terminalKeyButton(
-              'Next',
-              () => _sendTmuxCommand('n'),
-              tooltip: 'tmux next window',
-            ),
-            _terminalKeyButton(
-              'List',
-              () => _sendTmuxCommand('w'),
-              tooltip: 'tmux window list',
-            ),
-            if (_tmuxScrollMode)
-              _terminalKeyButton(
-                'Exit scroll',
-                _exitTmuxScrollMode,
-                tooltip: 'Exit tmux copy/scroll mode',
-              )
-            else
-              _terminalKeyButton(
-                'Scroll',
-                _enterTmuxScrollMode,
-                tooltip: 'tmux copy/scroll mode',
-              ),
-            _terminalKeyButton(
-              'Split |',
-              () => _sendTmuxCommand('%'),
-              tooltip: 'tmux split pane side by side',
-            ),
-            _terminalKeyButton(
-              'Split -',
-              () => _sendTmuxCommand('"'),
-              tooltip: 'tmux split pane top and bottom',
-            ),
-            _terminalKeyButton(
-              'Detach',
-              () => _sendTmuxCommand('d'),
-              tooltip: 'tmux detach session',
-            ),
+            for (final item in items) item.build(),
           ],
         ),
       ),
@@ -1090,27 +1464,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _terminalIconKey(IconData icon, String tooltip, String sequence) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: Tooltip(
-        message: tooltip,
-        child: IconButton.filledTonal(
-          visualDensity: VisualDensity.compact,
-          style: IconButton.styleFrom(
-            fixedSize: const Size(32, 32),
-            minimumSize: const Size(32, 32),
-            padding: EdgeInsets.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          icon: Icon(icon),
-          onPressed: _connected ? () => _sendTerminalKey(sequence) : null,
-        ),
-      ),
-    );
-  }
-
   Widget _terminalKeyButton(
+    String usageId,
     String label,
     VoidCallback onPressed, {
     String? tooltip,
@@ -1125,7 +1480,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: const EdgeInsets.symmetric(horizontal: 10),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        onPressed: enabled ? onPressed : null,
+        onPressed: enabled
+            ? () => _activateTerminalKeyButton(usageId, onPressed)
+            : null,
         child: Text(label),
       ),
     );
