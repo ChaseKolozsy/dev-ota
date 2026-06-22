@@ -19,6 +19,10 @@ configuration choices.
 
 ## Quick Start
 
+For the lowest-friction first run, set up the computer on the same LAN as the
+phone before adding a VPN. DevOTA includes desktop setup scripts and
+paste-ready terminal-agent prompts in [docs/setup](docs/setup/README.md).
+
 1. Add a `devota.yaml` manifest to the repo that produces APKs:
 
 ```yaml
@@ -63,6 +67,18 @@ npm start
 
 Then open DevOTA's Agent tab, enter `ws://<your-computer-ip>:8083/phone`, enter
 the same token, enable the accessibility service, and start the agent.
+
+## Desktop Setup Kit
+
+The setup kit is intentionally LAN-first and provider-neutral. Use it to prepare
+the desktop for phone SSH, build serving, and optional MCP phone control before
+you introduce ZeroTier, Tailscale, WireGuard, or another private network.
+
+- [LAN-first setup guide](docs/setup/README.md)
+- [Terminal-agent prompts](docs/setup/agent-prompts.md)
+- [Windows prerequisites script](scripts/setup/windows-devota-prereqs.ps1)
+- [macOS prerequisites script](scripts/setup/macos-devota-prereqs.sh)
+- [Linux prerequisites script](scripts/setup/linux-devota-prereqs.sh)
 
 ## Android App Features
 
