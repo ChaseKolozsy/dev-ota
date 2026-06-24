@@ -14,6 +14,7 @@ import 'connect_tab.dart';
 import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
 import 'ssh_terminal_tab.dart';
+import 'terminal_macro.dart';
 import 'voice_input_service.dart';
 
 class BuildListScreen extends StatefulWidget {
@@ -64,6 +65,9 @@ class _BuildListScreenState extends State<BuildListScreen>
   // Copy-paste command snippets shown on the Commands tab.
   List<String> _commands = [];
   Map<String, int> _commandUseCounts = {};
+  List<TerminalMacro> _macros = [];
+  Map<String, int> _macroUseCounts = {};
+  final _macroController = TerminalMacroController();
   final _commandController = TextEditingController();
   final _agentUrlController = TextEditingController();
   final _agentTokenController = TextEditingController();
@@ -86,11 +90,13 @@ class _BuildListScreenState extends State<BuildListScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(length: 8, vsync: this);
+    _macroController.addListener(_onMacroControllerChanged);
     _loadBuildUsePreferences();
     _loadServers();
     _loadIssues();
     _loadCommands();
+    _loadMacros();
     _loadAgentSettings();
     _loadGithubSettings();
     _refreshCachedApks();
@@ -99,6 +105,8 @@ class _BuildListScreenState extends State<BuildListScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _macroController.removeListener(_onMacroControllerChanged);
+    _macroController.dispose();
     _tabController.dispose();
     _noteController.dispose();
     _commandController.dispose();
@@ -123,6 +131,10 @@ class _BuildListScreenState extends State<BuildListScreen>
       _refreshCachedApks();
       _refreshInstalledPackages();
     }
+  }
+
+  void _onMacroControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<Directory> _getApkCacheDir() async {
@@ -372,6 +384,143 @@ class _BuildListScreenState extends State<BuildListScreen>
   void _pushCommandToServerClipboard(String cmd) {
     _recordCommandUse(cmd);
     _pushToServerClipboard(cmd, label: 'clipboard');
+  }
+
+  Future<void> _loadMacros() async {
+    final prefs = await SharedPreferences.getInstance();
+    final macrosJson = prefs.getString('macros_json');
+    final countsJson = prefs.getString('macro_usage_counts_json');
+    if (countsJson != null && countsJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(countsJson);
+        if (decoded is Map) {
+          _macroUseCounts = decoded.map(
+            (key, value) => MapEntry(
+              key.toString(),
+              value is int ? value : int.tryParse(value.toString()) ?? 0,
+            ),
+          );
+        }
+      } catch (_) {
+        _macroUseCounts = {};
+      }
+    }
+    if (macrosJson == null || macrosJson.isEmpty) {
+      if (mounted) setState(() => _macros = []);
+      return;
+    }
+    try {
+      final decoded = jsonDecode(macrosJson);
+      if (decoded is! List) return;
+      final macros = decoded
+          .whereType<Map>()
+          .map(
+            (item) => TerminalMacro.fromJson(Map<String, dynamic>.from(item)),
+          )
+          .where((macro) => macro.name.trim().isNotEmpty)
+          .toList();
+      if (mounted) setState(() => _macros = macros);
+    } catch (_) {
+      if (mounted) setState(() => _macros = []);
+    }
+  }
+
+  Future<void> _saveMacros() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'macros_json',
+      jsonEncode(_macros.map((macro) => macro.toJson()).toList()),
+    );
+    await prefs.setString(
+      'macro_usage_counts_json',
+      jsonEncode(_macroUseCounts),
+    );
+    _scheduleServerBackup();
+  }
+
+  List<TerminalMacro> get _rankedMacros {
+    final indexed = _macros.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final usage = (_macroUseCounts[b.value.id] ?? 0).compareTo(
+        _macroUseCounts[a.value.id] ?? 0,
+      );
+      if (usage != 0) return usage;
+      return a.key.compareTo(b.key);
+    });
+    return indexed.map((entry) => entry.value).toList();
+  }
+
+  List<TerminalMacro> get _quickMacros => _rankedMacros.take(8).toList();
+
+  void _recordMacroUse(TerminalMacro macro) {
+    setState(() {
+      _macroUseCounts[macro.id] = (_macroUseCounts[macro.id] ?? 0) + 1;
+    });
+    unawaited(_saveMacros());
+  }
+
+  TerminalMacroStep _newMacroStep(TerminalMacroStepType type, [String? value]) {
+    return TerminalMacroStep(
+      id: newTerminalMacroId('step'),
+      type: type,
+      value: value ?? defaultTerminalMacroStepValue(type),
+      delaySeconds: defaultTerminalMacroStepDelay(type),
+    );
+  }
+
+  Future<void> _addMacro() async {
+    final macro = TerminalMacro(
+      id: newTerminalMacroId('macro'),
+      name: 'New macro',
+      steps: [_newMacroStep(TerminalMacroStepType.shell)],
+    );
+    final edited = await _showMacroEditor(macro);
+    if (edited == null) return;
+    setState(() => _macros.add(edited));
+    unawaited(_saveMacros());
+  }
+
+  Future<void> _editMacro(TerminalMacro macro) async {
+    final edited = await _showMacroEditor(macro);
+    if (edited == null) return;
+    final index = _macros.indexWhere((item) => item.id == macro.id);
+    if (index < 0) return;
+    setState(() => _macros[index] = edited);
+    unawaited(_saveMacros());
+  }
+
+  void _duplicateMacro(TerminalMacro macro) {
+    final copy = macro.copyWith(
+      id: newTerminalMacroId('macro'),
+      name: '${macro.name} copy',
+      steps: macro.steps
+          .map((step) => step.copyWith(id: newTerminalMacroId('step')))
+          .toList(),
+    );
+    setState(() => _macros.add(copy));
+    unawaited(_saveMacros());
+  }
+
+  void _removeMacro(TerminalMacro macro) {
+    setState(() {
+      _macros.removeWhere((item) => item.id == macro.id);
+      _macroUseCounts.remove(macro.id);
+    });
+    unawaited(_saveMacros());
+  }
+
+  Future<void> _runMacroFromMacrosTab(TerminalMacro macro) async {
+    if (_macroController.isRunning) return;
+    _tabController.animateTo(3);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    try {
+      await _macroController.run(macro);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Macro failed: ${_briefErrorMessage(e)}')),
+      );
+    }
   }
 
   String _issuesAsText() {
@@ -1090,6 +1239,7 @@ class _BuildListScreenState extends State<BuildListScreen>
                 _CompactTab(icon: Icons.view_kanban, label: 'Projects'),
                 _CompactTab(icon: Icons.terminal, label: 'Terminal'),
                 _CompactTab(icon: Icons.terminal, label: 'Commands'),
+                _CompactTab(icon: Icons.playlist_play, label: 'Macros'),
                 _CompactTab(icon: Icons.hub, label: 'Agent'),
                 _CompactTab(icon: Icons.sync, label: 'Backup'),
               ],
@@ -1113,9 +1263,13 @@ class _BuildListScreenState extends State<BuildListScreen>
             dio: _dio,
             serverUrl: _baseUrl,
             quickCommands: _quickCommands,
+            quickMacros: _quickMacros,
+            macroController: _macroController,
             onCommandUsed: _recordCommandUse,
+            onMacroUsed: _recordMacroUse,
           ),
           _buildCommandsTab(),
+          _buildMacrosTab(),
           _buildAgentTab(),
           BackupTab(
             dio: _dio,
@@ -1131,6 +1285,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     await _loadServers();
     await _loadIssues();
     await _loadCommands();
+    await _loadMacros();
     await _loadAgentSettings();
     await _loadGithubSettings();
   }
@@ -1484,6 +1639,510 @@ class _BuildListScreenState extends State<BuildListScreen>
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _buildMacrosTab() {
+    final rankedMacros = _rankedMacros;
+    final running = _macroController.isRunning;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  running
+                      ? 'Macro running...'
+                      : 'Create ordered terminal/tmux command sequences.',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                icon: const Icon(Icons.add),
+                label: const Text('Macro'),
+                onPressed: _addMacro,
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: rankedMacros.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'No macros yet.\nAdd one to run multiple terminal steps.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  itemCount: rankedMacros.length,
+                  itemBuilder: (context, index) {
+                    final macro = rankedMacros[index];
+                    final uses = _macroUseCounts[macro.id] ?? 0;
+                    return Card(
+                      child: ExpansionTile(
+                        leading: const Icon(Icons.playlist_play),
+                        title: Text(macro.name),
+                        subtitle: Text(
+                          '${macro.steps.length} step${macro.steps.length == 1 ? '' : 's'}'
+                          '${uses > 0 ? '  •  $uses uses' : ''}',
+                        ),
+                        childrenPadding: const EdgeInsets.fromLTRB(
+                          12,
+                          0,
+                          12,
+                          10,
+                        ),
+                        children: [
+                          for (final step in macro.steps)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  _macroStepSummary(step),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(fontFamily: 'monospace'),
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              FilledButton.icon(
+                                icon: const Icon(Icons.play_arrow),
+                                label: const Text('Run'),
+                                onPressed: running
+                                    ? null
+                                    : () => _runMacroFromMacrosTab(macro),
+                              ),
+                              OutlinedButton.icon(
+                                icon: const Icon(Icons.edit),
+                                label: const Text('Edit'),
+                                onPressed: () => _editMacro(macro),
+                              ),
+                              IconButton.outlined(
+                                icon: const Icon(Icons.copy),
+                                tooltip: 'Duplicate',
+                                onPressed: () => _duplicateMacro(macro),
+                              ),
+                              IconButton.outlined(
+                                icon: const Icon(Icons.delete_outline),
+                                tooltip: 'Delete',
+                                onPressed: () => _removeMacro(macro),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  String _macroStepSummary(TerminalMacroStep step) {
+    final delay = step.delaySeconds > 0
+        ? '  +${step.delaySeconds.toStringAsFixed(step.delaySeconds.truncateToDouble() == step.delaySeconds ? 0 : 1)}s'
+        : '';
+    return switch (step.type) {
+      TerminalMacroStepType.shell => r'$ ' + step.value + delay,
+      TerminalMacroStepType.terminalKey =>
+        'key ${terminalMacroStepValueLabel(step)}$delay',
+      TerminalMacroStepType.tmux =>
+        'tmux ${terminalMacroStepValueLabel(step)}$delay',
+      TerminalMacroStepType.wait => 'wait$delay',
+    };
+  }
+
+  double _parseDelaySeconds(String value) {
+    final parsed = double.tryParse(value.trim()) ?? 0;
+    return parsed < 0 ? 0 : parsed;
+  }
+
+  Future<TerminalMacro?> _showMacroEditor(TerminalMacro macro) async {
+    final nameController = TextEditingController(text: macro.name);
+    var steps = macro.steps
+        .map(
+          (step) => step.copyWith(
+            id: step.id.isEmpty ? newTerminalMacroId('step') : step.id,
+          ),
+        )
+        .toList();
+    if (steps.isEmpty) steps = [_newMacroStep(TerminalMacroStepType.shell)];
+
+    final result = await showModalBottomSheet<TerminalMacro>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            void updateStep(int index, TerminalMacroStep step) {
+              setSheetState(() => steps[index] = step);
+            }
+
+            void addStep(TerminalMacroStep step) {
+              setSheetState(() => steps.add(step));
+            }
+
+            void moveStep(int index, int delta) {
+              final target = index + delta;
+              if (target < 0 || target >= steps.length) return;
+              setSheetState(() {
+                final step = steps.removeAt(index);
+                steps.insert(target, step);
+              });
+            }
+
+            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text('Macro', style: theme.textTheme.titleMedium),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Name',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    textInputAction: TextInputAction.next,
+                  ),
+                  const SizedBox(height: 10),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(ctx).height * 0.55,
+                    ),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: steps.length,
+                      itemBuilder: (ctx, index) {
+                        final step = steps[index];
+                        return Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Text('${index + 1}'),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child:
+                                          DropdownButtonFormField<
+                                            TerminalMacroStepType
+                                          >(
+                                            initialValue: step.type,
+                                            decoration: const InputDecoration(
+                                              labelText: 'Step',
+                                              border: OutlineInputBorder(),
+                                              isDense: true,
+                                            ),
+                                            items: TerminalMacroStepType.values
+                                                .map(
+                                                  (type) => DropdownMenuItem(
+                                                    value: type,
+                                                    child: Text(
+                                                      terminalMacroStepTypeLabel(
+                                                        type,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                )
+                                                .toList(),
+                                            onChanged: (type) {
+                                              if (type == null) return;
+                                              updateStep(
+                                                index,
+                                                step.copyWith(
+                                                  type: type,
+                                                  value:
+                                                      defaultTerminalMacroStepValue(
+                                                        type,
+                                                      ),
+                                                  delaySeconds:
+                                                      defaultTerminalMacroStepDelay(
+                                                        type,
+                                                      ),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.arrow_upward),
+                                      tooltip: 'Move up',
+                                      onPressed: index == 0
+                                          ? null
+                                          : () => moveStep(index, -1),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.arrow_downward),
+                                      tooltip: 'Move down',
+                                      onPressed: index == steps.length - 1
+                                          ? null
+                                          : () => moveStep(index, 1),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline),
+                                      tooltip: 'Remove step',
+                                      onPressed: steps.length == 1
+                                          ? null
+                                          : () => setSheetState(
+                                              () => steps.removeAt(index),
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                _buildMacroStepValueEditor(
+                                  step: step,
+                                  onChanged: (next) => updateStep(index, next),
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  key: ValueKey('${step.id}-delay'),
+                                  initialValue: step.delaySeconds == 0
+                                      ? ''
+                                      : step.delaySeconds.toString(),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Delay after step (seconds)',
+                                    hintText: '0.5',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  onChanged: (value) => updateStep(
+                                    index,
+                                    step.copyWith(
+                                      delaySeconds: _parseDelaySeconds(value),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.terminal),
+                        label: const Text('Command'),
+                        onPressed: () =>
+                            addStep(_newMacroStep(TerminalMacroStepType.shell)),
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.keyboard),
+                        label: const Text('Key'),
+                        onPressed: () => addStep(
+                          _newMacroStep(TerminalMacroStepType.terminalKey),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.tab),
+                        label: const Text('tmux'),
+                        onPressed: () =>
+                            addStep(_newMacroStep(TerminalMacroStepType.tmux)),
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.timer),
+                        label: const Text('Wait'),
+                        onPressed: () =>
+                            addStep(_newMacroStep(TerminalMacroStepType.wait)),
+                      ),
+                      if (_rankedCommands.isNotEmpty)
+                        PopupMenuButton<String>(
+                          tooltip: 'Add saved command',
+                          onSelected: (command) => addStep(
+                            _newMacroStep(TerminalMacroStepType.shell, command),
+                          ),
+                          itemBuilder: (ctx) => _rankedCommands
+                              .take(12)
+                              .map(
+                                (command) => PopupMenuItem(
+                                  value: command,
+                                  child: Text(
+                                    command,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          child: const Chip(
+                            avatar: Icon(Icons.add),
+                            label: Text('Saved'),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.check),
+                      label: const Text('Save'),
+                      onPressed: () {
+                        final normalized = steps
+                            .map(
+                              (step) => step.copyWith(
+                                value: step.value.trimRight(),
+                                delaySeconds: step.delaySeconds < 0
+                                    ? 0
+                                    : step.delaySeconds,
+                              ),
+                            )
+                            .where(
+                              (step) =>
+                                  step.type != TerminalMacroStepType.shell ||
+                                  step.value.trim().isNotEmpty,
+                            )
+                            .toList();
+                        if (normalized.isEmpty) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Add at least one runnable step.'),
+                            ),
+                          );
+                          return;
+                        }
+                        Navigator.pop(
+                          ctx,
+                          macro.copyWith(
+                            name: nameController.text.trim().isEmpty
+                                ? 'Macro'
+                                : nameController.text.trim(),
+                            steps: normalized,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    nameController.dispose();
+    return result;
+  }
+
+  Widget _buildMacroStepValueEditor({
+    required TerminalMacroStep step,
+    required ValueChanged<TerminalMacroStep> onChanged,
+  }) {
+    switch (step.type) {
+      case TerminalMacroStepType.shell:
+        return TextFormField(
+          key: ValueKey('${step.id}-shell'),
+          initialValue: step.value,
+          decoration: const InputDecoration(
+            labelText: 'Command text',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          minLines: 1,
+          maxLines: 4,
+          style: const TextStyle(fontFamily: 'monospace'),
+          onChanged: (value) => onChanged(step.copyWith(value: value)),
+        );
+      case TerminalMacroStepType.terminalKey:
+        return _buildMacroOptionDropdown(
+          label: 'Terminal key',
+          value: step.value,
+          options: terminalMacroTerminalKeyOptions,
+          onChanged: (value) => onChanged(step.copyWith(value: value)),
+        );
+      case TerminalMacroStepType.tmux:
+        return _buildMacroOptionDropdown(
+          label: 'tmux command',
+          value: step.value,
+          options: terminalMacroTmuxOptions,
+          onChanged: (value) => onChanged(step.copyWith(value: value)),
+        );
+      case TerminalMacroStepType.wait:
+        return const Align(
+          alignment: Alignment.centerLeft,
+          child: Text('Wait step: set the delay below.'),
+        );
+    }
+  }
+
+  Widget _buildMacroOptionDropdown({
+    required String label,
+    required String value,
+    required List<MacroStepOption> options,
+    required ValueChanged<String> onChanged,
+  }) {
+    final selected = options.any((option) => option.value == value)
+        ? value
+        : options.first.value;
+    return DropdownButtonFormField<String>(
+      initialValue: selected,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: options
+          .map(
+            (option) => DropdownMenuItem(
+              value: option.value,
+              child: Text(option.label),
+            ),
+          )
+          .toList(),
+      onChanged: (next) {
+        if (next != null) onChanged(next);
+      },
     );
   }
 

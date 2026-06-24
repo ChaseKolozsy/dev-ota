@@ -14,6 +14,7 @@ import 'package:xterm/xterm.dart';
 
 import 'backup_service.dart';
 import 'openai_key_dialog.dart';
+import 'terminal_macro.dart';
 import 'voice_input_service.dart';
 
 class _TerminalKeyBarItem {
@@ -34,13 +35,19 @@ class SshTerminalTab extends StatefulWidget {
     required this.dio,
     required this.serverUrl,
     this.quickCommands = const [],
+    this.quickMacros = const [],
+    this.macroController,
     this.onCommandUsed,
+    this.onMacroUsed,
   });
 
   final Dio dio;
   final String serverUrl;
   final List<String> quickCommands;
+  final List<TerminalMacro> quickMacros;
+  final TerminalMacroController? macroController;
   final ValueChanged<String>? onCommandUsed;
+  final ValueChanged<TerminalMacro>? onMacroUsed;
 
   @override
   State<SshTerminalTab> createState() => _SshTerminalTabState();
@@ -70,6 +77,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _transcribing = false;
   bool _tmuxScrollMode = false;
   bool _terminalToolsVisible = true;
+  bool _macroRunning = false;
   double _terminalFontSize = _terminalDefaultFontSize;
   Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
@@ -96,10 +104,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadTerminalKeyUsage();
     _loadTerminalToolVisibility();
     _loadTerminalFontSize();
+    _attachMacroController();
   }
 
   @override
   void dispose() {
+    widget.macroController?.detach();
     WidgetsBinding.instance.removeObserver(this);
     _disconnect();
     _hostController.dispose();
@@ -116,6 +126,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _composerFocusNode.dispose();
     _voice.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant SshTerminalTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.macroController != widget.macroController) {
+      oldWidget.macroController?.detach();
+      _attachMacroController();
+    }
   }
 
   @override
@@ -149,6 +168,18 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
   static const _terminalMaxFontSize = 22.0;
+
+  void _attachMacroController() {
+    widget.macroController?.attach(
+      runner: _runMacro,
+      canRun: () => _connected && !_macroRunning,
+      isRunning: () => _macroRunning,
+    );
+  }
+
+  void _notifyMacroController() {
+    widget.macroController?.notifyStateChanged();
+  }
 
   Future<void> _loadTerminalToolVisibility() async {
     final prefs = await SharedPreferences.getInstance();
@@ -636,17 +667,20 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           _connected = false;
           _status = 'SSH session closed.';
         });
+        _notifyMacroController();
       });
       setState(() {
         _connected = true;
         _status = 'Connected to $_host:$_port';
       });
+      _notifyMacroController();
     } catch (e) {
       _terminal.write('Connection failed: $e\r\n');
       setState(() => _status = 'Connection failed: $e');
       _disconnect();
     } finally {
       if (mounted) setState(() => _busy = false);
+      _notifyMacroController();
     }
   }
 
@@ -659,7 +693,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _client?.close();
     _session = null;
     _client = null;
-    if (mounted) setState(() => _connected = false);
+    if (mounted) {
+      setState(() {
+        _connected = false;
+        _macroRunning = false;
+      });
+    }
+    _notifyMacroController();
   }
 
   void _writeToSession(String text) {
@@ -787,6 +827,83 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     } else {
       _appendComposerText(trimmed);
       setState(() => _status = 'Command inserted. Connect before submitting.');
+    }
+  }
+
+  String? _macroTerminalKeySequence(String value) {
+    return switch (value) {
+      'enter' => '\r',
+      'ctrl_c' => '\x03',
+      'tab' => '\t',
+      'esc' => '\x1B',
+      'slash' => '/',
+      'home' => '\x1B[H',
+      'end' => '\x1B[F',
+      'page_up' => '\x1B[5~',
+      'page_down' => '\x1B[6~',
+      'up' => '\x1B[A',
+      'down' => '\x1B[B',
+      'left' => '\x1B[D',
+      'right' => '\x1B[C',
+      _ => null,
+    };
+  }
+
+  Future<void> _runMacro(TerminalMacro macro) async {
+    if (!_connected) {
+      setState(() => _status = 'Connect SSH before running macros.');
+      throw StateError('Connect SSH before running macros.');
+    }
+    if (_macroRunning) {
+      throw StateError('A macro is already running.');
+    }
+    widget.onMacroUsed?.call(macro);
+    setState(() {
+      _macroRunning = true;
+      _status = 'Running macro: ${macro.name}';
+    });
+    _notifyMacroController();
+    _focusTerminalInput();
+    try {
+      for (final step in macro.steps) {
+        if (!_connected) throw StateError('SSH disconnected.');
+        switch (step.type) {
+          case TerminalMacroStepType.shell:
+            final command = step.value.trimRight();
+            if (command.isNotEmpty) _writeToSession('$command\n');
+            break;
+          case TerminalMacroStepType.terminalKey:
+            final sequence = _macroTerminalKeySequence(step.value);
+            if (sequence == null) {
+              throw StateError('Unknown terminal key: ${step.value}');
+            }
+            _writeToSession(sequence);
+            break;
+          case TerminalMacroStepType.tmux:
+            if (step.value.isEmpty) {
+              throw StateError('Unknown tmux command.');
+            }
+            _writeToSession('\x02${step.value}');
+            break;
+          case TerminalMacroStepType.wait:
+            break;
+        }
+        if (step.delaySeconds > 0) {
+          await Future<void>.delayed(
+            Duration(milliseconds: (step.delaySeconds * 1000).round()),
+          );
+        }
+      }
+      if (mounted) setState(() => _status = 'Macro complete: ${macro.name}');
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Macro stopped: $e');
+      rethrow;
+    } finally {
+      if (mounted) {
+        setState(() => _macroRunning = false);
+        _notifyMacroController();
+        _focusTerminalInput();
+      }
     }
   }
 
@@ -932,6 +1049,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           if (_terminalToolsVisible) ...[
             _buildTerminalControlPad(theme),
             _buildTmuxKeyBar(theme),
+            if (widget.quickMacros.isNotEmpty) _buildMacroBar(theme),
             if (widget.quickCommands.isNotEmpty) _buildSavedCommandBar(theme),
           ],
           _buildComposer(),
@@ -1250,7 +1368,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 Expanded(
                   child: Text(
                     _terminalToolsVisible
-                        ? 'Terminal, tmux, commands'
+                        ? 'Terminal, tmux, macros, commands'
                         : 'Tap to show terminal controls',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1679,6 +1797,61 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             for (final command in widget.quickCommands)
               _terminalCommandButton(command),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMacroBar(ThemeData theme) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      child: SizedBox(
+        height: 40,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          children: [
+            _terminalKeyGroupLabel(theme, 'macros'),
+            for (final macro in widget.quickMacros) _terminalMacroButton(macro),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _terminalMacroButton(TerminalMacro macro) {
+    final enabled = _connected && !_macroRunning;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Tooltip(
+        message: macro.name,
+        child: SizedBox(
+          height: 32,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: _macroRunning
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.play_arrow, size: 16),
+            onPressed: enabled
+                ? () => unawaited(_runMacro(macro).catchError((Object _) {}))
+                : null,
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 160),
+              child: Text(
+                macro.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
         ),
       ),
     );

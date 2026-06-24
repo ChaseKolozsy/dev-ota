@@ -24,6 +24,8 @@ class BackupService {
     'github_artifact',
     'last_used_build_app_id',
     'last_used_build_path',
+    'macros_json',
+    'macro_usage_counts_json',
   ];
   static const _boolPreferenceKeys = [
     'agent_whole_device',
