@@ -830,7 +830,13 @@ class _BuildListScreenState extends State<BuildListScreen>
     // they tapped refresh is to get the latest.
     await _clearApkCache();
     try {
-      final resp = await _dio.get('$_baseUrl/builds');
+      final resp = await _dio.get(
+        '$_baseUrl/builds',
+        queryParameters: {'t': DateTime.now().millisecondsSinceEpoch},
+        options: Options(
+          headers: const {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+        ),
+      );
       final data = resp.data as List;
       final builds = data.cast<Map<String, dynamic>>();
       setState(() {
@@ -1131,6 +1137,12 @@ class _BuildListScreenState extends State<BuildListScreen>
                     ),
                   ),
                 ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filledTonal(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh builds',
+                onPressed: _loading ? null : _fetchBuilds,
               ),
               const SizedBox(width: 8),
               IconButton.filled(

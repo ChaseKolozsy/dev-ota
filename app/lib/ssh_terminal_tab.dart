@@ -1305,6 +1305,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     }
                   }, minWidth: 44),
                   _terminalControlButton(
+                    'ctrl_c',
+                    'Ctrl-C',
+                    () => _sendTerminalKey('\x03'),
+                    minWidth: 62,
+                  ),
+                  _terminalControlButton(
                     'slash',
                     '/',
                     () => _sendTerminalKey('/', fallbackText: '/'),
@@ -1345,6 +1351,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 ],
               ),
             ),
+            const SizedBox(width: 8),
+            _terminalEnterButton(),
           ],
         ),
       ),
@@ -1446,6 +1454,39 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             ? () => _activateTerminalKeyButton(usageId, onPressed)
             : null,
         child: Text(label),
+      ),
+    );
+  }
+
+  Widget _terminalEnterButton() {
+    final enabled = _connected;
+    return Tooltip(
+      message: 'Enter',
+      child: SizedBox(
+        width: 54,
+        height: 64,
+        child: OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          onPressed: enabled
+              ? () => _activateTerminalKeyButton(
+                  'enter',
+                  () => _sendTerminalKey('\r'),
+                )
+              : null,
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.keyboard_return, size: 20),
+              SizedBox(height: 2),
+              Text('Enter', textAlign: TextAlign.center),
+            ],
+          ),
+        ),
       ),
     );
   }
