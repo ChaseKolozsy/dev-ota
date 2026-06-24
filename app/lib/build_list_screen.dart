@@ -28,6 +28,8 @@ class _BuildListScreenState extends State<BuildListScreen>
   static const String _defaultServerUrl = 'http://127.0.0.1:8082';
   static const double _appToolbarHeight = 36;
   static const double _tabStripHeight = 38;
+  static const String _lastUsedBuildAppIdKey = 'last_used_build_app_id';
+  static const String _lastUsedBuildPathKey = 'last_used_build_path';
   static const MethodChannel _controlAgentChannel = MethodChannel(
     'io.github.chasekolozsy.devota/control_agent',
   );
@@ -75,6 +77,8 @@ class _BuildListScreenState extends State<BuildListScreen>
   bool _githubBusy = false;
   String? _githubStatus;
   List<Map<String, dynamic>> _githubRuns = [];
+  String? _lastUsedBuildAppId;
+  String? _lastUsedBuildPath;
   Timer? _backupDebounce;
   String? _serverRestoreAttemptedFor;
 
@@ -83,6 +87,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 7, vsync: this);
+    _loadBuildUsePreferences();
     _loadServers();
     _loadIssues();
     _loadCommands();
@@ -148,8 +153,38 @@ class _BuildListScreenState extends State<BuildListScreen>
     return safe.endsWith('.apk') ? safe : '$safe.apk';
   }
 
+  String _buildPath(Map<String, dynamic> build) {
+    return (build['path'] ?? build['filename'] ?? '').toString();
+  }
+
   String _buildPackageName(Map<String, dynamic> build) {
     return (build['packageName'] ?? '').toString().trim();
+  }
+
+  Future<void> _loadBuildUsePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _lastUsedBuildAppId = prefs.getString(_lastUsedBuildAppIdKey);
+      _lastUsedBuildPath = prefs.getString(_lastUsedBuildPathKey);
+    });
+  }
+
+  Future<void> _recordBuildUse(Map<String, dynamic> build) async {
+    final appId = _buildAppId(build);
+    final path = _buildPath(build);
+    setState(() {
+      _lastUsedBuildAppId = appId;
+      _lastUsedBuildPath = path.isEmpty ? null : path;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastUsedBuildAppIdKey, appId);
+    if (path.isEmpty) {
+      await prefs.remove(_lastUsedBuildPathKey);
+    } else {
+      await prefs.setString(_lastUsedBuildPathKey, path);
+    }
+    _scheduleServerBackup();
   }
 
   Future<void> _refreshInstalledPackages([
@@ -194,6 +229,8 @@ class _BuildListScreenState extends State<BuildListScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('No launcher found for $packageName')),
         );
+      } else if (opened == true) {
+        await _recordBuildUse(build);
       }
     } catch (e) {
       if (!mounted) return;
@@ -221,6 +258,8 @@ class _BuildListScreenState extends State<BuildListScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not open installer: ${result.message}')),
       );
+    } else if (result.type == ResultType.done) {
+      await _recordBuildUse(build);
     }
     await Future.delayed(const Duration(milliseconds: 500));
     await _refreshInstalledPackages();
@@ -981,6 +1020,8 @@ class _BuildListScreenState extends State<BuildListScreen>
             content: Text('Could not open installer: ${result.message}'),
           ),
         );
+      } else if (result.type == ResultType.done) {
+        await _recordBuildUse(build);
       }
       await Future.delayed(const Duration(milliseconds: 500));
       await _refreshInstalledPackages();
@@ -1603,7 +1644,40 @@ class _BuildListScreenState extends State<BuildListScreen>
     for (final build in _builds) {
       grouped.putIfAbsent(_buildAppId(build), () => []).add(build);
     }
+    for (final builds in grouped.values) {
+      builds.sort(_compareBuildsForDisplay);
+    }
     return grouped;
+  }
+
+  int _compareBuildsForDisplay(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final aPath = _buildPath(a);
+    final bPath = _buildPath(b);
+    if (_lastUsedBuildPath != null) {
+      final aLast = aPath == _lastUsedBuildPath;
+      final bLast = bPath == _lastUsedBuildPath;
+      if (aLast != bLast) return aLast ? -1 : 1;
+    }
+    final aModified = _asInt(a['modifiedMs']) ?? 0;
+    final bModified = _asInt(b['modifiedMs']) ?? 0;
+    final modified = bModified.compareTo(aModified);
+    if (modified != 0) return modified;
+    return aPath.compareTo(bPath);
+  }
+
+  int _compareBuildAppIds(
+    String a,
+    String b,
+    Map<String, List<Map<String, dynamic>>> grouped,
+  ) {
+    if (_lastUsedBuildAppId != null) {
+      final aLast = a == _lastUsedBuildAppId;
+      final bLast = b == _lastUsedBuildAppId;
+      if (aLast != bLast) return aLast ? -1 : 1;
+    }
+    return _buildAppLabel(
+      grouped[a]!.first,
+    ).compareTo(_buildAppLabel(grouped[b]!.first));
   }
 
   Widget _buildBody() {
@@ -1643,28 +1717,30 @@ class _BuildListScreenState extends State<BuildListScreen>
       );
     }
     final grouped = _groupBuildsByApp();
+    final hasLastUsedApp =
+        _lastUsedBuildAppId != null && grouped.containsKey(_lastUsedBuildAppId);
     final appIds = grouped.keys.toList()
-      ..sort(
-        (a, b) => _buildAppLabel(
-          grouped[a]!.first,
-        ).compareTo(_buildAppLabel(grouped[b]!.first)),
-      );
+      ..sort((a, b) => _compareBuildAppIds(a, b, grouped));
     return ListView.builder(
       itemCount: appIds.length,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       itemBuilder: (context, index) {
-        final appBuilds = grouped[appIds[index]]!;
+        final appId = appIds[index];
+        final appBuilds = grouped[appId]!;
         final label = _buildAppLabel(appBuilds.first);
         final latest = appBuilds.first;
+        final shouldExpand =
+            appId == _lastUsedBuildAppId || (!hasLastUsedApp && index == 0);
         return Card(
           child: ExpansionTile(
+            key: ValueKey('build-app-$appId-$shouldExpand'),
             leading: const Icon(Icons.apps),
             title: Text(label),
             subtitle: Text(
               '${appBuilds.length} build${appBuilds.length == 1 ? '' : 's'}'
               '  •  latest ${latest['modified']}',
             ),
-            initiallyExpanded: index == 0,
+            initiallyExpanded: shouldExpand,
             children: appBuilds.map(_buildBuildTile).toList(),
           ),
         );
