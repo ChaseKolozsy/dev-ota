@@ -1285,73 +1285,88 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         child: Row(
           children: [
             _buildArrowCluster(),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Expanded(
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  _terminalControlButton(
-                    'tab',
-                    'Tab',
-                    () => _sendTerminalKey('\t'),
-                    minWidth: 44,
-                  ),
-                  _terminalControlButton('esc', 'Esc', () {
-                    if (_tmuxScrollMode) {
-                      _exitTmuxScrollModeWithEsc();
-                    } else {
-                      _sendTerminalKey('\x1B');
-                    }
-                  }, minWidth: 44),
-                  _terminalControlButton(
-                    'ctrl_c',
-                    'Ctrl-C',
-                    () => _sendTerminalKey('\x03'),
-                    minWidth: 62,
-                  ),
-                  _terminalControlButton(
-                    'slash',
-                    '/',
-                    () => _sendTerminalKey('/', fallbackText: '/'),
-                    enabledWhenDisconnected: true,
-                    minWidth: 34,
-                  ),
-                  _terminalIconControlButton(
-                    'attach_file',
-                    Icons.add,
-                    'Attach file',
-                    () => unawaited(_attachFileToTerminal()),
-                    enabledWhenDisconnected: true,
-                  ),
-                  _terminalControlButton(
-                    'home',
-                    'Home',
-                    () => _sendTerminalKey('\x1B[H'),
-                    minWidth: 54,
-                  ),
-                  _terminalControlButton(
-                    'end',
-                    'End',
-                    () => _sendTerminalKey('\x1B[F'),
-                    minWidth: 46,
-                  ),
-                  _terminalControlButton(
-                    'page_up',
-                    'PgUp',
-                    () => _sendTerminalKey('\x1B[5~'),
-                    minWidth: 52,
-                  ),
-                  _terminalControlButton(
-                    'page_down',
-                    'PgDn',
-                    () => _sendTerminalKey('\x1B[6~'),
-                    minWidth: 52,
-                  ),
-                ],
+              child: SizedBox(
+                height: 64,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          _terminalGridButton(
+                            'tab',
+                            'Tab',
+                            () => _sendTerminalKey('\t'),
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridButton('esc', 'Esc', () {
+                            if (_tmuxScrollMode) {
+                              _exitTmuxScrollModeWithEsc();
+                            } else {
+                              _sendTerminalKey('\x1B');
+                            }
+                          }),
+                          _terminalGridGap(),
+                          _terminalGridButton(
+                            'ctrl_c',
+                            'C-c',
+                            () => _sendTerminalKey('\x03'),
+                            tooltip: 'Ctrl-C',
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridButton(
+                            'slash',
+                            '/',
+                            () => _sendTerminalKey('/', fallbackText: '/'),
+                            enabledWhenDisconnected: true,
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridIconButton(
+                            'attach_file',
+                            Icons.add,
+                            'Attach file',
+                            () => unawaited(_attachFileToTerminal()),
+                            enabledWhenDisconnected: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          _terminalGridButton(
+                            'home',
+                            'Home',
+                            () => _sendTerminalKey('\x1B[H'),
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridButton(
+                            'end',
+                            'End',
+                            () => _sendTerminalKey('\x1B[F'),
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridButton(
+                            'page_up',
+                            'PgUp',
+                            () => _sendTerminalKey('\x1B[5~'),
+                          ),
+                          _terminalGridGap(),
+                          _terminalGridButton(
+                            'page_down',
+                            'PgDn',
+                            () => _sendTerminalKey('\x1B[6~'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
             _terminalEnterButton(),
           ],
         ),
@@ -1433,27 +1448,62 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _terminalControlButton(
+  Widget _terminalGridGap() => const SizedBox(width: 4);
+
+  Widget _terminalGridButton(
     String usageId,
     String label,
     VoidCallback onPressed, {
+    String? tooltip,
     bool enabledWhenDisconnected = false,
-    double minWidth = 44,
   }) {
     final enabled = _connected || enabledWhenDisconnected;
-    return SizedBox(
-      height: 30,
-      child: OutlinedButton(
-        style: OutlinedButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          minimumSize: Size(minWidth, 30),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    final button = OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        minimumSize: Size.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: enabled
+          ? () => _activateTerminalKeyButton(usageId, onPressed)
+          : null,
+      child: FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
+    );
+    return Expanded(
+      child: SizedBox.expand(
+        child: tooltip == null
+            ? button
+            : Tooltip(message: tooltip, child: button),
+      ),
+    );
+  }
+
+  Widget _terminalGridIconButton(
+    String usageId,
+    IconData icon,
+    String tooltip,
+    VoidCallback onPressed, {
+    bool enabledWhenDisconnected = false,
+  }) {
+    final enabled = _connected || enabledWhenDisconnected;
+    return Expanded(
+      child: Tooltip(
+        message: tooltip,
+        child: SizedBox.expand(
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              minimumSize: Size.zero,
+              padding: EdgeInsets.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: enabled
+                ? () => _activateTerminalKeyButton(usageId, onPressed)
+                : null,
+            child: Icon(icon, size: 18),
+          ),
         ),
-        onPressed: enabled
-            ? () => _activateTerminalKeyButton(usageId, onPressed)
-            : null,
-        child: Text(label),
       ),
     );
   }
@@ -1462,57 +1512,28 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final enabled = _connected;
     return Tooltip(
       message: 'Enter',
-      child: SizedBox(
-        width: 54,
-        height: 64,
-        child: OutlinedButton(
-          style: OutlinedButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          onPressed: enabled
-              ? () => _activateTerminalKeyButton(
-                  'enter',
-                  () => _sendTerminalKey('\r'),
-                )
-              : null,
-          child: const Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.keyboard_return, size: 20),
-              SizedBox(height: 2),
-              Text('Enter', textAlign: TextAlign.center),
-            ],
+      child: Semantics(
+        button: true,
+        label: 'Enter',
+        child: SizedBox(
+          width: 30,
+          height: 64,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              minimumSize: const Size(30, 64),
+              padding: EdgeInsets.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: enabled
+                ? () => _activateTerminalKeyButton(
+                    'enter',
+                    () => _sendTerminalKey('\r'),
+                  )
+                : null,
+            child: const Icon(Icons.keyboard_return, size: 18),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _terminalIconControlButton(
-    String usageId,
-    IconData icon,
-    String tooltip,
-    VoidCallback onPressed, {
-    bool enabledWhenDisconnected = false,
-  }) {
-    final enabled = _connected || enabledWhenDisconnected;
-    return Tooltip(
-      message: tooltip,
-      child: IconButton.outlined(
-        visualDensity: VisualDensity.compact,
-        style: IconButton.styleFrom(
-          fixedSize: const Size(30, 30),
-          minimumSize: const Size(30, 30),
-          padding: EdgeInsets.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-        icon: Icon(icon, size: 18),
-        onPressed: enabled
-            ? () => _activateTerminalKeyButton(usageId, onPressed)
-            : null,
       ),
     );
   }
