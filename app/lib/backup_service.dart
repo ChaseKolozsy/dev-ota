@@ -28,6 +28,7 @@ class BackupService {
     'ssh_use_private_key',
     'terminal_tools_visible',
   ];
+  static const _doublePreferenceKeys = ['terminal_font_size'];
   static const _serverPath = '/backup/profile';
 
   static final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -54,6 +55,10 @@ class BackupService {
     }
     for (final key in _boolPreferenceKeys) {
       final value = prefs.getBool(key);
+      if (value != null) shared[key] = value;
+    }
+    for (final key in _doublePreferenceKeys) {
+      final value = prefs.getDouble(key);
       if (value != null) shared[key] = value;
     }
 
@@ -99,6 +104,8 @@ class BackupService {
           await prefs.setString(key, value.toString());
         } else if (_boolPreferenceKeys.contains(key) && value is bool) {
           await prefs.setBool(key, value);
+        } else if (_doublePreferenceKeys.contains(key) && value is num) {
+          await prefs.setDouble(key, value.toDouble());
         }
       }
     }

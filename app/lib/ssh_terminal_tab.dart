@@ -70,6 +70,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _transcribing = false;
   bool _tmuxScrollMode = false;
   bool _terminalToolsVisible = true;
+  double _terminalFontSize = _terminalDefaultFontSize;
   Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
   String? _privateKeyName;
@@ -94,6 +95,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadProfile();
     _loadTerminalKeyUsage();
     _loadTerminalToolVisibility();
+    _loadTerminalFontSize();
   }
 
   @override
@@ -143,6 +145,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       'ssh_terminal_generated_public_key';
   static const _terminalKeyUsageCountsKey = 'terminal_key_usage_counts_json';
   static const _terminalToolsVisibleKey = 'terminal_tools_visible';
+  static const _terminalFontSizeKey = 'terminal_font_size';
+  static const _terminalDefaultFontSize = 13.0;
+  static const _terminalMinFontSize = 8.0;
+  static const _terminalMaxFontSize = 22.0;
 
   Future<void> _loadTerminalToolVisibility() async {
     final prefs = await SharedPreferences.getInstance();
@@ -159,6 +165,45 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _toggleTerminalTools() {
     setState(() => _terminalToolsVisible = !_terminalToolsVisible);
     unawaited(_saveTerminalToolVisibility());
+  }
+
+  Future<void> _loadTerminalFontSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    final fontSize =
+        prefs.getDouble(_terminalFontSizeKey) ?? _terminalDefaultFontSize;
+    if (mounted) {
+      setState(() => _terminalFontSize = _boundedTerminalFontSize(fontSize));
+    }
+  }
+
+  double _boundedTerminalFontSize(double fontSize) {
+    return fontSize
+        .clamp(_terminalMinFontSize, _terminalMaxFontSize)
+        .toDouble();
+  }
+
+  Future<void> _saveTerminalFontSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_terminalFontSizeKey, _terminalFontSize);
+    _scheduleServerBackup();
+  }
+
+  void _adjustTerminalFontSize(double factor) {
+    final next = _boundedTerminalFontSize(_terminalFontSize * factor);
+    if (next == _terminalFontSize) return;
+    setState(() {
+      _terminalFontSize = next;
+      _status = 'Terminal font ${next.toStringAsFixed(1)}px';
+    });
+    unawaited(_saveTerminalFontSize());
+  }
+
+  void _resetTerminalFontSize() {
+    setState(() {
+      _terminalFontSize = _terminalDefaultFontSize;
+      _status = 'Terminal font reset.';
+    });
+    unawaited(_saveTerminalFontSize());
   }
 
   void _collapseTerminalToolsForScroll() {
@@ -876,6 +921,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                   controller: _terminalController,
                   focusNode: _terminalFocusNode,
                   scrollController: _terminalScrollController,
+                  textStyle: TerminalStyle(fontSize: _terminalFontSize),
                   autofocus: true,
                   readOnly: _tmuxScrollMode,
                 ),
@@ -942,6 +988,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 tooltip: _connected ? 'Disconnect' : 'Connect',
                 onPressed: _busy ? null : (_connected ? _disconnect : _connect),
               ),
+              _buildTerminalFontControls(theme),
               IconButton(
                 icon: const Icon(Icons.settings),
                 tooltip: 'SSH settings',
@@ -952,6 +999,72 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         ),
       ),
     );
+  }
+
+  Widget _buildTerminalFontControls(ThemeData theme) {
+    final borderColor = theme.colorScheme.outlineVariant;
+    return Container(
+      height: 32,
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _fontControlButton(
+            icon: Icons.zoom_in,
+            tooltip: 'Increase terminal font',
+            onPressed: () => _adjustTerminalFontSize(1.1),
+          ),
+          _fontControlDivider(borderColor),
+          Tooltip(
+            message: 'Reset terminal font',
+            child: InkWell(
+              onTap: _resetTerminalFontSize,
+              child: SizedBox(
+                width: 34,
+                height: 32,
+                child: Center(
+                  child: Text(
+                    _terminalFontSize.round().toString(),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          _fontControlDivider(borderColor),
+          _fontControlButton(
+            icon: Icons.zoom_out,
+            tooltip: 'Decrease terminal font',
+            onPressed: () => _adjustTerminalFontSize(1 / 1.1),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fontControlButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        child: SizedBox(width: 32, height: 32, child: Icon(icon, size: 18)),
+      ),
+    );
+  }
+
+  Widget _fontControlDivider(Color color) {
+    return SizedBox(width: 1, height: 20, child: ColoredBox(color: color));
   }
 
   Future<void> _showConnectionSheet() async {
