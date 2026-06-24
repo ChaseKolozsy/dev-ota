@@ -1805,8 +1805,14 @@ class _BuildListScreenState extends State<BuildListScreen>
               setSheetState(() => steps[index] = step);
             }
 
-            void addStep(TerminalMacroStep step) {
-              setSheetState(() => steps.add(step));
+            void addStep(TerminalMacroStep step, {int? afterIndex}) {
+              setSheetState(() {
+                if (afterIndex == null || afterIndex >= steps.length - 1) {
+                  steps.add(step);
+                } else {
+                  steps.insert(afterIndex + 1, step);
+                }
+              });
             }
 
             void moveStep(int index, int delta) {
@@ -1818,253 +1824,290 @@ class _BuildListScreenState extends State<BuildListScreen>
               });
             }
 
-            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
-            return Padding(
-              padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Widget addStepControls() {
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Row(
-                    children: [
-                      Text('Macro', style: theme.textTheme.titleMedium),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.pop(ctx),
+                  Text('Add step', style: theme.textTheme.labelMedium),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.terminal),
+                    label: const Text('Command'),
+                    onPressed: () =>
+                        addStep(_newMacroStep(TerminalMacroStepType.shell)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.keyboard),
+                    label: const Text('Key'),
+                    onPressed: () => addStep(
+                      _newMacroStep(TerminalMacroStepType.terminalKey),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.tab),
+                    label: const Text('tmux'),
+                    onPressed: () =>
+                        addStep(_newMacroStep(TerminalMacroStepType.tmux)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.timer),
+                    label: const Text('Wait'),
+                    onPressed: () =>
+                        addStep(_newMacroStep(TerminalMacroStepType.wait)),
+                  ),
+                  if (_rankedCommands.isNotEmpty)
+                    PopupMenuButton<String>(
+                      tooltip: 'Add saved command',
+                      onSelected: (command) => addStep(
+                        _newMacroStep(TerminalMacroStepType.shell, command),
                       ),
-                    ],
-                  ),
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
-                      isDense: true,
+                      itemBuilder: (ctx) => _rankedCommands
+                          .take(12)
+                          .map(
+                            (command) => PopupMenuItem(
+                              value: command,
+                              child: Text(
+                                command,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      child: const Chip(
+                        avatar: Icon(Icons.add),
+                        label: Text('Saved'),
+                      ),
                     ),
-                    textInputAction: TextInputAction.next,
-                  ),
-                  const SizedBox(height: 10),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.sizeOf(ctx).height * 0.55,
+                ],
+              );
+            }
+
+            Widget addBelowMenu(int index) {
+              return PopupMenuButton<TerminalMacroStepType>(
+                tooltip: 'Add step below',
+                onSelected: (type) =>
+                    addStep(_newMacroStep(type), afterIndex: index),
+                itemBuilder: (ctx) => TerminalMacroStepType.values
+                    .map(
+                      (type) => PopupMenuItem(
+                        value: type,
+                        child: Text(terminalMacroStepTypeLabel(type)),
+                      ),
+                    )
+                    .toList(),
+                child: const Chip(
+                  avatar: Icon(Icons.add),
+                  label: Text('Add below'),
+                ),
+              );
+            }
+
+            final mediaSize = MediaQuery.sizeOf(ctx);
+            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            final sheetHeight = (mediaSize.height * 0.92 - bottomInset)
+                .clamp(360.0, mediaSize.height * 0.92)
+                .toDouble();
+            return SizedBox(
+              height: sheetHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text('Macro', style: theme.textTheme.titleMedium),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
                     ),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: steps.length,
-                      itemBuilder: (ctx, index) {
-                        final step = steps[index];
-                        return Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    Text('${index + 1}'),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child:
-                                          DropdownButtonFormField<
-                                            TerminalMacroStepType
-                                          >(
-                                            initialValue: step.type,
-                                            decoration: const InputDecoration(
-                                              labelText: 'Step',
-                                              border: OutlineInputBorder(),
-                                              isDense: true,
-                                            ),
-                                            items: TerminalMacroStepType.values
-                                                .map(
-                                                  (type) => DropdownMenuItem(
-                                                    value: type,
-                                                    child: Text(
-                                                      terminalMacroStepTypeLabel(
-                                                        type,
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Name',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 10),
+                    addStepControls(),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: steps.length,
+                        itemBuilder: (ctx, index) {
+                          final step = steps[index];
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text('${index + 1}'),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child:
+                                            DropdownButtonFormField<
+                                              TerminalMacroStepType
+                                            >(
+                                              initialValue: step.type,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Step',
+                                                border: OutlineInputBorder(),
+                                                isDense: true,
+                                              ),
+                                              items: TerminalMacroStepType
+                                                  .values
+                                                  .map(
+                                                    (type) => DropdownMenuItem(
+                                                      value: type,
+                                                      child: Text(
+                                                        terminalMacroStepTypeLabel(
+                                                          type,
+                                                        ),
                                                       ),
                                                     ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: (type) {
+                                                if (type == null) return;
+                                                updateStep(
+                                                  index,
+                                                  step.copyWith(
+                                                    type: type,
+                                                    value:
+                                                        defaultTerminalMacroStepValue(
+                                                          type,
+                                                        ),
+                                                    delaySeconds:
+                                                        defaultTerminalMacroStepDelay(
+                                                          type,
+                                                        ),
                                                   ),
-                                                )
-                                                .toList(),
-                                            onChanged: (type) {
-                                              if (type == null) return;
-                                              updateStep(
-                                                index,
-                                                step.copyWith(
-                                                  type: type,
-                                                  value:
-                                                      defaultTerminalMacroStepValue(
-                                                        type,
-                                                      ),
-                                                  delaySeconds:
-                                                      defaultTerminalMacroStepDelay(
-                                                        type,
-                                                      ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.arrow_upward),
-                                      tooltip: 'Move up',
-                                      onPressed: index == 0
-                                          ? null
-                                          : () => moveStep(index, -1),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.arrow_downward),
-                                      tooltip: 'Move down',
-                                      onPressed: index == steps.length - 1
-                                          ? null
-                                          : () => moveStep(index, 1),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline),
-                                      tooltip: 'Remove step',
-                                      onPressed: steps.length == 1
-                                          ? null
-                                          : () => setSheetState(
-                                              () => steps.removeAt(index),
+                                                );
+                                              },
                                             ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                _buildMacroStepValueEditor(
-                                  step: step,
-                                  onChanged: (next) => updateStep(index, next),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  key: ValueKey('${step.id}-delay'),
-                                  initialValue: step.delaySeconds == 0
-                                      ? ''
-                                      : step.delaySeconds.toString(),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Delay after step (seconds)',
-                                    hintText: '0.5',
-                                    border: OutlineInputBorder(),
-                                    isDense: true,
-                                  ),
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                        decimal: true,
                                       ),
-                                  onChanged: (value) => updateStep(
-                                    index,
-                                    step.copyWith(
-                                      delaySeconds: _parseDelaySeconds(value),
+                                      IconButton(
+                                        icon: const Icon(Icons.arrow_upward),
+                                        tooltip: 'Move up',
+                                        onPressed: index == 0
+                                            ? null
+                                            : () => moveStep(index, -1),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.arrow_downward),
+                                        tooltip: 'Move down',
+                                        onPressed: index == steps.length - 1
+                                            ? null
+                                            : () => moveStep(index, 1),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline),
+                                        tooltip: 'Remove step',
+                                        onPressed: steps.length == 1
+                                            ? null
+                                            : () => setSheetState(
+                                                () => steps.removeAt(index),
+                                              ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _buildMacroStepValueEditor(
+                                    step: step,
+                                    onChanged: (next) =>
+                                        updateStep(index, next),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    key: ValueKey('${step.id}-delay'),
+                                    initialValue: step.delaySeconds == 0
+                                        ? ''
+                                        : step.delaySeconds.toString(),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Delay after step (seconds)',
+                                      hintText: '0.5',
+                                      border: OutlineInputBorder(),
+                                      isDense: true,
+                                    ),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    onChanged: (value) => updateStep(
+                                      index,
+                                      step.copyWith(
+                                        delaySeconds: _parseDelaySeconds(value),
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.terminal),
-                        label: const Text('Command'),
-                        onPressed: () =>
-                            addStep(_newMacroStep(TerminalMacroStepType.shell)),
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.keyboard),
-                        label: const Text('Key'),
-                        onPressed: () => addStep(
-                          _newMacroStep(TerminalMacroStepType.terminalKey),
-                        ),
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.tab),
-                        label: const Text('tmux'),
-                        onPressed: () =>
-                            addStep(_newMacroStep(TerminalMacroStepType.tmux)),
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.timer),
-                        label: const Text('Wait'),
-                        onPressed: () =>
-                            addStep(_newMacroStep(TerminalMacroStepType.wait)),
-                      ),
-                      if (_rankedCommands.isNotEmpty)
-                        PopupMenuButton<String>(
-                          tooltip: 'Add saved command',
-                          onSelected: (command) => addStep(
-                            _newMacroStep(TerminalMacroStepType.shell, command),
-                          ),
-                          itemBuilder: (ctx) => _rankedCommands
-                              .take(12)
-                              .map(
-                                (command) => PopupMenuItem(
-                                  value: command,
-                                  child: Text(
-                                    command,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                  const SizedBox(height: 8),
+                                  Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: addBelowMenu(index),
                                   ),
-                                ),
-                              )
-                              .toList(),
-                          child: const Chip(
-                            avatar: Icon(Icons.add),
-                            label: Text('Saved'),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.check),
-                      label: const Text('Save'),
-                      onPressed: () {
-                        final normalized = steps
-                            .map(
-                              (step) => step.copyWith(
-                                value: step.value.trimRight(),
-                                delaySeconds: step.delaySeconds < 0
-                                    ? 0
-                                    : step.delaySeconds,
+                                ],
                               ),
-                            )
-                            .where(
-                              (step) =>
-                                  step.type != TerminalMacroStepType.shell ||
-                                  step.value.trim().isNotEmpty,
-                            )
-                            .toList();
-                        if (normalized.isEmpty) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                              content: Text('Add at least one runnable step.'),
                             ),
                           );
-                          return;
-                        }
-                        Navigator.pop(
-                          ctx,
-                          macro.copyWith(
-                            name: nameController.text.trim().isEmpty
-                                ? 'Macro'
-                                : nameController.text.trim(),
-                            steps: normalized,
-                          ),
-                        );
-                      },
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.check),
+                        label: const Text('Save'),
+                        onPressed: () {
+                          final normalized = steps
+                              .map(
+                                (step) => step.copyWith(
+                                  value: step.value.trimRight(),
+                                  delaySeconds: step.delaySeconds < 0
+                                      ? 0
+                                      : step.delaySeconds,
+                                ),
+                              )
+                              .where(
+                                (step) =>
+                                    step.type != TerminalMacroStepType.shell ||
+                                    step.value.trim().isNotEmpty,
+                              )
+                              .toList();
+                          if (normalized.isEmpty) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Add at least one runnable step.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.pop(
+                            ctx,
+                            macro.copyWith(
+                              name: nameController.text.trim().isEmpty
+                                  ? 'Macro'
+                                  : nameController.text.trim(),
+                              steps: normalized,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
