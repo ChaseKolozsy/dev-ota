@@ -29,8 +29,10 @@ class _BuildListScreenState extends State<BuildListScreen>
   static const String _defaultServerUrl = 'http://127.0.0.1:8082';
   static const double _appToolbarHeight = 36;
   static const double _tabStripHeight = 38;
+  static const int _terminalTabIndex = 3;
   static const String _lastUsedBuildAppIdKey = 'last_used_build_app_id';
   static const String _lastUsedBuildPathKey = 'last_used_build_path';
+  static const String _terminalFullscreenKey = 'terminal_fullscreen';
   static const MethodChannel _controlAgentChannel = MethodChannel(
     'io.github.chasekolozsy.devota/control_agent',
   );
@@ -83,6 +85,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   List<Map<String, dynamic>> _githubRuns = [];
   String? _lastUsedBuildAppId;
   String? _lastUsedBuildPath;
+  bool _terminalFullscreen = false;
   Timer? _backupDebounce;
   String? _serverRestoreAttemptedFor;
 
@@ -91,8 +94,10 @@ class _BuildListScreenState extends State<BuildListScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 8, vsync: this);
+    _tabController.addListener(_onTabControllerChanged);
     _macroController.addListener(_onMacroControllerChanged);
     _loadBuildUsePreferences();
+    _loadTerminalFullscreenPreference();
     _loadServers();
     _loadIssues();
     _loadCommands();
@@ -105,6 +110,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _tabController.removeListener(_onTabControllerChanged);
     _macroController.removeListener(_onMacroControllerChanged);
     _macroController.dispose();
     _tabController.dispose();
@@ -135,6 +141,27 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   void _onMacroControllerChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _onTabControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadTerminalFullscreenPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final fullscreen = prefs.getBool(_terminalFullscreenKey) ?? false;
+    if (mounted) setState(() => _terminalFullscreen = fullscreen);
+  }
+
+  Future<void> _saveTerminalFullscreenPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_terminalFullscreenKey, _terminalFullscreen);
+  }
+
+  void _setTerminalFullscreen(bool fullscreen) {
+    if (_terminalFullscreen == fullscreen) return;
+    setState(() => _terminalFullscreen = fullscreen);
+    unawaited(_saveTerminalFullscreenPreference());
   }
 
   Future<Directory> _getApkCacheDir() async {
@@ -1191,64 +1218,71 @@ class _BuildListScreenState extends State<BuildListScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hideShellChrome =
+        _terminalFullscreen && _tabController.index == _terminalTabIndex;
     return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: _appToolbarHeight,
-        titleSpacing: 12,
-        title: Text(
-          'DevOTA',
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        actions: [
-          AnimatedBuilder(
-            animation: _tabController,
-            builder: (context, _) {
-              if (_tabController.index != 1) return const SizedBox.shrink();
-              return SizedBox(
-                width: _appToolbarHeight,
-                height: _appToolbarHeight,
-                child: IconButton(
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.refresh, size: 20),
-                  onPressed: _loading ? null : _fetchBuilds,
+      appBar: hideShellChrome
+          ? null
+          : AppBar(
+              toolbarHeight: _appToolbarHeight,
+              titleSpacing: 12,
+              title: Text(
+                'DevOTA',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
-              );
-            },
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(_tabStripHeight),
-          child: SizedBox(
-            height: _tabStripHeight,
-            child: TabBar(
-              controller: _tabController,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              indicatorSize: TabBarIndicatorSize.label,
-              labelPadding: const EdgeInsets.symmetric(horizontal: 8),
-              labelStyle: theme.textTheme.labelSmall?.copyWith(
-                fontWeight: FontWeight.w600,
               ),
-              unselectedLabelStyle: theme.textTheme.labelSmall,
-              tabs: const [
-                _CompactTab(icon: Icons.wifi_tethering, label: 'Connect'),
-                _CompactTab(icon: Icons.android, label: 'Builds'),
-                _CompactTab(icon: Icons.view_kanban, label: 'Projects'),
-                _CompactTab(icon: Icons.terminal, label: 'Terminal'),
-                _CompactTab(icon: Icons.terminal, label: 'Commands'),
-                _CompactTab(icon: Icons.playlist_play, label: 'Macros'),
-                _CompactTab(icon: Icons.hub, label: 'Agent'),
-                _CompactTab(icon: Icons.sync, label: 'Backup'),
+              actions: [
+                AnimatedBuilder(
+                  animation: _tabController,
+                  builder: (context, _) {
+                    if (_tabController.index != 1) {
+                      return const SizedBox.shrink();
+                    }
+                    return SizedBox(
+                      width: _appToolbarHeight,
+                      height: _appToolbarHeight,
+                      child: IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.refresh, size: 20),
+                        onPressed: _loading ? null : _fetchBuilds,
+                      ),
+                    );
+                  },
+                ),
               ],
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(_tabStripHeight),
+                child: SizedBox(
+                  height: _tabStripHeight,
+                  child: TabBar(
+                    controller: _tabController,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    indicatorSize: TabBarIndicatorSize.label,
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    labelStyle: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                    unselectedLabelStyle: theme.textTheme.labelSmall,
+                    tabs: const [
+                      _CompactTab(icon: Icons.wifi_tethering, label: 'Connect'),
+                      _CompactTab(icon: Icons.android, label: 'Builds'),
+                      _CompactTab(icon: Icons.view_kanban, label: 'Projects'),
+                      _CompactTab(icon: Icons.terminal, label: 'Terminal'),
+                      _CompactTab(icon: Icons.terminal, label: 'Commands'),
+                      _CompactTab(icon: Icons.playlist_play, label: 'Macros'),
+                      _CompactTab(icon: Icons.hub, label: 'Agent'),
+                      _CompactTab(icon: Icons.sync, label: 'Backup'),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
-      ),
       body: TabBarView(
         controller: _tabController,
+        physics: hideShellChrome ? const NeverScrollableScrollPhysics() : null,
         children: [
           ConnectTab(
             channel: _controlAgentChannel,
@@ -1262,9 +1296,11 @@ class _BuildListScreenState extends State<BuildListScreen>
             key: const PageStorageKey('ssh-terminal-tab'),
             dio: _dio,
             serverUrl: _baseUrl,
+            fullscreen: _terminalFullscreen,
             quickCommands: _quickCommands,
             quickMacros: _quickMacros,
             macroController: _macroController,
+            onFullscreenChanged: _setTerminalFullscreen,
             onCommandUsed: _recordCommandUse,
             onMacroUsed: _recordMacroUse,
           ),
@@ -1286,6 +1322,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     await _loadIssues();
     await _loadCommands();
     await _loadMacros();
+    await _loadTerminalFullscreenPreference();
     await _loadAgentSettings();
     await _loadGithubSettings();
   }

@@ -38,6 +38,8 @@ class SshTerminalTab extends StatefulWidget {
     this.quickCommands = const [],
     this.quickMacros = const [],
     this.macroController,
+    this.fullscreen = false,
+    this.onFullscreenChanged,
     this.onCommandUsed,
     this.onMacroUsed,
   });
@@ -47,6 +49,8 @@ class SshTerminalTab extends StatefulWidget {
   final List<String> quickCommands;
   final List<TerminalMacro> quickMacros;
   final TerminalMacroController? macroController;
+  final bool fullscreen;
+  final ValueChanged<bool>? onFullscreenChanged;
   final ValueChanged<String>? onCommandUsed;
   final ValueChanged<TerminalMacro>? onMacroUsed;
 
@@ -80,6 +84,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _transcribing = false;
   bool _tmuxScrollMode = false;
   bool _terminalToolsVisible = true;
+  bool _nativeKeyboardLocked = false;
   bool _macroRunning = false;
   double _tmuxScrollRemainder = 0;
   double _terminalMouseScrollRemainder = 0;
@@ -108,6 +113,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadProfile();
     _loadTerminalKeyUsage();
     _loadTerminalToolVisibility();
+    _loadNativeKeyboardLock();
     _loadTerminalFontSize();
     _attachMacroController();
   }
@@ -169,6 +175,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       'ssh_terminal_generated_public_key';
   static const _terminalKeyUsageCountsKey = 'terminal_key_usage_counts_json';
   static const _terminalToolsVisibleKey = 'terminal_tools_visible';
+  static const _nativeKeyboardLockedKey = 'terminal_native_keyboard_locked';
   static const _terminalFontSizeKey = 'terminal_font_size';
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
@@ -203,6 +210,37 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _toggleTerminalTools() {
     setState(() => _terminalToolsVisible = !_terminalToolsVisible);
     unawaited(_saveTerminalToolVisibility());
+  }
+
+  Future<void> _loadNativeKeyboardLock() async {
+    final prefs = await SharedPreferences.getInstance();
+    final locked = prefs.getBool(_nativeKeyboardLockedKey) ?? false;
+    if (mounted) setState(() => _nativeKeyboardLocked = locked);
+  }
+
+  Future<void> _saveNativeKeyboardLock() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_nativeKeyboardLockedKey, _nativeKeyboardLocked);
+    _scheduleServerBackup();
+  }
+
+  void _setNativeKeyboardLocked(bool locked) {
+    if (_nativeKeyboardLocked == locked) return;
+    setState(() {
+      _nativeKeyboardLocked = locked;
+      _status = locked
+          ? 'Native keyboard locked off.'
+          : 'Native keyboard allowed.';
+    });
+    unawaited(_saveNativeKeyboardLock());
+    if (locked) {
+      _composerFocusNode.unfocus();
+      FocusScope.of(context).requestFocus(_terminalFocusNode);
+      _terminalFocusNode.requestFocus();
+      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
+    } else {
+      _focusTerminalInput();
+    }
   }
 
   Future<void> _loadTerminalFontSize() async {
@@ -789,7 +827,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       if (!mounted || !_connected || _tmuxScrollMode) return;
       FocusScope.of(context).requestFocus(_terminalFocusNode);
       _terminalFocusNode.requestFocus();
-      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.show'));
+      unawaited(
+        SystemChannels.textInput.invokeMethod<void>(
+          _nativeKeyboardLocked ? 'TextInput.hide' : 'TextInput.show',
+        ),
+      );
     }
 
     requestTerminalFocus();
@@ -1110,7 +1152,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     super.build(context);
     final theme = Theme.of(context);
     return SafeArea(
-      top: false,
+      top: widget.fullscreen,
       child: Column(
         children: [
           _buildConnectionPanel(theme),
@@ -1130,6 +1172,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     textStyle: TerminalStyle(fontSize: _terminalFontSize),
                     autofocus: true,
                     readOnly: _tmuxScrollMode,
+                    hardwareKeyboardOnly: _nativeKeyboardLocked,
                   ),
                 ),
               ),
@@ -1191,13 +1234,36 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                   ],
                 ),
               ),
-              IconButton(
+              _terminalPanelIconButton(
                 icon: Icon(_connected ? Icons.link_off : Icons.link),
                 tooltip: _connected ? 'Disconnect' : 'Connect',
                 onPressed: _busy ? null : (_connected ? _disconnect : _connect),
               ),
               _buildTerminalFontControls(theme),
-              IconButton(
+              _terminalPanelIconButton(
+                icon: Icon(
+                  _nativeKeyboardLocked ? Icons.keyboard_hide : Icons.keyboard,
+                ),
+                tooltip: _nativeKeyboardLocked
+                    ? 'Native keyboard locked off'
+                    : 'Native keyboard allowed',
+                selected: _nativeKeyboardLocked,
+                onPressed: () =>
+                    _setNativeKeyboardLocked(!_nativeKeyboardLocked),
+              ),
+              _terminalPanelIconButton(
+                icon: Icon(
+                  widget.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                ),
+                tooltip: widget.fullscreen
+                    ? 'Show DevOTA tabs'
+                    : 'Hide DevOTA tabs',
+                selected: widget.fullscreen,
+                onPressed: widget.onFullscreenChanged == null
+                    ? null
+                    : () => widget.onFullscreenChanged!(!widget.fullscreen),
+              ),
+              _terminalPanelIconButton(
                 icon: const Icon(Icons.settings),
                 tooltip: 'SSH settings',
                 onPressed: _showConnectionSheet,
@@ -1205,6 +1271,35 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _terminalPanelIconButton({
+    required Widget icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    bool selected = false,
+  }) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        visualDensity: VisualDensity.compact,
+        style: IconButton.styleFrom(
+          fixedSize: const Size(34, 34),
+          minimumSize: const Size(34, 34),
+          padding: EdgeInsets.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          backgroundColor: selected
+              ? theme.colorScheme.secondaryContainer
+              : null,
+          foregroundColor: selected
+              ? theme.colorScheme.onSecondaryContainer
+              : null,
+        ),
+        icon: icon,
+        onPressed: onPressed,
       ),
     );
   }
@@ -2058,6 +2153,24 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                       smartQuotesType: SmartQuotesType.disabled,
                       textCapitalization: TextCapitalization.none,
                       textInputAction: TextInputAction.send,
+                      readOnly: _nativeKeyboardLocked,
+                      showCursor: !_nativeKeyboardLocked,
+                      keyboardType: _nativeKeyboardLocked
+                          ? TextInputType.none
+                          : TextInputType.text,
+                      onTap: _nativeKeyboardLocked
+                          ? () {
+                              _composerFocusNode.unfocus();
+                              FocusScope.of(
+                                context,
+                              ).requestFocus(_terminalFocusNode);
+                              unawaited(
+                                SystemChannels.textInput.invokeMethod<void>(
+                                  'TextInput.hide',
+                                ),
+                              );
+                            }
+                          : null,
                       onSubmitted: (_) => _submitComposer(),
                     ),
                   ),

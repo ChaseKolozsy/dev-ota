@@ -30,6 +30,8 @@ class BackupService {
   static const _boolPreferenceKeys = [
     'agent_whole_device',
     'ssh_use_private_key',
+    'terminal_fullscreen',
+    'terminal_native_keyboard_locked',
     'terminal_tools_visible',
   ];
   static const _doublePreferenceKeys = ['terminal_font_size'];
