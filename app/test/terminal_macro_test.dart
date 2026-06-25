@@ -45,4 +45,15 @@ void main() {
     expect(step.value, '');
     expect(step.delaySeconds, 0);
   });
+
+  test('terminal macro options include prefix controls', () {
+    expect(
+      terminalMacroTerminalKeyOptions.map((option) => option.value),
+      contains('ctrl_b'),
+    );
+    expect(
+      terminalMacroTmuxOptions.map((option) => option.value),
+      contains('\x02'),
+    );
+  });
 }

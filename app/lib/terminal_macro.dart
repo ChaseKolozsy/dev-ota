@@ -11,6 +11,7 @@ class MacroStepOption {
 
 const terminalMacroTerminalKeyOptions = [
   MacroStepOption('enter', 'Enter'),
+  MacroStepOption('ctrl_b', 'Ctrl-B'),
   MacroStepOption('ctrl_c', 'Ctrl-C'),
   MacroStepOption('tab', 'Tab'),
   MacroStepOption('esc', 'Esc'),
@@ -26,6 +27,7 @@ const terminalMacroTerminalKeyOptions = [
 ];
 
 const terminalMacroTmuxOptions = [
+  MacroStepOption('\x02', 'Prefix'),
   MacroStepOption('c', 'New'),
   MacroStepOption('p', 'Prev'),
   MacroStepOption('n', 'Next'),

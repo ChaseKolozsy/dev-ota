@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -58,7 +59,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   final _storage = const FlutterSecureStorage();
   late final _voice = VoiceInputService(widget.dio);
   late final _terminal = Terminal(maxLines: 10000);
-  final _terminalController = TerminalController();
+  final _terminalController = TerminalController(
+    pointerInputs: const PointerInputs({PointerInput.tap, PointerInput.scroll}),
+  );
   final _terminalFocusNode = FocusNode();
   final _terminalScrollController = ScrollController();
   final _composerFocusNode = FocusNode();
@@ -78,6 +81,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _tmuxScrollMode = false;
   bool _terminalToolsVisible = true;
   bool _macroRunning = false;
+  double _tmuxScrollRemainder = 0;
   double _terminalFontSize = _terminalDefaultFontSize;
   Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
@@ -168,6 +172,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
   static const _terminalMaxFontSize = 22.0;
+  static const _tmuxScrollPixelsPerLine = 18.0;
+  static const _tmuxScrollMaxLinesPerGesture = 12;
 
   void _attachMacroController() {
     widget.macroController?.attach(
@@ -249,6 +255,32 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       unawaited(_saveTerminalToolVisibility());
     }
     _hideTerminalKeyboard();
+  }
+
+  void _handleTerminalPointerMove(PointerMoveEvent event) {
+    _collapseTerminalToolsForScroll();
+    if (_tmuxScrollMode) _scrollTmuxCopyMode(-event.delta.dy);
+  }
+
+  void _handleTerminalPointerSignal(PointerSignalEvent event) {
+    _collapseTerminalToolsForScroll();
+    if (_tmuxScrollMode && event is PointerScrollEvent) {
+      _scrollTmuxCopyMode(event.scrollDelta.dy);
+    }
+  }
+
+  void _scrollTmuxCopyMode(double scrollDeltaY) {
+    if (!_connected || scrollDeltaY == 0) return;
+    _tmuxScrollRemainder += scrollDeltaY;
+    var lines = (_tmuxScrollRemainder.abs() / _tmuxScrollPixelsPerLine).floor();
+    if (lines == 0) return;
+    if (lines > _tmuxScrollMaxLinesPerGesture) {
+      lines = _tmuxScrollMaxLinesPerGesture;
+    }
+    final direction = _tmuxScrollRemainder.isNegative ? -1 : 1;
+    _tmuxScrollRemainder -= direction * lines * _tmuxScrollPixelsPerLine;
+    final sequence = direction < 0 ? '\x1B[A' : '\x1B[B';
+    _writeToSession(List.filled(lines, sequence).join());
   }
 
   Future<void> _loadTerminalKeyUsage() async {
@@ -750,9 +782,17 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _sendTerminalKey('\x02$command');
   }
 
+  void _enableTmuxMouse() {
+    _sendTerminalKey('\x02:set -g mouse on\r');
+    if (mounted) {
+      setState(() => _status = 'tmux mouse enabled for this session.');
+    }
+  }
+
   void _enterTmuxScrollMode() {
     _sendTmuxCommand('[');
     _hideTerminalKeyboard();
+    _tmuxScrollRemainder = 0;
     if (mounted) {
       setState(() {
         _tmuxScrollMode = true;
@@ -763,6 +803,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _exitTmuxScrollMode() {
     _sendTerminalKey('q');
+    _tmuxScrollRemainder = 0;
     if (mounted) {
       setState(() {
         _tmuxScrollMode = false;
@@ -774,6 +815,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _exitTmuxScrollModeWithEsc() {
     _sendTerminalKey('\x1B');
+    _tmuxScrollRemainder = 0;
     if (mounted) {
       setState(() {
         _tmuxScrollMode = false;
@@ -833,6 +875,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   String? _macroTerminalKeySequence(String value) {
     return switch (value) {
       'enter' => '\r',
+      'ctrl_b' => '\x02',
       'ctrl_c' => '\x03',
       'tab' => '\t',
       'esc' => '\x1B',
@@ -1029,18 +1072,21 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           _buildConnectionPanel(theme),
           Expanded(
             child: Listener(
-              onPointerMove: (_) => _collapseTerminalToolsForScroll(),
-              onPointerSignal: (_) => _collapseTerminalToolsForScroll(),
+              onPointerMove: _handleTerminalPointerMove,
+              onPointerSignal: _handleTerminalPointerSignal,
               child: Container(
                 color: Colors.black,
-                child: TerminalView(
-                  _terminal,
-                  controller: _terminalController,
-                  focusNode: _terminalFocusNode,
-                  scrollController: _terminalScrollController,
-                  textStyle: TerminalStyle(fontSize: _terminalFontSize),
-                  autofocus: true,
-                  readOnly: _tmuxScrollMode,
+                child: AbsorbPointer(
+                  absorbing: _tmuxScrollMode,
+                  child: TerminalView(
+                    _terminal,
+                    controller: _terminalController,
+                    focusNode: _terminalFocusNode,
+                    scrollController: _terminalScrollController,
+                    textStyle: TerminalStyle(fontSize: _terminalFontSize),
+                    autofocus: true,
+                    readOnly: _tmuxScrollMode,
+                  ),
                 ),
               ),
             ),
@@ -1668,6 +1714,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
     final items = <_TerminalKeyBarItem>[
       item(
+        'tmux_prefix',
+        () => _terminalKeyButton(
+          'tmux_prefix',
+          'Prefix',
+          () => _sendTmuxCommand('\x02'),
+          tooltip: 'tmux send prefix',
+        ),
+      ),
+      item(
         'tmux_new',
         () => _terminalKeyButton(
           'tmux_new',
@@ -1718,6 +1773,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 _enterTmuxScrollMode,
                 tooltip: 'tmux copy/scroll mode',
               ),
+      ),
+      item(
+        'tmux_mouse',
+        () => _terminalKeyButton(
+          'tmux_mouse',
+          'Mouse',
+          _enableTmuxMouse,
+          tooltip: 'tmux mouse on',
+        ),
       ),
       item(
         'tmux_split_vertical',
