@@ -183,6 +183,10 @@ escaping its configured root. It does not build apps.
 
 Downloads are gzip-compressed and cached under `.devota-cache/`.
 
+Terminal file attachments are stored outside the served repository under
+`~/.devota-cache/terminal-uploads/` by default. Set `DEVOTA_CACHE_DIR` to point
+at a different user-level cache directory.
+
 Project-board data is stored in `.devota-cache/projects/devota-projects.sqlite3`.
 Postmark credentials and relay settings are stored in
 `.devota-cache/projects/email-config.json`, which is intentionally ignored by

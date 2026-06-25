@@ -50,6 +50,7 @@ PUBLIC_KEY_TYPES = {
 TERMINAL_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 TERMINAL_UPLOAD_DEFAULT_NAME = "attachment.bin"
 TERMINAL_UPLOAD_NAME_MAX_CHARS = 120
+DEVOTA_CACHE_DIR_ENV = "DEVOTA_CACHE_DIR"
 PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 PHASE_STATUSES = {"not_started", "active", "waiting_client", "completed"}
 CARD_STATUSES = {"todo", "doing", "waiting_client", "review", "done"}
@@ -232,6 +233,13 @@ def public_app(app: dict[str, Any]) -> dict[str, Any]:
 def gzip_cache_path(repo_root: Path, rel_path: str) -> Path:
     safe = rel_path.replace("/", "__").replace("\\", "__")
     return repo_root / ".devota-cache" / "gzip" / f"{safe}.gz"
+
+
+def user_devota_cache_dir() -> Path:
+    override = os.environ.get(DEVOTA_CACHE_DIR_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / ".devota-cache"
 
 
 def ensure_gz(repo_root: Path, apk_path: Path, rel_path: str) -> Path:
@@ -1866,16 +1874,18 @@ def save_terminal_upload(
     part_content_type = file_part.get_content_type() or "application/octet-stream"
     safe_name = _safe_terminal_upload_name(file_part.get_filename())
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest_dir = repo_root / ".devota-cache" / "terminal-uploads" / time.strftime("%Y-%m-%d")
+    cache_root = user_devota_cache_dir()
+    dest_dir = cache_root / "terminal-uploads" / time.strftime("%Y-%m-%d")
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{stamp}-{uuid.uuid4().hex[:8]}-{safe_name}"
     dest.write_bytes(data)
-    rel = dest.relative_to(repo_root).as_posix()
+    rel = dest.relative_to(cache_root).as_posix()
     payload: dict[str, Any] = {
         "status": "ok",
         "filename": dest.name,
         "bytes": len(data),
         "contentType": part_content_type,
+        "cacheRoot": str(cache_root),
         "relativePath": rel,
         "path": str(dest),
         "terminalText": f"read this file: {dest}",
