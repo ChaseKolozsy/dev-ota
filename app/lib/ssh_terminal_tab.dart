@@ -938,6 +938,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
+  void _prefixComposerText(String text) {
+    final prefix = text.trim();
+    if (prefix.isEmpty) return;
+    final existing = _composerController.text.trimLeft();
+    _composerController.text = existing.isEmpty ? prefix : '$prefix $existing';
+    _composerController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _composerController.text.length),
+    );
+  }
+
   void _submitTextToTerminal(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty || !_connected) return;
@@ -950,6 +960,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final trimmed = command.trim();
     if (trimmed.isEmpty) return;
     widget.onCommandUsed?.call(trimmed);
+    if (_composerController.text.trim().isNotEmpty) {
+      _prefixComposerText(trimmed);
+      setState(() => _status = 'Command prefix inserted.');
+      _focusTerminalInput();
+      return;
+    }
     if (_connected) {
       _submitTextToTerminal(trimmed);
     } else {
