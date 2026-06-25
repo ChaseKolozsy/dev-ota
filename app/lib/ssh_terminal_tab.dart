@@ -82,6 +82,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _terminalToolsVisible = true;
   bool _macroRunning = false;
   double _tmuxScrollRemainder = 0;
+  double _terminalMouseScrollRemainder = 0;
   double _terminalFontSize = _terminalDefaultFontSize;
   Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
@@ -259,13 +260,26 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _handleTerminalPointerMove(PointerMoveEvent event) {
     _collapseTerminalToolsForScroll();
-    if (_tmuxScrollMode) _scrollTmuxCopyMode(-event.delta.dy);
+    _handleTerminalScrollDelta(-event.delta.dy);
   }
 
   void _handleTerminalPointerSignal(PointerSignalEvent event) {
     _collapseTerminalToolsForScroll();
     if (_tmuxScrollMode && event is PointerScrollEvent) {
-      _scrollTmuxCopyMode(event.scrollDelta.dy);
+      _handleTerminalScrollDelta(event.scrollDelta.dy);
+    }
+    if (!_tmuxScrollMode && event is PointerScrollEvent) {
+      _handleTerminalScrollDelta(event.scrollDelta.dy);
+    }
+  }
+
+  void _handleTerminalScrollDelta(double scrollDeltaY) {
+    if (_tmuxScrollMode) {
+      _scrollTmuxCopyMode(scrollDeltaY);
+      return;
+    }
+    if (_terminal.mouseMode.reportScroll) {
+      _scrollTerminalMouseMode(scrollDeltaY);
     }
   }
 
@@ -281,6 +295,35 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _tmuxScrollRemainder -= direction * lines * _tmuxScrollPixelsPerLine;
     final sequence = direction < 0 ? '\x1B[A' : '\x1B[B';
     _writeToSession(List.filled(lines, sequence).join());
+  }
+
+  void _scrollTerminalMouseMode(double scrollDeltaY) {
+    if (!_connected || scrollDeltaY == 0) return;
+    _terminalMouseScrollRemainder += scrollDeltaY;
+    var lines = (_terminalMouseScrollRemainder.abs() / _tmuxScrollPixelsPerLine)
+        .floor();
+    if (lines == 0) return;
+    if (lines > _tmuxScrollMaxLinesPerGesture) {
+      lines = _tmuxScrollMaxLinesPerGesture;
+    }
+    final direction = _terminalMouseScrollRemainder.isNegative ? -1 : 1;
+    _terminalMouseScrollRemainder -=
+        direction * lines * _tmuxScrollPixelsPerLine;
+    final button = direction < 0
+        ? TerminalMouseButton.wheelUp
+        : TerminalMouseButton.wheelDown;
+    final position = CellOffset(
+      (_terminal.viewWidth / 2).floor(),
+      (_terminal.viewHeight / 2).floor(),
+    );
+    for (var i = 0; i < lines; i++) {
+      _terminal.mouseInput(button, TerminalMouseButtonState.down, position);
+    }
+  }
+
+  void _resetTerminalScrollGestures() {
+    _tmuxScrollRemainder = 0;
+    _terminalMouseScrollRemainder = 0;
   }
 
   Future<void> _loadTerminalKeyUsage() async {
@@ -731,6 +774,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _macroRunning = false;
       });
     }
+    _resetTerminalScrollGestures();
     _notifyMacroController();
   }
 
@@ -792,7 +836,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _enterTmuxScrollMode() {
     _sendTmuxCommand('[');
     _hideTerminalKeyboard();
-    _tmuxScrollRemainder = 0;
+    _resetTerminalScrollGestures();
     if (mounted) {
       setState(() {
         _tmuxScrollMode = true;
@@ -803,7 +847,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _exitTmuxScrollMode() {
     _sendTerminalKey('q');
-    _tmuxScrollRemainder = 0;
+    _resetTerminalScrollGestures();
     if (mounted) {
       setState(() {
         _tmuxScrollMode = false;
@@ -815,7 +859,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _exitTmuxScrollModeWithEsc() {
     _sendTerminalKey('\x1B');
-    _tmuxScrollRemainder = 0;
+    _resetTerminalScrollGestures();
     if (mounted) {
       setState(() {
         _tmuxScrollMode = false;
