@@ -62,13 +62,18 @@ void main() {
     );
     expect(
       terminalMacroTmuxOptions.map((option) => option.value),
-      containsAll(['0', '1', '2', '3', '10']),
+      containsAll(['0', '1', '2', '3']),
+    );
+    expect(
+      terminalMacroTmuxOptions.map((option) => option.value),
+      isNot(contains('10')),
     );
   });
 
-  test('numeric tmux macro values select exact windows', () {
-    expect(terminalMacroTmuxSequence('0'), '\x02:select-window -t :0\r');
-    expect(terminalMacroTmuxSequence('10'), '\x02:select-window -t :10\r');
+  test('numeric tmux macro values use direct prefix digit windows', () {
+    expect(terminalMacroTmuxSequence('0'), '\x020');
+    expect(terminalMacroTmuxSequence('9'), '\x029');
+    expect(terminalMacroTmuxSequence('10'), isNull);
     expect(terminalMacroTmuxSequence('n'), '\x02n');
   });
 

@@ -48,7 +48,6 @@ const terminalMacroTmuxOptions = [
   MacroStepOption('7', 'Window 7'),
   MacroStepOption('8', 'Window 8'),
   MacroStepOption('9', 'Window 9'),
-  MacroStepOption('10', 'Window 10'),
   MacroStepOption('c', 'New'),
   MacroStepOption('p', 'Prev'),
   MacroStepOption('n', 'Next'),
@@ -72,8 +71,11 @@ String? terminalMacroTmuxSequence(String value) {
   final trimmed = value.trim();
   if (trimmed.isEmpty) return null;
   final windowIndex = int.tryParse(trimmed);
-  if (windowIndex != null && windowIndex >= 0) {
-    return '\x02:select-window -t :$windowIndex\r';
+  if (windowIndex != null) {
+    if (trimmed.length == 1 && windowIndex >= 0) {
+      return '\x02$trimmed';
+    }
+    return null;
   }
   return '\x02$value';
 }
