@@ -53,9 +53,23 @@ void main() {
       contains('ctrl_b'),
     );
     expect(
+      terminalMacroTerminalKeyOptions.map((option) => option.value),
+      containsAll(['0', '1', '2', '3']),
+    );
+    expect(
       terminalMacroTmuxOptions.map((option) => option.value),
       contains('\x02'),
     );
+    expect(
+      terminalMacroTmuxOptions.map((option) => option.value),
+      containsAll(['0', '1', '2', '3', '10']),
+    );
+  });
+
+  test('numeric tmux macro values select exact windows', () {
+    expect(terminalMacroTmuxSequence('0'), '\x02:select-window -t :0\r');
+    expect(terminalMacroTmuxSequence('10'), '\x02:select-window -t :10\r');
+    expect(terminalMacroTmuxSequence('n'), '\x02n');
   });
 
   test('macro sync snapshot parses server payload', () {

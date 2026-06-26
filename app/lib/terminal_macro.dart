@@ -16,6 +16,16 @@ const terminalMacroTerminalKeyOptions = [
   MacroStepOption('tab', 'Tab'),
   MacroStepOption('esc', 'Esc'),
   MacroStepOption('slash', '/'),
+  MacroStepOption('0', '0'),
+  MacroStepOption('1', '1'),
+  MacroStepOption('2', '2'),
+  MacroStepOption('3', '3'),
+  MacroStepOption('4', '4'),
+  MacroStepOption('5', '5'),
+  MacroStepOption('6', '6'),
+  MacroStepOption('7', '7'),
+  MacroStepOption('8', '8'),
+  MacroStepOption('9', '9'),
   MacroStepOption('home', 'Home'),
   MacroStepOption('end', 'End'),
   MacroStepOption('page_up', 'PgUp'),
@@ -28,6 +38,17 @@ const terminalMacroTerminalKeyOptions = [
 
 const terminalMacroTmuxOptions = [
   MacroStepOption('\x02', 'Prefix'),
+  MacroStepOption('0', 'Window 0'),
+  MacroStepOption('1', 'Window 1'),
+  MacroStepOption('2', 'Window 2'),
+  MacroStepOption('3', 'Window 3'),
+  MacroStepOption('4', 'Window 4'),
+  MacroStepOption('5', 'Window 5'),
+  MacroStepOption('6', 'Window 6'),
+  MacroStepOption('7', 'Window 7'),
+  MacroStepOption('8', 'Window 8'),
+  MacroStepOption('9', 'Window 9'),
+  MacroStepOption('10', 'Window 10'),
   MacroStepOption('c', 'New'),
   MacroStepOption('p', 'Prev'),
   MacroStepOption('n', 'Next'),
@@ -45,6 +66,16 @@ String terminalMacroStepTypeLabel(TerminalMacroStepType type) {
     TerminalMacroStepType.tmux => 'tmux',
     TerminalMacroStepType.wait => 'Wait',
   };
+}
+
+String? terminalMacroTmuxSequence(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return null;
+  final windowIndex = int.tryParse(trimmed);
+  if (windowIndex != null && windowIndex >= 0) {
+    return '\x02:select-window -t :$windowIndex\r';
+  }
+  return '\x02$value';
 }
 
 String defaultTerminalMacroStepValue(TerminalMacroStepType type) {

@@ -982,6 +982,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       'tab' => '\t',
       'esc' => '\x1B',
       'slash' => '/',
+      '0' => '0',
+      '1' => '1',
+      '2' => '2',
+      '3' => '3',
+      '4' => '4',
+      '5' => '5',
+      '6' => '6',
+      '7' => '7',
+      '8' => '8',
+      '9' => '9',
       'home' => '\x1B[H',
       'end' => '\x1B[F',
       'page_up' => '\x1B[5~',
@@ -1025,10 +1035,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             _writeToSession(sequence);
             break;
           case TerminalMacroStepType.tmux:
-            if (step.value.isEmpty) {
+            final sequence = terminalMacroTmuxSequence(step.value);
+            if (sequence == null) {
               throw StateError('Unknown tmux command.');
             }
-            _writeToSession('\x02${step.value}');
+            _writeToSession(sequence);
             break;
           case TerminalMacroStepType.wait:
             break;
