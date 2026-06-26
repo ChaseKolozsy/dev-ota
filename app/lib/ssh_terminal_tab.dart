@@ -977,6 +977,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   String? _macroTerminalKeySequence(String value) {
     return switch (value) {
       'enter' => '\r',
+      'backspace' => '\x7F',
       'ctrl_b' => '\x02',
       'ctrl_c' => '\x03',
       'tab' => '\t',
@@ -1697,7 +1698,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               ),
             ),
             const SizedBox(width: 4),
-            _terminalEnterButton(),
+            _terminalActionKeyColumn(),
           ],
         ),
       ),
@@ -1838,30 +1839,59 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _terminalEnterButton() {
+  Widget _terminalActionKeyColumn() {
+    return SizedBox(
+      width: 30,
+      height: 64,
+      child: Column(
+        children: [
+          _terminalActionKeyButton(
+            'backspace',
+            Icons.backspace_outlined,
+            'Backspace',
+            '\x7F',
+          ),
+          const SizedBox(height: 4),
+          _terminalActionKeyButton(
+            'enter',
+            Icons.keyboard_return,
+            'Enter',
+            '\r',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _terminalActionKeyButton(
+    String usageId,
+    IconData icon,
+    String tooltip,
+    String sequence,
+  ) {
     final enabled = _connected;
     return Tooltip(
-      message: 'Enter',
+      message: tooltip,
       child: Semantics(
         button: true,
-        label: 'Enter',
+        label: tooltip,
         child: SizedBox(
           width: 30,
-          height: 64,
+          height: 30,
           child: OutlinedButton(
             style: OutlinedButton.styleFrom(
               visualDensity: VisualDensity.compact,
-              minimumSize: const Size(30, 64),
+              minimumSize: const Size(30, 30),
               padding: EdgeInsets.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             onPressed: enabled
                 ? () => _activateTerminalKeyButton(
-                    'enter',
-                    () => _sendTerminalKey('\r'),
+                    usageId,
+                    () => _sendTerminalKey(sequence),
                   )
                 : null,
-            child: const Icon(Icons.keyboard_return, size: 18),
+            child: Icon(icon, size: 18),
           ),
         ),
       ),

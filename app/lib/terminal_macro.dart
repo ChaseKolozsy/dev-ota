@@ -11,6 +11,7 @@ class MacroStepOption {
 
 const terminalMacroTerminalKeyOptions = [
   MacroStepOption('enter', 'Enter'),
+  MacroStepOption('backspace', 'Backspace'),
   MacroStepOption('ctrl_b', 'Ctrl-B'),
   MacroStepOption('ctrl_c', 'Ctrl-C'),
   MacroStepOption('tab', 'Tab'),

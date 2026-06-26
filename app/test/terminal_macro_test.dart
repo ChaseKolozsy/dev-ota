@@ -54,7 +54,7 @@ void main() {
     );
     expect(
       terminalMacroTerminalKeyOptions.map((option) => option.value),
-      containsAll(['0', '1', '2', '3']),
+      containsAll(['backspace', '0', '1', '2', '3']),
     );
     expect(
       terminalMacroTmuxOptions.map((option) => option.value),
