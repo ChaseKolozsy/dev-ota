@@ -1,3 +1,4 @@
+import 'package:devota/macro_sync_service.dart';
 import 'package:devota/terminal_macro.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -55,5 +56,32 @@ void main() {
       terminalMacroTmuxOptions.map((option) => option.value),
       contains('\x02'),
     );
+  });
+
+  test('macro sync snapshot parses server payload', () {
+    final snapshot = MacroSyncSnapshot.fromJson({
+      'updatedAt': '2026-06-26T00:00:00Z',
+      'macros': [
+        {
+          'id': 'macro-1',
+          'name': 'hello',
+          'steps': [
+            {
+              'id': 'step-1',
+              'type': 'shell',
+              'value': 'say hello',
+              'delaySeconds': 0.25,
+            },
+          ],
+        },
+      ],
+      'usageCounts': {'macro-1': 2},
+    });
+
+    expect(snapshot.updatedAt, '2026-06-26T00:00:00Z');
+    expect(snapshot.macros, hasLength(1));
+    expect(snapshot.macros.first.name, 'hello');
+    expect(snapshot.usageCounts, {'macro-1': 2});
+    expect(snapshot.toJson()['macros'], isA<List>());
   });
 }

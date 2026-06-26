@@ -158,6 +158,9 @@ escaping its configured root. It does not build apps.
 - `GET /builds`
 - `GET /builds?app=<id>`
 - `GET /latest?app=<id>`
+- `GET/POST /macros`
+- `POST /macros/sync`
+- `PATCH/DELETE /macros/<id>`
 - `GET /github/workflow/runs?repo=<owner/name>&workflow=<file>`
 - `GET /download/<virtual-apk-path>`
 - `POST /github/workflow/run`

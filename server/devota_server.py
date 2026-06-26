@@ -55,6 +55,15 @@ PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 PHASE_STATUSES = {"not_started", "active", "waiting_client", "completed"}
 CARD_STATUSES = {"todo", "doing", "waiting_client", "review", "done"}
 COMMENT_AUTHOR_TYPES = {"me", "client", "system"}
+MACRO_STEP_TYPES = {"shell", "terminalKey", "tmux", "wait"}
+MACRO_STEP_DEFAULT_VALUES = {
+    "shell": "",
+    "terminalKey": "enter",
+    "tmux": "c",
+    "wait": "",
+}
+MACRO_STORE_FORMAT = "devota-terminal-macros"
+MACRO_STORE_VERSION = 1
 DEFAULT_PHASE_TEMPLATE = [
     "Discovery",
     "Design",
@@ -1928,6 +1937,205 @@ def write_profile_backup(repo_root: Path, payload: dict[str, Any]) -> dict[str, 
     }
 
 
+def macros_path(repo_root: Path) -> Path:
+    return repo_root / ".devota-cache" / "macros" / "terminal-macros.json"
+
+
+def new_macro_id(prefix: str) -> str:
+    return f"{prefix}-{int(time.time() * 1_000_000)}-{uuid.uuid4().hex[:8]}"
+
+
+def normalize_macro_step(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("macro step must be an object")
+    step_type = str(raw.get("type") or "shell")
+    if step_type not in MACRO_STEP_TYPES:
+        raise ValueError(f"unsupported macro step type: {step_type}")
+    raw_delay = raw.get("delaySeconds", 0)
+    if isinstance(raw_delay, (int, float)):
+        delay = float(raw_delay)
+    else:
+        delay = float(str(raw_delay or "0"))
+    if delay < 0:
+        delay = 0
+    return {
+        "id": str(raw.get("id") or new_macro_id("step")),
+        "type": step_type,
+        "value": str(raw.get("value") if raw.get("value") is not None else MACRO_STEP_DEFAULT_VALUES[step_type]),
+        "delaySeconds": delay,
+    }
+
+
+def normalize_macro(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("macro must be an object")
+    name = str(raw.get("name") or "Macro").strip()
+    if not name:
+        raise ValueError("macro name is required")
+    steps_raw = raw.get("steps")
+    if not isinstance(steps_raw, list) or not steps_raw:
+        raise ValueError("macro steps must be a non-empty list")
+    return {
+        "id": str(raw.get("id") or new_macro_id("macro")),
+        "name": name,
+        "steps": [normalize_macro_step(step) for step in steps_raw],
+    }
+
+
+def normalize_macro_usage_counts(raw: Any, macro_ids: set[str] | None = None) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in raw.items():
+        macro_id = str(key)
+        if macro_ids is not None and macro_id not in macro_ids:
+            continue
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            count = 0
+        counts[macro_id] = max(0, count)
+    return counts
+
+
+def macro_store_payload(macros: list[dict[str, Any]], usage_counts: dict[str, int]) -> dict[str, Any]:
+    macro_ids = {macro["id"] for macro in macros}
+    return {
+        "format": MACRO_STORE_FORMAT,
+        "version": MACRO_STORE_VERSION,
+        "updatedAt": now_iso(),
+        "macros": macros,
+        "usageCounts": normalize_macro_usage_counts(usage_counts, macro_ids),
+    }
+
+
+def write_macros_store(repo_root: Path, store: dict[str, Any]) -> dict[str, Any]:
+    path = macros_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return store
+
+
+def bootstrap_macros_store(repo_root: Path) -> dict[str, Any]:
+    macros: list[dict[str, Any]] = []
+    usage_counts: dict[str, int] = {}
+    try:
+        backup = read_profile_backup(repo_root)
+        shared = backup.get("sharedPreferences") if isinstance(backup, dict) else None
+        if isinstance(shared, dict):
+            macros_json = shared.get("macros_json")
+            if isinstance(macros_json, str) and macros_json.strip():
+                decoded = json.loads(macros_json)
+                if isinstance(decoded, list):
+                    macros = [normalize_macro(item) for item in decoded]
+            counts_json = shared.get("macro_usage_counts_json")
+            if isinstance(counts_json, str) and counts_json.strip():
+                decoded_counts = json.loads(counts_json)
+                usage_counts = normalize_macro_usage_counts(decoded_counts, {macro["id"] for macro in macros})
+    except FileNotFoundError:
+        pass
+    return write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
+
+
+def read_macros_store(repo_root: Path) -> dict[str, Any]:
+    path = macros_path(repo_root)
+    if not path.is_file():
+        return bootstrap_macros_store(repo_root)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("format") != MACRO_STORE_FORMAT:
+        raise ValueError("saved macros store is invalid")
+    macros_raw = data.get("macros")
+    if not isinstance(macros_raw, list):
+        raise ValueError("saved macros store is missing macros")
+    macros = [normalize_macro(item) for item in macros_raw]
+    usage_counts = normalize_macro_usage_counts(data.get("usageCounts"), {macro["id"] for macro in macros})
+    return {
+        "format": MACRO_STORE_FORMAT,
+        "version": int(data.get("version") or MACRO_STORE_VERSION),
+        "updatedAt": str(data.get("updatedAt") or ""),
+        "macros": macros,
+        "usageCounts": usage_counts,
+    }
+
+
+def public_macros_store(store: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "version": store.get("version", MACRO_STORE_VERSION),
+        "updatedAt": store.get("updatedAt", ""),
+        "macros": store.get("macros", []),
+        "usageCounts": store.get("usageCounts", {}),
+    }
+
+
+def list_macros(repo_root: Path) -> dict[str, Any]:
+    return public_macros_store(read_macros_store(repo_root))
+
+
+def create_macro(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    store = read_macros_store(repo_root)
+    raw_macro = payload.get("macro") if isinstance(payload.get("macro"), dict) else payload
+    macro = normalize_macro(raw_macro)
+    existing_ids = {item["id"] for item in store["macros"]}
+    if macro["id"] in existing_ids:
+        macro["id"] = new_macro_id("macro")
+        macro["steps"] = [
+            {**step, "id": step["id"] or new_macro_id("step")}
+            for step in macro["steps"]
+        ]
+    macros = [*store["macros"], macro]
+    next_store = write_macros_store(repo_root, macro_store_payload(macros, store.get("usageCounts", {})))
+    return {"status": "ok", "item": macro, "macros": next_store["macros"], "usageCounts": next_store["usageCounts"]}
+
+
+def sync_macros(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    macros_raw = payload.get("macros")
+    if not isinstance(macros_raw, list):
+        raise ValueError("macros must be a list")
+    macros = [normalize_macro(item) for item in macros_raw]
+    usage_counts = normalize_macro_usage_counts(payload.get("usageCounts"), {macro["id"] for macro in macros})
+    store = write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
+    return public_macros_store(store)
+
+
+def update_macro(repo_root: Path, macro_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    store = read_macros_store(repo_root)
+    raw_update = payload.get("macro") if isinstance(payload.get("macro"), dict) else payload
+    if not isinstance(raw_update, dict):
+        raise ValueError("macro update must be an object")
+    updated_item = None
+    macros = []
+    for macro in store["macros"]:
+        if macro["id"] != macro_id:
+            macros.append(macro)
+            continue
+        merged = dict(macro)
+        if "name" in raw_update:
+            merged["name"] = raw_update.get("name")
+        if "steps" in raw_update:
+            merged["steps"] = raw_update.get("steps")
+        merged["id"] = macro_id
+        updated_item = normalize_macro(merged)
+        macros.append(updated_item)
+    if updated_item is None:
+        raise FileNotFoundError("macro not found")
+    next_store = write_macros_store(repo_root, macro_store_payload(macros, store.get("usageCounts", {})))
+    return {"status": "ok", "item": updated_item, "macros": next_store["macros"], "usageCounts": next_store["usageCounts"]}
+
+
+def delete_macro(repo_root: Path, macro_id: str) -> dict[str, Any]:
+    store = read_macros_store(repo_root)
+    macros = [macro for macro in store["macros"] if macro["id"] != macro_id]
+    if len(macros) == len(store["macros"]):
+        raise FileNotFoundError("macro not found")
+    usage_counts = dict(store.get("usageCounts", {}))
+    usage_counts.pop(macro_id, None)
+    next_store = write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
+    return {"status": "ok", "deletedId": macro_id, "macros": next_store["macros"], "usageCounts": next_store["usageCounts"]}
+
+
 def validate_github_repo(repo: str) -> str:
     value = repo.strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
@@ -2118,6 +2326,15 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
 
         def do_POST(self):
             path = unquote(urlparse(self.path).path)
+            if path == "/macros" or path == "/macros/sync":
+                try:
+                    payload = parse_json_request(self, max_bytes=512 * 1024)
+                    result = sync_macros(repo_root, payload) if path == "/macros/sync" else create_macro(repo_root, payload)
+                    self.send_json(result)
+                except Exception as exc:
+                    self.send_error(400, f"Macros request failed: {exc}")
+                return
+
             if path.startswith("/projects"):
                 try:
                     payload = parse_json_request(self, max_bytes=2 * 1024 * 1024)
@@ -2238,6 +2455,17 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
 
         def do_PATCH(self):
             path = unquote(urlparse(self.path).path)
+            match = re.fullmatch(r"/macros/([^/]+)", path)
+            if match:
+                try:
+                    payload = parse_json_request(self, max_bytes=512 * 1024)
+                    self.send_json(update_macro(repo_root, match.group(1), payload))
+                except FileNotFoundError as exc:
+                    self.send_error(404, str(exc))
+                except Exception as exc:
+                    self.send_error(400, f"Macros update failed: {exc}")
+                return
+
             if path.startswith("/projects"):
                 try:
                     payload = parse_json_request(self, max_bytes=2 * 1024 * 1024)
@@ -2249,13 +2477,26 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 return
             self.send_error(404, "Not found. Use /projects endpoints")
 
+        def do_DELETE(self):
+            path = unquote(urlparse(self.path).path)
+            match = re.fullmatch(r"/macros/([^/]+)", path)
+            if match:
+                try:
+                    self.send_json(delete_macro(repo_root, match.group(1)))
+                except FileNotFoundError as exc:
+                    self.send_error(404, str(exc))
+                except Exception as exc:
+                    self.send_error(400, f"Macros delete failed: {exc}")
+                return
+            self.send_error(404, "Not found. Use /macros/<id>")
+
         def do_HEAD(self):
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):], head_only=True)
                 return
-            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile"):
+            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile", "/macros"):
                 self.do_GET()
                 return
             self.send_error(404, "Not found")
@@ -2276,6 +2517,13 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
 
             if path == "/apps":
                 self.send_json(self.apps_payload())
+                return
+
+            if path == "/macros":
+                try:
+                    self.send_json(list_macros(repo_root))
+                except Exception as exc:
+                    self.send_error(500, f"Macros read failed: {exc}")
                 return
 
             if path == "/builds":

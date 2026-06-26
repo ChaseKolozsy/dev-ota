@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
+import 'macro_sync_service.dart';
 import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
 import 'ssh_terminal_tab.dart';
@@ -36,6 +37,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   static const MethodChannel _controlAgentChannel = MethodChannel(
     'io.github.chasekolozsy.devota/control_agent',
   );
+  static const int _macrosTabIndex = 5;
   late final TabController _tabController;
   List<String> _servers = [];
   String _activeServer = _defaultServerUrl;
@@ -69,6 +71,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   Map<String, int> _commandUseCounts = {};
   List<TerminalMacro> _macros = [];
   Map<String, int> _macroUseCounts = {};
+  bool _macrosSyncing = false;
   final _macroController = TerminalMacroController();
   final _commandController = TextEditingController();
   final _agentUrlController = TextEditingController();
@@ -136,6 +139,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     if (state == AppLifecycleState.resumed) {
       _refreshCachedApks();
       _refreshInstalledPackages();
+      unawaited(_syncMacrosFromServerSilently());
     }
   }
 
@@ -144,6 +148,10 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   void _onTabControllerChanged() {
+    if (_tabController.index == _macrosTabIndex &&
+        !_tabController.indexIsChanging) {
+      unawaited(_syncMacrosFromServerSilently());
+    }
     if (mounted) setState(() {});
   }
 
@@ -452,7 +460,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     }
   }
 
-  Future<void> _saveMacros() async {
+  Future<void> _saveMacros({bool syncServer = true}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       'macros_json',
@@ -463,6 +471,44 @@ class _BuildListScreenState extends State<BuildListScreen>
       jsonEncode(_macroUseCounts),
     );
     _scheduleServerBackup();
+    if (syncServer) unawaited(_pushMacrosToServerSilently());
+  }
+
+  Future<void> _pushMacrosToServerSilently() async {
+    try {
+      await MacroSyncService.sync(
+        _dio,
+        _baseUrl,
+        macros: _macros,
+        usageCounts: _macroUseCounts,
+      );
+    } catch (_) {
+      // Macro sync is opportunistic; local editing should keep working offline.
+    }
+  }
+
+  Future<void> _syncMacrosFromServerSilently() async {
+    if (_macrosSyncing) return;
+    final server = _baseUrl;
+    if (server.isEmpty) return;
+    _macrosSyncing = true;
+    try {
+      final snapshot = await MacroSyncService.fetch(_dio, server);
+      if (snapshot == null) {
+        await _pushMacrosToServerSilently();
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _macros = snapshot.macros;
+        _macroUseCounts = snapshot.usageCounts;
+      });
+      await _saveMacros(syncServer: false);
+    } catch (_) {
+      // A missing or unreachable build server must not block local macros.
+    } finally {
+      _macrosSyncing = false;
+    }
   }
 
   List<TerminalMacro> get _rankedMacros {
@@ -975,6 +1021,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     await _saveServers();
     _fetchBuilds();
     _restoreBackupFromServerIfEmpty();
+    unawaited(_syncMacrosFromServerSilently());
   }
 
   Future<void> _saveServers() async {
@@ -990,6 +1037,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     _saveServers();
     _fetchBuilds();
     _restoreBackupFromServerIfEmpty();
+    unawaited(_syncMacrosFromServerSilently());
   }
 
   void _addAndSelectServer(String url) {
@@ -1002,6 +1050,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     _saveServers();
     _fetchBuilds();
     _restoreBackupFromServerIfEmpty();
+    unawaited(_syncMacrosFromServerSilently());
   }
 
   Future<void> _showManageServersDialog() async {
@@ -1028,6 +1077,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       if (_activeServer != originalActive) {
         _fetchBuilds();
         _restoreBackupFromServerIfEmpty();
+        unawaited(_syncMacrosFromServerSilently());
       }
     });
   }

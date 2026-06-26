@@ -1,12 +1,31 @@
 version: 1
+roots:
+  cradlespeak: /home/chase/Cradlespeak
+  devota: /home/chase/dev-ota
+  perfect-drivers-club: /home/chase/perfect-drivers-club
 apps:
+  - id: cradlespeak
+    root: cradlespeak
+    label: Cradlespeak
+    packageName: io.github.chasekolozsy.cradlespeak
+    notes: Cradlespeak Android app.
+    buildDirs:
+      - app/build/app/outputs/flutter-apk
   - id: devota
+    root: devota
     label: DevOTA
     packageName: io.github.chasekolozsy.devota
-    notes: The DevOTA Android app itself.
+    notes: DevOTA Android development server and terminal app.
     buildDirs:
       - app/dist/public
     build:
       workingDir: app
       commands:
         debug: ../scripts/build/devota-public-debug.sh
+  - id: perfect-drivers-club
+    root: perfect-drivers-club
+    label: Perfect Driver's Club
+    packageName: com.perfectdriversclub
+    notes: Driving companion relationship feedback app.
+    buildDirs:
+      - app/build/outputs/apk/debug

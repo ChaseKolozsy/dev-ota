@@ -34,6 +34,13 @@ const uiSelectorSchema = z.object({
   visibleOnly: z.boolean().default(true),
 });
 
+const macroStepSchema = z.object({
+  id: z.string().optional(),
+  type: z.enum(["shell", "terminalKey", "tmux", "wait"]).default("shell"),
+  value: z.string().default(""),
+  delaySeconds: z.number().min(0).default(0),
+});
+
 class PhoneRelay {
   constructor() {
     this.socket = null;
@@ -168,7 +175,7 @@ function imageResult(base64, details) {
 
 function requireBuildServerUrl() {
   if (!buildServerUrl) {
-    throw new Error("DEVOTA_BUILD_SERVER_URL is required for DevOTA project tools");
+    throw new Error("DEVOTA_BUILD_SERVER_URL is required for DevOTA build-server tools");
   }
   return buildServerUrl;
 }
@@ -726,6 +733,73 @@ server.registerTool(
     },
   },
   async ({ appId }) => textResult(await scanBuilds(appId)),
+);
+
+server.registerTool(
+  "devota_macros_list",
+  {
+    title: "List DevOTA Macros",
+    description: "Return terminal macros saved on the DevOTA build server.",
+  },
+  async () => textResult(await buildServerJson("/macros")),
+);
+
+server.registerTool(
+  "devota_macros_create",
+  {
+    title: "Create DevOTA Macro",
+    description: "Create a terminal macro for the DevOTA Macros tab.",
+    inputSchema: {
+      name: z.string(),
+      steps: z.array(macroStepSchema).min(1),
+    },
+  },
+  async ({ name, steps }) => textResult(
+    await buildServerJson("/macros", {
+      method: "POST",
+      data: { name, steps },
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_macros_update",
+  {
+    title: "Update DevOTA Macro",
+    description: "Update the name and/or steps of an existing DevOTA terminal macro.",
+    inputSchema: {
+      id: z.string(),
+      name: z.string().optional(),
+      steps: z.array(macroStepSchema).min(1).optional(),
+    },
+  },
+  async ({ id, name, steps }) => {
+    const data = {};
+    if (name !== undefined) data.name = name;
+    if (steps !== undefined) data.steps = steps;
+    return textResult(
+      await buildServerJson(`/macros/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        data,
+      }),
+    );
+  },
+);
+
+server.registerTool(
+  "devota_macros_delete",
+  {
+    title: "Delete DevOTA Macro",
+    description: "Delete a DevOTA terminal macro by id.",
+    inputSchema: {
+      id: z.string(),
+    },
+  },
+  async ({ id }) => textResult(
+    await buildServerJson(`/macros/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  ),
 );
 
 server.registerTool(
