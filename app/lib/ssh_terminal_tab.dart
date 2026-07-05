@@ -55,6 +55,285 @@ class _ToolBar {
   final Widget Function() buildContent;
 }
 
+/// Editor for a custom control-pad key. A dedicated StatefulWidget (rather than
+/// a StatefulBuilder inside a helper) so its text controllers live and die with
+/// the dialog's own element — disposing them right after `await showDialog`
+/// tears them down mid-exit-animation and cascades into framework assertions.
+class _CustomPadKeyDialog extends StatefulWidget {
+  const _CustomPadKeyDialog({this.existing, required this.newId});
+
+  final TerminalPadKey? existing;
+  final String newId;
+
+  static Future<({TerminalPadKey? saved, bool deleted})?> show(
+    BuildContext context, {
+    TerminalPadKey? existing,
+    required String newId,
+  }) {
+    return showDialog<({TerminalPadKey? saved, bool deleted})>(
+      context: context,
+      builder: (_) => _CustomPadKeyDialog(existing: existing, newId: newId),
+    );
+  }
+
+  @override
+  State<_CustomPadKeyDialog> createState() => _CustomPadKeyDialogState();
+}
+
+class _CustomPadKeyDialogState extends State<_CustomPadKeyDialog> {
+  late final TextEditingController _abbrev;
+  late final TextEditingController _name;
+  late final TextEditingController _spec;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _abbrev = TextEditingController(text: existing?.abbreviation ?? '');
+    _name = TextEditingController(text: existing?.name ?? '');
+    _spec = TextEditingController(
+      text: (existing?.spec.isNotEmpty ?? false)
+          ? existing!.spec
+          : (existing?.sequence ?? ''),
+    );
+  }
+
+  @override
+  void dispose() {
+    _abbrev.dispose();
+    _name.dispose();
+    _spec.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final existing = widget.existing;
+    final abbrev = _abbrev.text.trim();
+    final tooLong = abbrev.length >= 5;
+    final specText = _spec.text.trim();
+    final specResult = specText.isEmpty ? null : resolveKeySpec(specText);
+    final specValid = specResult?.ok ?? false;
+    final canSave = abbrev.isNotEmpty && specValid;
+    return AlertDialog(
+      title: Text(existing == null ? 'New button' : 'Edit button'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _abbrev,
+              maxLength: 8,
+              decoration: InputDecoration(
+                labelText: 'Abbreviation (shown on the button)',
+                counterText: '',
+                helperText: tooLong
+                    ? 'Long abbreviations widen the button — '
+                          '$kRecommendedAbbrevMax characters or fewer is '
+                          'recommended'
+                    : 'Recommended: $kRecommendedAbbrevMax characters or fewer',
+                helperMaxLines: 2,
+                helperStyle: tooLong
+                    ? TextStyle(color: theme.colorScheme.error)
+                    : null,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Name (tooltip)'),
+            ),
+            TextField(
+              controller: _spec,
+              decoration: const InputDecoration(
+                labelText: 'Key(s) to send',
+                helperText: 'e.g. Ctrl-C · Home · Ctrl-End · F5 · Shift-Tab',
+                helperMaxLines: 2,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 6),
+            if (specResult != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      specValid
+                          ? Icons.check_circle_outline
+                          : Icons.error_outline,
+                      size: 16,
+                      color: specValid
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.error,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        specValid
+                            ? 'Sends: ${specResult.description}'
+                            : specResult.error!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: specValid
+                              ? theme.colorScheme.onSurfaceVariant
+                              : theme.colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  for (final example in const [
+                    'Ctrl-C',
+                    'Ctrl-Z',
+                    'Home',
+                    'Ctrl-End',
+                  ])
+                    ActionChip(
+                      label: Text(example),
+                      onPressed: () {
+                        _spec.text = example;
+                        setState(() {});
+                      },
+                    ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.help_outline, size: 18),
+                    label: const Text('Legend'),
+                    onPressed: () => showTerminalKeyLegend(context),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (existing != null)
+          TextButton(
+            onPressed: () => Navigator.pop(context, (saved: null, deleted: true)),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: canSave
+              ? () {
+                  final name = _name.text.trim();
+                  Navigator.pop(context, (
+                    saved: TerminalPadKey(
+                      id: existing?.id ?? widget.newId,
+                      abbreviation: abbrev,
+                      name: name.isEmpty ? abbrev : name,
+                      sequence: specResult!.sequence!,
+                      spec: specText,
+                    ),
+                    deleted: false,
+                  ));
+                }
+              : null,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shows the reference of valid key names, modifiers, and examples that the
+/// custom-key editor accepts.
+Future<void> showTerminalKeyLegend(BuildContext context) {
+  final theme = Theme.of(context);
+  Widget section(String title, String body) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.textTheme.titleSmall),
+          const SizedBox(height: 3),
+          Text(
+            body,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontFamily: 'monospace',
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Key reference'),
+      content: SizedBox(
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              section(
+                'Modifiers',
+                'Ctrl-   (also C-, ^)\n'
+                    'Alt-    (also M-)\n'
+                    'Shift-  (also S-)\n'
+                    'Combine: Ctrl-Shift-End',
+              ),
+              section(
+                'Named keys',
+                'Tab  Esc  Enter  Backspace\n'
+                    'Space  Del  Ins\n'
+                    'Home  End  PgUp  PgDn\n'
+                    'Up  Down  Left  Right\n'
+                    'F1 … F12',
+              ),
+              section(
+                'Letters & symbols',
+                'Any letter or digit, e.g. Ctrl-C, Alt-x.\n'
+                    r'Ctrl also works with  @ [ \ ] ^ _ ?',
+              ),
+              section(
+                'Examples',
+                'Ctrl-C    interrupt\n'
+                    'Ctrl-Z    suspend\n'
+                    'Ctrl-End  jump to end\n'
+                    'Shift-Tab back-tab\n'
+                    'F5        refresh',
+              ),
+              section(
+                'Advanced',
+                'Literal text:  "ls -la"\n'
+                    r'Raw bytes:     \xNN  \t  \r  \e',
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+}
+
 class SshTerminalTab extends StatefulWidget {
   const SshTerminalTab({
     super.key,
@@ -1523,8 +1802,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                           label: const Text('Key'),
                           selected: _usePrivateKey,
                           onSelected: (v) {
-                            setState(() => _usePrivateKey = v);
-                            setSheetState(() {});
+                            // Drive the sheet only; the parent repaints once the
+                            // sheet closes (avoids a cross-tree setState during
+                            // teardown — see _showControlPadSettingsSheet).
+                            setSheetState(() => _usePrivateKey = v);
                             _saveProfile();
                           },
                         ),
@@ -2068,8 +2349,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             void applyConfig(void Function() mutate) {
-              setState(mutate);
-              setSheetState(() {});
+              // Rebuild ONLY the sheet here. Calling the parent State's
+              // setState while a nested route (the custom-key editor dialog or
+              // the "Add" popup menu) is dismounting deactivates an
+              // InheritedElement that the closing route still depends on, which
+              // trips Flutter's `_dependents.isEmpty` assertion. The live pad
+              // behind the sheet is refreshed once, after the sheet closes.
+              setSheetState(mutate);
               unawaited(_saveTerminalPadConfig());
             }
 
@@ -2124,6 +2410,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         );
       },
     );
+    // The sheet edited _padConfig in place; repaint the live control pad now
+    // that the sheet (and any nested dialogs) are fully gone.
+    if (mounted) setState(() {});
   }
 
   Widget _buildPadRowSettings(
@@ -2351,131 +2640,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Future<({TerminalPadKey? saved, bool deleted})?> _showCustomPadKeyEditor({
     TerminalPadKey? existing,
-  }) async {
-    final theme = Theme.of(context);
-    final abbrevController = TextEditingController(
-      text: existing?.abbreviation ?? '',
+  }) {
+    // Delegate to a dedicated StatefulWidget dialog that owns its text
+    // controllers and disposes them in its own dispose() — disposing them here
+    // (right after the await) tears them down while the dialog is still
+    // animating out, which throws and cascades into framework assertions.
+    return _CustomPadKeyDialog.show(
+      context,
+      existing: existing,
+      newId: _nextCustomKeyId(),
     );
-    final nameController = TextEditingController(text: existing?.name ?? '');
-    final sequenceController = TextEditingController(
-      text: existing?.sequence ?? '',
-    );
-    final result = await showDialog<({TerminalPadKey? saved, bool deleted})>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            final abbrev = abbrevController.text.trim();
-            final tooLong = abbrev.length >= 5;
-            final canSave =
-                abbrev.isNotEmpty && sequenceController.text.isNotEmpty;
-            return AlertDialog(
-              title: Text(existing == null ? 'New button' : 'Edit button'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: abbrevController,
-                      maxLength: 8,
-                      decoration: InputDecoration(
-                        labelText: 'Abbreviation (shown on the button)',
-                        counterText: '',
-                        helperText: tooLong
-                            ? 'Long abbreviations widen the button — '
-                                  '$kRecommendedAbbrevMax characters or fewer '
-                                  'is recommended'
-                            : 'Recommended: $kRecommendedAbbrevMax characters '
-                                  'or fewer',
-                        helperMaxLines: 2,
-                        helperStyle: tooLong
-                            ? TextStyle(color: theme.colorScheme.error)
-                            : null,
-                      ),
-                      onChanged: (_) => setDialogState(() {}),
-                    ),
-                    TextField(
-                      controller: nameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Name (tooltip)',
-                      ),
-                    ),
-                    TextField(
-                      controller: sequenceController,
-                      decoration: const InputDecoration(
-                        labelText: 'Keys to send',
-                        helperText: r'Supports \t \r \e \xNN — '
-                            r'e.g. \x1a sends Ctrl-Z',
-                        helperMaxLines: 2,
-                      ),
-                      onChanged: (_) => setDialogState(() {}),
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Wrap(
-                        spacing: 6,
-                        children: [
-                          for (final quick in const [
-                            ('Esc', r'\e'),
-                            ('Tab', r'\t'),
-                            ('Enter', r'\r'),
-                          ])
-                            ActionChip(
-                              label: Text(quick.$1),
-                              onPressed: () {
-                                sequenceController.text += quick.$2;
-                                setDialogState(() {});
-                              },
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                if (existing != null)
-                  TextButton(
-                    onPressed: () =>
-                        Navigator.pop(ctx, (saved: null, deleted: true)),
-                    child: Text(
-                      'Delete',
-                      style: TextStyle(color: theme.colorScheme.error),
-                    ),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, null),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: canSave
-                      ? () {
-                          final id = existing?.id ?? _nextCustomKeyId();
-                          final name = nameController.text.trim();
-                          Navigator.pop(ctx, (
-                            saved: TerminalPadKey(
-                              id: id,
-                              abbreviation: abbrev,
-                              name: name.isEmpty ? abbrev : name,
-                              sequence: sequenceController.text,
-                            ),
-                            deleted: false,
-                          ));
-                        }
-                      : null,
-                  child: const Text('Save'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    abbrevController.dispose();
-    nameController.dispose();
-    sequenceController.dispose();
-    return result;
   }
 
   void _toggleBarFold(String id) {

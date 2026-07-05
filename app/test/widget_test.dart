@@ -113,4 +113,51 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.widgetWithText(OutlinedButton, 'plan'), findsOneWidget);
   });
+
+  testWidgets('adding a custom control-pad key does not crash', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 700,
+            child: SshTerminalTab(
+              dio: Dio(),
+              serverUrl: 'http://127.0.0.1:8082',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Open the customization sheet, then the "Add" menu on the top row.
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add button').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom…').last);
+    await tester.pumpAndSettle();
+
+    // Enter a human-friendly key spec; the editor resolves it live.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Abbreviation (shown on the button)'),
+      'C-z',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Key(s) to send'),
+      'Ctrl-Z',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Sends: Ctrl-Z'), findsOneWidget);
+
+    // Saving previously tripped the `_dependents.isEmpty` assertion.
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('C-z'), findsWidgets);
+  });
 }
