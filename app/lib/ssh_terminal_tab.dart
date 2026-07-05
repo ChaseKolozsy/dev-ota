@@ -399,6 +399,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   TerminalPadConfig _padConfig = TerminalPadConfig.defaults();
   double _tmuxScrollRemainder = 0;
   double _terminalMouseScrollRemainder = 0;
+  Offset? _terminalPressDownPosition;
+  bool _terminalPressMoved = false;
   double _terminalFontSize = _terminalDefaultFontSize;
   Map<String, int> _terminalKeyUseCounts = {};
   String? _status;
@@ -623,9 +625,29 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _hideTerminalKeyboard();
   }
 
+  void _handleTerminalPointerDown(PointerDownEvent event) {
+    _terminalPressDownPosition = event.position;
+    _terminalPressMoved = false;
+  }
+
   void _handleTerminalPointerMove(PointerMoveEvent event) {
+    final down = _terminalPressDownPosition;
+    if (down != null && (event.position - down).distance > 12) {
+      _terminalPressMoved = true;
+    }
     _collapseTerminalToolsForScroll();
     _handleTerminalScrollDelta(-event.delta.dy);
+  }
+
+  void _handleTerminalPointerUp(PointerUpEvent event) {
+    final wasTap = !_terminalPressMoved;
+    _terminalPressDownPosition = null;
+    if (!wasTap || !_connected || _tmuxScrollMode) return;
+    if (_terminalFocusNode.hasFocus) return;
+    // A tap on the terminal while the composer holds focus: dismiss the
+    // composer's keyboard, then hand focus to the terminal so it takes over on
+    // a single tap (instead of the manual close-keyboard-then-tap dance).
+    _focusTerminalInput(dismissKeyboardFirst: true);
   }
 
   void _handleTerminalPointerSignal(PointerSignalEvent event) {
@@ -1148,8 +1170,17 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _session?.write(Uint8List.fromList(utf8.encode(text)));
   }
 
-  void _focusTerminalInput() {
+  void _focusTerminalInput({bool dismissKeyboardFirst = false}) {
     _composerFocusNode.unfocus();
+    if (dismissKeyboardFirst) {
+      // Fully close the composer's keyboard connection before re-acquiring it
+      // for the terminal; without this reset the focus change can stick on the
+      // composer (the bug this fixes). The terminal re-opens it on the frames
+      // below.
+      unawaited(
+        SystemChannels.textInput.invokeMethod<void>('TextInput.hide'),
+      );
+    }
     void requestTerminalFocus() {
       if (!mounted || !_connected || _tmuxScrollMode) return;
       FocusScope.of(context).requestFocus(_terminalFocusNode);
@@ -1161,7 +1192,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       );
     }
 
-    requestTerminalFocus();
+    // When dismissing first, let the IME settle for a frame before re-focusing
+    // so the hide isn't cancelled by an immediate show.
+    if (!dismissKeyboardFirst) requestTerminalFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       requestTerminalFocus();
     });
@@ -1513,7 +1546,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           _buildConnectionPanel(theme),
           Expanded(
             child: Listener(
+              onPointerDown: _handleTerminalPointerDown,
               onPointerMove: _handleTerminalPointerMove,
+              onPointerUp: _handleTerminalPointerUp,
               onPointerSignal: _handleTerminalPointerSignal,
               child: Container(
                 color: Colors.black,
