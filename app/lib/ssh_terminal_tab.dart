@@ -86,6 +86,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _terminalToolsVisible = true;
   bool _nativeKeyboardLocked = false;
   bool _macroRunning = false;
+  bool _tmuxBarEnabled = true;
+  bool _macroBarEnabled = true;
+  bool _commandBarEnabled = true;
   double _tmuxScrollRemainder = 0;
   double _terminalMouseScrollRemainder = 0;
   double _terminalFontSize = _terminalDefaultFontSize;
@@ -2018,26 +2021,53 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       color: theme.colorScheme.surfaceContainerHighest,
       child: SizedBox(
         height: 40,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _terminalKeyGroupLabel(theme, 'tmux'),
-            for (final item in items) item.build(),
+            _terminalKeyGroupLabel(
+              theme,
+              'tmux',
+              enabled: _tmuxBarEnabled,
+              onToggle: () =>
+                  setState(() => _tmuxBarEnabled = !_tmuxBarEnabled),
+            ),
+            Expanded(
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                children: [for (final item in items) item.build()],
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _terminalKeyGroupLabel(ThemeData theme, String label) {
-    return Center(
+  // Pinned, tappable group label for a terminal tools row. Stays fixed on the
+  // left while the buttons scroll horizontally; tapping it enables or disables
+  // the row's buttons without affecting scrolling.
+  Widget _terminalKeyGroupLabel(
+    ThemeData theme,
+    String label, {
+    required bool enabled,
+    required VoidCallback onToggle,
+  }) {
+    final color = enabled
+        ? theme.colorScheme.onSurfaceVariant
+        : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4);
+    return InkWell(
+      onTap: onToggle,
       child: Padding(
-        padding: const EdgeInsets.only(left: 4, right: 10),
-        child: Text(
-          label,
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+        padding: const EdgeInsets.only(left: 8, right: 10),
+        child: Center(
+          child: Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: color,
+              fontWeight: enabled ? FontWeight.w600 : FontWeight.normal,
+              decoration: enabled ? null : TextDecoration.lineThrough,
+            ),
           ),
         ),
       ),
@@ -2049,13 +2079,26 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       color: theme.colorScheme.surfaceContainerLow,
       child: SizedBox(
         height: 40,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _terminalKeyGroupLabel(theme, 'cmds'),
-            for (final command in widget.quickCommands)
-              _terminalCommandButton(command),
+            _terminalKeyGroupLabel(
+              theme,
+              'cmds',
+              enabled: _commandBarEnabled,
+              onToggle: () =>
+                  setState(() => _commandBarEnabled = !_commandBarEnabled),
+            ),
+            Expanded(
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                children: [
+                  for (final command in widget.quickCommands)
+                    _terminalCommandButton(command),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -2067,12 +2110,26 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       color: theme.colorScheme.surfaceContainerLow,
       child: SizedBox(
         height: 40,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _terminalKeyGroupLabel(theme, 'macros'),
-            for (final macro in widget.quickMacros) _terminalMacroButton(macro),
+            _terminalKeyGroupLabel(
+              theme,
+              'macros',
+              enabled: _macroBarEnabled,
+              onToggle: () =>
+                  setState(() => _macroBarEnabled = !_macroBarEnabled),
+            ),
+            Expanded(
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                children: [
+                  for (final macro in widget.quickMacros)
+                    _terminalMacroButton(macro),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -2080,7 +2137,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _terminalMacroButton(TerminalMacro macro) {
-    final enabled = _connected && !_macroRunning;
+    final enabled = _connected && !_macroRunning && _macroBarEnabled;
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: Tooltip(
@@ -2131,7 +2188,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             icon: const Icon(Icons.keyboard_return, size: 16),
-            onPressed: () => _runSavedCommand(command),
+            onPressed: _commandBarEnabled
+                ? () => _runSavedCommand(command)
+                : null,
             label: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
               child: Text(
@@ -2154,7 +2213,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     String? tooltip,
     bool enabledWhenDisconnected = false,
   }) {
-    final enabled = _connected || enabledWhenDisconnected;
+    final enabled = (_connected || enabledWhenDisconnected) && _tmuxBarEnabled;
     final button = SizedBox(
       height: 32,
       child: OutlinedButton(
