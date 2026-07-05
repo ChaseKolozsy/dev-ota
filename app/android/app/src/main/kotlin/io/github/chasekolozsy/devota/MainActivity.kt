@@ -20,6 +20,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.net.Inet4Address
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -95,6 +97,15 @@ class MainActivity : FlutterActivity() {
                     }
                     saveToDownloads(filename, sourcePath, mimeType, result)
                 }
+                "extractZipToDownloads" -> {
+                    val zipPath = call.argument<String>("zipPath")?.trim().orEmpty()
+                    val topName = call.argument<String>("topName")?.trim().orEmpty()
+                    if (zipPath.isEmpty() || topName.isEmpty()) {
+                        result.error("bad_args", "zipPath and topName are required", null)
+                        return@setMethodCallHandler
+                    }
+                    extractZipToDownloads(zipPath, topName, result)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -167,6 +178,144 @@ class MainActivity : FlutterActivity() {
                 mainHandler.post { result.error("save_failed", e.message, null) }
             }
         }.start()
+    }
+
+    private fun sanitizeFolderName(name: String): String {
+        val base = name.substringAfterLast('/').substringAfterLast('\\').trim()
+        val cleaned = base.replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-', '.')
+        return if (cleaned.isEmpty()) "download" else cleaned
+    }
+
+    private fun guessMimeForName(name: String): String {
+        return when (name.substringAfterLast('.', "").lowercase()) {
+            "txt", "md", "log", "csv" -> "text/plain"
+            "json" -> "application/json"
+            "xml" -> "application/xml"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "svg" -> "image/svg+xml"
+            "pdf" -> "application/pdf"
+            "zip" -> "application/zip"
+            "html", "htm" -> "text/html"
+            "mp3" -> "audio/mpeg"
+            "mp4" -> "video/mp4"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun extractZipToDownloads(
+        zipPath: String,
+        topName: String,
+        result: MethodChannel.Result,
+    ) {
+        val mainHandler = Handler(Looper.getMainLooper())
+        Thread {
+            try {
+                ZipFile(zipPath).use { zf ->
+                    val entries = zf.entries().toList().filter { !it.isDirectory }
+                    if (entries.isEmpty()) {
+                        throw IllegalArgumentException("archive has no files")
+                    }
+                    val names = entries.map { it.name.replace('\\', '/') }
+                    for (n in names) {
+                        if (n.split('/').any { it == ".." }) {
+                            throw IllegalArgumentException("unsafe path in archive: $n")
+                        }
+                    }
+
+                    // Common-root detection: if every entry shares the same first
+                    // path segment, use it as the folder and strip it; otherwise
+                    // wrap everything under the caller-supplied topName so loose
+                    // files never land directly in Downloads.
+                    val firstSegs = names.map { it.substringBefore('/') }.toSet()
+                    val hasCommonRoot = firstSegs.size == 1 &&
+                        firstSegs.first().isNotEmpty() &&
+                        names.all { it.contains('/') }
+                    val folderName = sanitizeFolderName(
+                        if (hasCommonRoot) firstSegs.first() else topName
+                    )
+                    val stripPrefix = if (hasCommonRoot) firstSegs.first() + "/" else ""
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        deleteDownloadsFolder(folderName)
+                    }
+
+                    var count = 0
+                    for (entry in entries) {
+                        val rel = entry.name.replace('\\', '/').removePrefix(stripPrefix).trim('/')
+                        if (rel.isEmpty()) continue
+                        val leaf = rel.substringAfterLast('/')
+                        val relDirs = if (rel.contains('/')) rel.substringBeforeLast('/') else ""
+                        writeEntryToDownloads(zf, entry, folderName, relDirs, leaf)
+                        count++
+                    }
+                    val label = "Downloads/$folderName/ ($count file${if (count == 1) "" else "s"})"
+                    mainHandler.post { result.success(label) }
+                }
+            } catch (e: Exception) {
+                mainHandler.post { result.error("extract_failed", e.message, null) }
+            }
+        }.start()
+    }
+
+    private fun deleteDownloadsFolder(folderName: String) {
+        try {
+            val where = "${MediaStore.MediaColumns.RELATIVE_PATH} = ? OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+            val args = arrayOf("Download/$folderName/", "Download/$folderName/%")
+            contentResolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI, where, args)
+        } catch (_: Exception) {
+            // Best effort; duplicates are preferable to a failed extraction.
+        }
+    }
+
+    private fun writeEntryToDownloads(
+        zf: ZipFile,
+        entry: ZipEntry,
+        folderName: String,
+        relDirs: String,
+        leaf: String,
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val relativePath = if (relDirs.isEmpty()) {
+                "Download/$folderName"
+            } else {
+                "Download/$folderName/$relDirs"
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, leaf)
+                put(MediaStore.MediaColumns.MIME_TYPE, guessMimeForName(leaf))
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("could not create $leaf in Downloads")
+            contentResolver.openOutputStream(uri).use { output ->
+                if (output == null) throw IllegalStateException("could not open a stream for $leaf")
+                zf.getInputStream(entry).use { input -> input.copyTo(output) }
+            }
+            val done = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+            contentResolver.update(uri, done, null, null)
+        } else {
+            @Suppress("DEPRECATION")
+            val downloads = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS
+            )
+            val destDir = if (relDirs.isEmpty()) {
+                File(downloads, folderName)
+            } else {
+                File(File(downloads, folderName), relDirs)
+            }
+            if (!destDir.exists()) destDir.mkdirs()
+            val dest = File(destDir, leaf)
+            zf.getInputStream(entry).use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
     }
 
     private fun openAppStore(packageName: String) {

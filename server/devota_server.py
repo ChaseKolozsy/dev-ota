@@ -17,11 +17,13 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -1922,16 +1924,44 @@ def file_transfer_dir(repo_root: Path) -> Path:
     return path
 
 
-def resolve_transfer_file(repo_root: Path, name: str) -> Path:
+def _resolve_transfer_entry(repo_root: Path, name: str) -> Path:
     if not name or name != Path(name).name:
         raise ValueError("invalid file name")
     directory = file_transfer_dir(repo_root)
     target = (directory / name).resolve()
     if not is_relative_to(target, directory):
         raise PermissionError("file path escapes transfer directory")
+    return target
+
+
+def resolve_transfer_file(repo_root: Path, name: str) -> Path:
+    target = _resolve_transfer_entry(repo_root, name)
     if not target.is_file():
         raise FileNotFoundError(f"no such file: {name}")
     return target
+
+
+def resolve_transfer_dir(repo_root: Path, name: str) -> Path:
+    target = _resolve_transfer_entry(repo_root, name)
+    if not target.is_dir():
+        raise FileNotFoundError(f"no such folder: {name}")
+    return target
+
+
+def _dir_totals(path: Path) -> tuple[int, int]:
+    total_bytes = 0
+    file_count = 0
+    for root, _dirs, names in os.walk(path):
+        for filename in names:
+            entry = Path(root) / filename
+            try:
+                if entry.is_symlink() or not entry.is_file():
+                    continue
+                total_bytes += entry.stat().st_size
+                file_count += 1
+            except OSError:
+                continue
+    return total_bytes, file_count
 
 
 def transfer_file_entry(path: Path) -> dict[str, Any]:
@@ -1939,6 +1969,7 @@ def transfer_file_entry(path: Path) -> dict[str, Any]:
     content_type, _ = mimetypes.guess_type(path.name)
     return {
         "name": path.name,
+        "type": "file",
         "size": stat.st_size,
         "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
         "modifiedMs": int(stat.st_mtime * 1000),
@@ -1947,11 +1978,56 @@ def transfer_file_entry(path: Path) -> dict[str, Any]:
     }
 
 
+def transfer_dir_entry(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    total_bytes, file_count = _dir_totals(path)
+    return {
+        "name": path.name,
+        "type": "dir",
+        "size": total_bytes,
+        "fileCount": file_count,
+        "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+        "modifiedMs": int(stat.st_mtime * 1000),
+        "contentType": "application/zip",
+        "archivePath": f"/files/archive/{path.name}",
+    }
+
+
 def list_transfer_files(repo_root: Path) -> dict[str, Any]:
     directory = file_transfer_dir(repo_root)
-    files = [transfer_file_entry(entry) for entry in directory.iterdir() if entry.is_file()]
-    files.sort(key=lambda item: item["modifiedMs"], reverse=True)
-    return {"status": "ok", "dir": str(directory), "files": files}
+    entries: list[dict[str, Any]] = []
+    for entry in directory.iterdir():
+        if entry.is_symlink():
+            continue
+        if entry.is_file():
+            entries.append(transfer_file_entry(entry))
+        elif entry.is_dir():
+            entries.append(transfer_dir_entry(entry))
+    entries.sort(key=lambda item: item["modifiedMs"], reverse=True)
+    return {"status": "ok", "dir": str(directory), "files": entries}
+
+
+def build_dir_archive(directory: Path, top_name: str) -> Path:
+    total_bytes, _ = _dir_totals(directory)
+    if total_bytes > FILE_TRANSFER_MAX_BYTES:
+        raise ValueError("folder is too large to archive")
+    fd, tmp_name = tempfile.mkstemp(prefix="devota-archive-", suffix=".zip")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for root, _dirs, names in os.walk(directory):
+                root_path = Path(root)
+                for filename in names:
+                    entry = root_path / filename
+                    if entry.is_symlink() or not entry.is_file():
+                        continue
+                    rel = entry.relative_to(directory).as_posix()
+                    archive.write(entry, arcname=f"{top_name}/{rel}")
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return tmp_path
 
 
 def _unique_transfer_path(directory: Path, safe_name: str) -> Path:
@@ -2010,8 +2086,13 @@ def save_transfer_file(
 
 
 def delete_transfer_file(repo_root: Path, name: str) -> dict[str, Any]:
-    target = resolve_transfer_file(repo_root, name)
-    target.unlink()
+    target = _resolve_transfer_entry(repo_root, name)
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    elif target.exists():
+        target.unlink()
+    else:
+        raise FileNotFoundError(f"no such file: {name}")
     return {"status": "ok", "deletedName": target.name}
 
 
@@ -2443,6 +2524,44 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 while chunk := f.read(65536):
                     self.wfile.write(chunk)
 
+        def send_transfer_archive(self, name: str, head_only: bool = False):
+            try:
+                directory = resolve_transfer_dir(repo_root, name)
+            except PermissionError:
+                self.send_error(403, "Forbidden")
+                return
+            except FileNotFoundError as exc:
+                self.send_error(404, str(exc))
+                return
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            try:
+                archive_path = build_dir_archive(directory, directory.name)
+            except ValueError as exc:
+                self.send_error(413, str(exc))
+                return
+            except Exception as exc:
+                self.send_error(500, f"Archive failed: {exc}")
+                return
+            try:
+                size = archive_path.stat().st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{directory.name}.zip"',
+                )
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                if head_only:
+                    return
+                with open(archive_path, "rb") as f:
+                    while chunk := f.read(65536):
+                        self.wfile.write(chunk)
+            finally:
+                archive_path.unlink(missing_ok=True)
+
         def apps_payload(self):
             builds = scan_apks(repo_root, manifest)
             by_app = {app["id"]: [] for app in manifest["apps"]}
@@ -2665,6 +2784,9 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):], head_only=True)
                 return
+            if path.startswith("/files/archive/"):
+                self.send_transfer_archive(path[len("/files/archive/"):], head_only=True)
+                return
             if path.startswith("/files/download/"):
                 self.send_transfer_download(path[len("/files/download/"):], head_only=True)
                 return
@@ -2750,6 +2872,10 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_json(list_transfer_files(repo_root))
                 except Exception as exc:
                     self.send_error(500, f"File list failed: {exc}")
+                return
+
+            if path.startswith("/files/archive/"):
+                self.send_transfer_archive(path[len("/files/archive/"):])
                 return
 
             if path.startswith("/files/download/"):

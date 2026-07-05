@@ -191,7 +191,7 @@ void main() {
     expect(find.text('C-z'), findsWidgets);
   });
 
-  testWidgets('Files tab lists transfer files and offers a download', (
+  testWidgets('Files tab lists files and folders with the right actions', (
     WidgetTester tester,
   ) async {
     final dio = Dio()
@@ -202,10 +202,20 @@ void main() {
           'files': [
             {
               'name': 'report.zip',
+              'type': 'file',
               'size': 2048,
               'modified': '2026-07-04 21:00:00',
               'contentType': 'application/zip',
               'downloadPath': '/files/download/report.zip',
+            },
+            {
+              'name': 'myproject',
+              'type': 'dir',
+              'size': 4096,
+              'fileCount': 7,
+              'modified': '2026-07-04 21:05:00',
+              'contentType': 'application/zip',
+              'archivePath': '/files/archive/myproject',
             },
           ],
         }),
@@ -228,9 +238,15 @@ void main() {
     }
 
     expect(find.text('File transfers'), findsOneWidget);
-    expect(find.text('report.zip'), findsOneWidget);
     expect(find.textContaining('.devota-cache/file-transfer'), findsOneWidget);
-    expect(find.byIcon(Icons.download), findsOneWidget);
+    // The zip file offers Extract; the folder renders with a folder icon.
+    expect(find.text('report.zip'), findsOneWidget);
+    expect(find.byIcon(Icons.unarchive_outlined), findsOneWidget);
+    expect(find.text('myproject'), findsOneWidget);
+    expect(find.byIcon(Icons.folder), findsOneWidget);
+    expect(find.textContaining('7 files'), findsOneWidget);
+    // One download button per row (zip file + folder).
+    expect(find.byIcon(Icons.download), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 }

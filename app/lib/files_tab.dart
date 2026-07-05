@@ -128,13 +128,81 @@ class _FilesTabState extends State<FilesTab> {
     }
   }
 
+  /// Downloads a zip archive (a folder served as `/files/archive`, or a `.zip`
+  /// file) and asks the native side to unpack it into a real, nested folder
+  /// under the phone's Downloads — never letting Android's extractor flatten it.
+  Future<void> _downloadAndExtract(Map<String, dynamic> entry) async {
+    final name = entry['name'] as String?;
+    if (name == null || _downloadProgress.containsKey(name)) return;
+    final isDir = (entry['type'] as String?) == 'dir';
+    final url = isDir
+        ? '$_baseUrl/files/archive/${Uri.encodeComponent(name)}'
+        : '$_baseUrl/files/download/${Uri.encodeComponent(name)}';
+    // Folder name to unpack into: the directory name, or the zip minus ".zip".
+    final topName = isDir
+        ? name
+        : (name.toLowerCase().endsWith('.zip')
+              ? name.substring(0, name.length - 4)
+              : name);
+
+    setState(() => _downloadProgress[name] = 0);
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/file_transfer');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final tempPath = '${dir.path}/$name.zip';
+      await widget.dio.download(
+        url,
+        tempPath,
+        onReceiveProgress: (received, total) {
+          if (total > 0 && mounted) {
+            setState(() => _downloadProgress[name] = received / total);
+          }
+        },
+      );
+
+      String savedLabel = 'Downloads/$topName';
+      try {
+        final result = await _channel.invokeMethod<dynamic>(
+          'extractZipToDownloads',
+          {'zipPath': tempPath, 'topName': topName},
+        );
+        if (result is String && result.isNotEmpty) {
+          savedLabel = result;
+        }
+      } on MissingPluginException {
+        savedLabel = tempPath;
+      }
+      try {
+        await File(tempPath).delete();
+      } catch (_) {
+        // Best effort; a stray temp zip is harmless.
+      }
+
+      if (!mounted) return;
+      setState(() => _downloadProgress.remove(name));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Extracted to $savedLabel')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _downloadProgress.remove(name));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Extract failed: ${_briefError(e)}')),
+      );
+    }
+  }
+
   Future<void> _delete(Map<String, dynamic> file) async {
     final name = file['name'] as String?;
     if (name == null || _deleting.contains(name)) return;
+    final isDir = (file['type'] as String?) == 'dir';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete file?'),
+        title: Text(isDir ? 'Delete folder?' : 'Delete file?'),
         content: Text('Remove "$name" from the build server?'),
         actions: [
           TextButton(
@@ -307,30 +375,52 @@ class _FilesTabState extends State<FilesTab> {
         final size = (file['size'] as num?)?.toInt() ?? 0;
         final modified = (file['modified'] as String?) ?? '';
         final contentType = file['contentType'] as String?;
+        final isDir = (file['type'] as String?) == 'dir';
+        final isZip = !isDir && name.toLowerCase().endsWith('.zip');
+        final fileCount = (file['fileCount'] as num?)?.toInt() ?? 0;
         final progress = _downloadProgress[name];
         final deleting = _deleting.contains(name);
+        final busy = progress != null;
+
+        final subtitleText = isDir
+            ? '$fileCount file${fileCount == 1 ? '' : 's'}  ·  ${_formatSize(size)}'
+            : '${_formatSize(size)}${modified.isNotEmpty ? '  ·  $modified' : ''}';
 
         return ListTile(
-          leading: Icon(_iconFor(contentType, name)),
+          leading: Icon(isDir ? Icons.folder : _iconFor(contentType, name)),
           title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: progress != null
+          subtitle: busy
               ? Padding(
                   padding: const EdgeInsets.only(top: 6, right: 8),
                   child: LinearProgressIndicator(value: progress),
                 )
               : Text(
-                  '${_formatSize(size)}${modified.isNotEmpty ? '  ·  $modified' : ''}',
+                  subtitleText,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: 'Download to phone',
-                onPressed: progress != null ? null : () => _download(file),
-                icon: const Icon(Icons.download),
-              ),
+              if (isDir)
+                IconButton(
+                  tooltip: 'Download folder to phone',
+                  onPressed: busy ? null : () => _downloadAndExtract(file),
+                  icon: const Icon(Icons.download),
+                )
+              else ...[
+                if (isZip)
+                  IconButton(
+                    tooltip: 'Extract into a folder',
+                    onPressed: busy ? null : () => _downloadAndExtract(file),
+                    icon: const Icon(Icons.unarchive_outlined),
+                  ),
+                IconButton(
+                  tooltip: 'Download to phone',
+                  onPressed: busy ? null : () => _download(file),
+                  icon: const Icon(Icons.download),
+                ),
+              ],
               IconButton(
                 tooltip: 'Delete from server',
                 onPressed: deleting ? null : () => _delete(file),
