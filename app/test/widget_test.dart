@@ -72,4 +72,40 @@ void main() {
     expect(find.text('Top row'), findsOneWidget);
     expect(find.text('Bottom row'), findsOneWidget);
   });
+
+  testWidgets('long-pressing a tool bar label folds and unfolds it', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 700,
+            child: SshTerminalTab(
+              dio: Dio(),
+              serverUrl: 'http://127.0.0.1:8082',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The tmux bar label and one of its buttons are visible by default.
+    expect(find.text('tmux'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsOneWidget);
+
+    // Long-press folds the bar: label stays, buttons disappear.
+    await tester.longPress(find.text('tmux'));
+    await tester.pumpAndSettle();
+    expect(find.text('tmux'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsNothing);
+
+    // Long-press again unfolds it back to a full row.
+    await tester.longPress(find.text('tmux'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsOneWidget);
+  });
 }

@@ -31,6 +31,30 @@ class _TerminalKeyBarItem {
   final Widget Function() build;
 }
 
+/// A foldable terminal tool bar (tmux / macros / cmds). When folded its content
+/// is hidden and its label stacks into the next visible bar's row.
+class _ToolBar {
+  const _ToolBar({
+    required this.id,
+    required this.label,
+    required this.background,
+    required this.enabled,
+    required this.folded,
+    required this.onToggle,
+    required this.onToggleFold,
+    required this.buildContent,
+  });
+
+  final String id;
+  final String label;
+  final Color background;
+  final bool enabled;
+  final bool folded;
+  final VoidCallback onToggle;
+  final VoidCallback onToggleFold;
+  final Widget Function() buildContent;
+}
+
 class SshTerminalTab extends StatefulWidget {
   const SshTerminalTab({
     super.key,
@@ -90,6 +114,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _tmuxBarEnabled = true;
   bool _macroBarEnabled = true;
   bool _commandBarEnabled = true;
+  bool _tmuxBarFolded = false;
+  bool _macroBarFolded = false;
+  bool _commandBarFolded = false;
   TerminalPadConfig _padConfig = TerminalPadConfig.defaults();
   double _tmuxScrollRemainder = 0;
   double _terminalMouseScrollRemainder = 0;
@@ -1230,9 +1257,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           _buildTerminalToolsHeader(theme),
           if (_terminalToolsVisible) ...[
             _buildTerminalControlPad(theme),
-            _buildTmuxKeyBar(theme),
-            if (widget.quickMacros.isNotEmpty) _buildMacroBar(theme),
-            if (widget.quickCommands.isNotEmpty) _buildSavedCommandBar(theme),
+            ..._buildToolBarRows(theme),
           ],
           _buildComposer(),
         ],
@@ -2453,7 +2478,115 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     return result;
   }
 
-  Widget _buildTmuxKeyBar(ThemeData theme) {
+  void _toggleBarFold(String id) {
+    setState(() {
+      switch (id) {
+        case 'tmux':
+          _tmuxBarFolded = !_tmuxBarFolded;
+        case 'macros':
+          _macroBarFolded = !_macroBarFolded;
+        case 'cmds':
+          _commandBarFolded = !_commandBarFolded;
+      }
+    });
+  }
+
+  // Builds the tmux / macros / cmds bars, collapsing folded ones. Consecutive
+  // folded bars contribute only their (stacked) label to the next visible bar's
+  // row; a trailing folded group with no visible bar after it becomes a
+  // label-only row. See the fold behaviour in the terminal tools.
+  List<Widget> _buildToolBarRows(ThemeData theme) {
+    final bars = <_ToolBar>[
+      _ToolBar(
+        id: 'tmux',
+        label: 'tmux',
+        background: theme.colorScheme.surfaceContainerHighest,
+        enabled: _tmuxBarEnabled,
+        folded: _tmuxBarFolded,
+        onToggle: () => setState(() => _tmuxBarEnabled = !_tmuxBarEnabled),
+        onToggleFold: () => _toggleBarFold('tmux'),
+        buildContent: () => _buildTmuxContent(theme),
+      ),
+      if (widget.quickMacros.isNotEmpty)
+        _ToolBar(
+          id: 'macros',
+          label: 'macros',
+          background: theme.colorScheme.surfaceContainerLow,
+          enabled: _macroBarEnabled,
+          folded: _macroBarFolded,
+          onToggle: () => setState(() => _macroBarEnabled = !_macroBarEnabled),
+          onToggleFold: () => _toggleBarFold('macros'),
+          buildContent: () => _buildMacroContent(theme),
+        ),
+      if (widget.quickCommands.isNotEmpty)
+        _ToolBar(
+          id: 'cmds',
+          label: 'cmds',
+          background: theme.colorScheme.surfaceContainerLow,
+          enabled: _commandBarEnabled,
+          folded: _commandBarFolded,
+          onToggle: () =>
+              setState(() => _commandBarEnabled = !_commandBarEnabled),
+          onToggleFold: () => _toggleBarFold('cmds'),
+          buildContent: () => _buildCommandContent(theme),
+        ),
+    ];
+
+    final rows = <Widget>[];
+    final pendingFolded = <_ToolBar>[];
+    for (final bar in bars) {
+      if (bar.folded) {
+        pendingFolded.add(bar);
+      } else {
+        rows.add(_buildToolRow(theme, List.of(pendingFolded), bar));
+        pendingFolded.clear();
+      }
+    }
+    if (pendingFolded.isNotEmpty) {
+      rows.add(_buildToolRow(theme, List.of(pendingFolded), null));
+    }
+    return rows;
+  }
+
+  Widget _buildToolRow(
+    ThemeData theme,
+    List<_ToolBar> foldedBars,
+    _ToolBar? active,
+  ) {
+    return Material(
+      color: active?.background ?? theme.colorScheme.surfaceContainerLow,
+      child: SizedBox(
+        height: 40,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final bar in foldedBars)
+              _terminalKeyGroupLabel(
+                theme,
+                bar.label,
+                enabled: bar.enabled,
+                onToggle: bar.onToggle,
+                folded: true,
+                onToggleFold: bar.onToggleFold,
+              ),
+            if (active != null) ...[
+              _terminalKeyGroupLabel(
+                theme,
+                active.label,
+                enabled: active.enabled,
+                onToggle: active.onToggle,
+                onToggleFold: active.onToggleFold,
+              ),
+              Expanded(child: active.buildContent()),
+            ] else
+              const Spacer(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTmuxContent(ThemeData theme) {
     var index = 0;
     _TerminalKeyBarItem item(String id, Widget Function() build) {
       return _TerminalKeyBarItem(
@@ -2569,122 +2702,75 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       return a.originalIndex.compareTo(b.originalIndex);
     });
 
-    return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
-      child: SizedBox(
-        height: 40,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _terminalKeyGroupLabel(
-              theme,
-              'tmux',
-              enabled: _tmuxBarEnabled,
-              onToggle: () =>
-                  setState(() => _tmuxBarEnabled = !_tmuxBarEnabled),
-            ),
-            Expanded(
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                children: [for (final item in items) item.build()],
-              ),
-            ),
-          ],
-        ),
-      ),
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      children: [for (final item in items) item.build()],
     );
   }
 
   // Pinned, tappable group label for a terminal tools row. Stays fixed on the
-  // left while the buttons scroll horizontally; tapping it enables or disables
-  // the row's buttons without affecting scrolling.
+  // left while the buttons scroll horizontally. Tapping it enables or disables
+  // the row's buttons; long-pressing folds/unfolds the bar. When [folded], the
+  // content is hidden elsewhere and the label shows a collapsed indicator.
   Widget _terminalKeyGroupLabel(
     ThemeData theme,
     String label, {
     required bool enabled,
     required VoidCallback onToggle,
+    bool folded = false,
+    VoidCallback? onToggleFold,
   }) {
     final color = enabled
         ? theme.colorScheme.onSurfaceVariant
         : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4);
     return InkWell(
       onTap: onToggle,
+      onLongPress: onToggleFold,
       child: Padding(
         padding: const EdgeInsets.only(left: 8, right: 10),
         child: Center(
-          child: Text(
-            label,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: color,
-              fontWeight: enabled ? FontWeight.w600 : FontWeight.normal,
-              decoration: enabled ? null : TextDecoration.lineThrough,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (folded)
+                Padding(
+                  padding: const EdgeInsets.only(right: 1),
+                  child: Icon(Icons.chevron_right, size: 14, color: color),
+                ),
+              Text(
+                label,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontWeight: enabled ? FontWeight.w600 : FontWeight.normal,
+                  decoration: enabled ? null : TextDecoration.lineThrough,
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildSavedCommandBar(ThemeData theme) {
-    return Material(
-      color: theme.colorScheme.surfaceContainerLow,
-      child: SizedBox(
-        height: 40,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _terminalKeyGroupLabel(
-              theme,
-              'cmds',
-              enabled: _commandBarEnabled,
-              onToggle: () =>
-                  setState(() => _commandBarEnabled = !_commandBarEnabled),
-            ),
-            Expanded(
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                children: [
-                  for (final command in widget.quickCommands)
-                    _terminalCommandButton(command),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+  Widget _buildCommandContent(ThemeData theme) {
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      children: [
+        for (final command in widget.quickCommands)
+          _terminalCommandButton(command),
+      ],
     );
   }
 
-  Widget _buildMacroBar(ThemeData theme) {
-    return Material(
-      color: theme.colorScheme.surfaceContainerLow,
-      child: SizedBox(
-        height: 40,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _terminalKeyGroupLabel(
-              theme,
-              'macros',
-              enabled: _macroBarEnabled,
-              onToggle: () =>
-                  setState(() => _macroBarEnabled = !_macroBarEnabled),
-            ),
-            Expanded(
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                children: [
-                  for (final macro in widget.quickMacros)
-                    _terminalMacroButton(macro),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+  Widget _buildMacroContent(ThemeData theme) {
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      children: [
+        for (final macro in widget.quickMacros) _terminalMacroButton(macro),
+      ],
     );
   }
 
