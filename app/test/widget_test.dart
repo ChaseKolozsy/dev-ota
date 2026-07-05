@@ -73,7 +73,7 @@ void main() {
     expect(find.text('Bottom row'), findsOneWidget);
   });
 
-  testWidgets('long-pressing a tool bar label folds and unfolds it', (
+  testWidgets('long-pressing a folded bar hides its content, not its label', (
     WidgetTester tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -86,6 +86,7 @@ void main() {
             child: SshTerminalTab(
               dio: Dio(),
               serverUrl: 'http://127.0.0.1:8082',
+              quickCommands: const ['plan'],
             ),
           ),
         ),
@@ -93,19 +94,23 @@ void main() {
     );
     await tester.pump();
 
-    // The tmux bar label and one of its buttons are visible by default.
+    // Both bars and their content are visible by default.
     expect(find.text('tmux'), findsOneWidget);
+    expect(find.text('cmds'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'plan'), findsOneWidget);
+
+    // Fold cmds: its label stays (stacked into the tmux row) and its button
+    // disappears, while the tmux row is untouched — no wasted row.
+    await tester.longPress(find.text('cmds'));
+    await tester.pumpAndSettle();
+    expect(find.text('cmds'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'plan'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsOneWidget);
 
-    // Long-press folds the bar: label stays, buttons disappear.
-    await tester.longPress(find.text('tmux'));
+    // Long-press the folded cmds label again to unfold it back to a full row.
+    await tester.longPress(find.text('cmds'));
     await tester.pumpAndSettle();
-    expect(find.text('tmux'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsNothing);
-
-    // Long-press again unfolds it back to a full row.
-    await tester.longPress(find.text('tmux'));
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(OutlinedButton, 'Prefix'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'plan'), findsOneWidget);
   });
 }

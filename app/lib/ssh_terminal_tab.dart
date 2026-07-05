@@ -2532,56 +2532,81 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         ),
     ];
 
-    final rows = <Widget>[];
-    final pendingFolded = <_ToolBar>[];
+    // Group bars into rows. Each unfolded bar owns a row (its content shows on
+    // the right). A folded bar has no row of its own — its label stacks
+    // vertically into the nearest unfolded bar's row: the one above it, or, for a
+    // leading run of folded bars, the first unfolded bar below. Only when every
+    // bar is folded is there a content-less row, drawn as a compact horizontal
+    // strip. Bar order (tmux, macros, cmds) is always preserved top-to-bottom.
+    final toolRows = <({List<_ToolBar> bars, _ToolBar? active})>[];
+    final leadingFolded = <_ToolBar>[];
     for (final bar in bars) {
-      if (bar.folded) {
-        pendingFolded.add(bar);
+      if (!bar.folded) {
+        toolRows.add((bars: [...leadingFolded, bar], active: bar));
+        leadingFolded.clear();
+      } else if (toolRows.isNotEmpty) {
+        toolRows.last.bars.add(bar);
       } else {
-        rows.add(_buildToolRow(theme, List.of(pendingFolded), bar));
-        pendingFolded.clear();
+        leadingFolded.add(bar);
       }
     }
-    if (pendingFolded.isNotEmpty) {
-      rows.add(_buildToolRow(theme, List.of(pendingFolded), null));
+    if (leadingFolded.isNotEmpty) {
+      toolRows.add((bars: leadingFolded, active: null));
     }
-    return rows;
+    return [
+      for (final row in toolRows) _buildToolRow(theme, row.bars, row.active),
+    ];
   }
 
   Widget _buildToolRow(
     ThemeData theme,
-    List<_ToolBar> foldedBars,
+    List<_ToolBar> bars,
     _ToolBar? active,
   ) {
-    return Material(
-      color: active?.background ?? theme.colorScheme.surfaceContainerLow,
-      child: SizedBox(
-        height: 40,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final bar in foldedBars)
-              _terminalKeyGroupLabel(
-                theme,
-                bar.label,
-                enabled: bar.enabled,
-                onToggle: bar.onToggle,
-                folded: true,
-                onToggleFold: bar.onToggleFold,
-              ),
-            if (active != null) ...[
-              _terminalKeyGroupLabel(
-                theme,
-                active.label,
-                enabled: active.enabled,
-                onToggle: active.onToggle,
-                onToggleFold: active.onToggleFold,
-              ),
-              Expanded(child: active.buildContent()),
-            ] else
-              const Spacer(),
-          ],
+    // Every bar folded: one compact horizontal strip of mini-buttons, no content.
+    if (active == null) {
+      return Material(
+        color: theme.colorScheme.surfaceContainerLow,
+        child: SizedBox(
+          height: 40,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                for (final bar in bars) ...[
+                  _toolBarMiniLabel(theme, bar),
+                  const SizedBox(width: 6),
+                ],
+              ],
+            ),
+          ),
         ),
+      );
+    }
+    // One unfolded bar, plus any folded bars sharing its row: stack the labels
+    // vertically on the left as mini-buttons and show the active bar's scrollable
+    // content on the right. Row height is intrinsic, so it grows just enough to
+    // fit the stacked labels (a single label stays at the usual ~40px).
+    return Material(
+      color: active.background,
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 6),
+            child: IntrinsicWidth(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final bar in bars) _toolBarMiniLabel(theme, bar),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: SizedBox(height: 40, child: active.buildContent()),
+          ),
+        ],
       ),
     );
   }
@@ -2709,44 +2734,45 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  // Pinned, tappable group label for a terminal tools row. Stays fixed on the
-  // left while the buttons scroll horizontally. Tapping it enables or disables
-  // the row's buttons; long-pressing folds/unfolds the bar. When [folded], the
-  // content is hidden elsewhere and the label shows a collapsed indicator.
-  Widget _terminalKeyGroupLabel(
-    ThemeData theme,
-    String label, {
-    required bool enabled,
-    required VoidCallback onToggle,
-    bool folded = false,
-    VoidCallback? onToggleFold,
-  }) {
-    final color = enabled
+  // A compact "mini-button" for a tool bar's label. Rendered stacked vertically
+  // when folded bars share a row, and in a horizontal strip when every bar is
+  // folded. Tap toggles the bar's buttons enabled/disabled; long-press folds or
+  // unfolds the bar. The active (unfolded) bar's label is accented; folded ones
+  // are plain-outlined. Disabled bars keep the dim + strike-through treatment.
+  Widget _toolBarMiniLabel(ThemeData theme, _ToolBar bar) {
+    final active = !bar.folded;
+    final accent = theme.colorScheme.primary;
+    final textColor = bar.enabled
         ? theme.colorScheme.onSurfaceVariant
         : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4);
-    return InkWell(
-      onTap: onToggle,
-      onLongPress: onToggleFold,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 8, right: 10),
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (folded)
-                Padding(
-                  padding: const EdgeInsets.only(right: 1),
-                  child: Icon(Icons.chevron_right, size: 14, color: color),
-                ),
-              Text(
-                label,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontWeight: enabled ? FontWeight.w600 : FontWeight.normal,
-                  decoration: enabled ? null : TextDecoration.lineThrough,
-                ),
-              ),
-            ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: InkWell(
+        onTap: bar.onToggle,
+        onLongPress: bar.onToggleFold,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          height: 16,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? accent.withValues(alpha: 0.10) : null,
+            border: Border.all(
+              color: active
+                  ? accent.withValues(alpha: 0.55)
+                  : theme.colorScheme.outlineVariant,
+            ),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            bar.label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontSize: 10.5,
+              height: 1,
+              color: textColor,
+              fontWeight: bar.enabled ? FontWeight.w600 : FontWeight.normal,
+              decoration: bar.enabled ? null : TextDecoration.lineThrough,
+            ),
           ),
         ),
       ),
