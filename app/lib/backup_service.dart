@@ -26,6 +26,7 @@ class BackupService {
     'last_used_build_path',
     'macros_json',
     'macro_usage_counts_json',
+    'terminal_pad_config_json',
   ];
   static const _boolPreferenceKeys = [
     'agent_whole_device',

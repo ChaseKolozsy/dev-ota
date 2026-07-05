@@ -16,6 +16,7 @@ import 'package:xterm/xterm.dart';
 import 'backup_service.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
+import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
 
 class _TerminalKeyBarItem {
@@ -89,6 +90,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _tmuxBarEnabled = true;
   bool _macroBarEnabled = true;
   bool _commandBarEnabled = true;
+  TerminalPadConfig _padConfig = TerminalPadConfig.defaults();
   double _tmuxScrollRemainder = 0;
   double _terminalMouseScrollRemainder = 0;
   double _terminalFontSize = _terminalDefaultFontSize;
@@ -118,6 +120,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadTerminalToolVisibility();
     _loadNativeKeyboardLock();
     _loadTerminalFontSize();
+    _loadTerminalPadConfig();
     _attachMacroController();
   }
 
@@ -180,6 +183,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   static const _terminalToolsVisibleKey = 'terminal_tools_visible';
   static const _nativeKeyboardLockedKey = 'terminal_native_keyboard_locked';
   static const _terminalFontSizeKey = 'terminal_font_size';
+  static const _terminalPadConfigKey = 'terminal_pad_config_json';
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
   static const _terminalMaxFontSize = 22.0;
@@ -264,6 +268,20 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   Future<void> _saveTerminalFontSize() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_terminalFontSizeKey, _terminalFontSize);
+    _scheduleServerBackup();
+  }
+
+  Future<void> _loadTerminalPadConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    final source = prefs.getString(_terminalPadConfigKey);
+    if (source == null || source.isEmpty) return;
+    final config = TerminalPadConfig.decode(source);
+    if (mounted) setState(() => _padConfig = config);
+  }
+
+  Future<void> _saveTerminalPadConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_terminalPadConfigKey, _padConfig.encode());
     _scheduleServerBackup();
   }
 
@@ -1603,6 +1621,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     onPressed: _exitTmuxScrollMode,
                     child: const Text('Exit scroll'),
                   ),
+                if (_terminalToolsVisible)
+                  IconButton(
+                    icon: const Icon(Icons.tune, size: 20),
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Customize control pad',
+                    onPressed: _showControlPadSettingsSheet,
+                  ),
               ],
             ),
           ),
@@ -1625,84 +1650,249 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 height: 64,
                 child: Column(
                   children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          _terminalGridButton(
-                            'tab',
-                            'Tab',
-                            () => _sendTerminalKey('\t'),
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridButton('esc', 'Esc', () {
-                            if (_tmuxScrollMode) {
-                              _exitTmuxScrollModeWithEsc();
-                            } else {
-                              _sendTerminalKey('\x1B');
-                            }
-                          }),
-                          _terminalGridGap(),
-                          _terminalGridButton(
-                            'ctrl_c',
-                            'C-c',
-                            () => _sendTerminalKey('\x03'),
-                            tooltip: 'Ctrl-C',
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridButton(
-                            'slash',
-                            '/',
-                            () => _sendTerminalKey('/', fallbackText: '/'),
-                            enabledWhenDisconnected: true,
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridIconButton(
-                            'attach_file',
-                            Icons.add,
-                            'Attach file',
-                            () => unawaited(_attachFileToTerminal()),
-                            enabledWhenDisconnected: true,
-                          ),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: _buildPadRow(0)),
                     const SizedBox(height: 4),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          _terminalGridButton(
-                            'home',
-                            'Home',
-                            () => _sendTerminalKey('\x1B[H'),
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridButton(
-                            'end',
-                            'End',
-                            () => _sendTerminalKey('\x1B[F'),
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridButton(
-                            'page_up',
-                            'PgUp',
-                            () => _sendTerminalKey('\x1B[5~'),
-                          ),
-                          _terminalGridGap(),
-                          _terminalGridButton(
-                            'page_down',
-                            'PgDn',
-                            () => _sendTerminalKey('\x1B[6~'),
-                          ),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: _buildPadRow(1)),
                   ],
                 ),
               ),
             ),
-            const SizedBox(width: 4),
-            _terminalActionKeyColumn(),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Built-in control-pad keys, in their catalog order. Sequences are stored as
+  /// the literal characters to send; special ids (`esc`, `attach_file`, `slash`)
+  /// are handled in [_runPadKeyAction].
+  static const List<TerminalPadKey> _builtinPadKeys = [
+    TerminalPadKey(
+      id: 'tab',
+      abbreviation: 'Tab',
+      name: 'Tab',
+      sequence: '\t',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'esc',
+      abbreviation: 'Esc',
+      name: 'Escape',
+      sequence: '\x1B',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'ctrl_c',
+      abbreviation: 'C-c',
+      name: 'Ctrl-C',
+      sequence: '\x03',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'slash',
+      abbreviation: '/',
+      name: 'Slash',
+      sequence: '/',
+      builtin: true,
+      enabledWhenDisconnected: true,
+    ),
+    TerminalPadKey(
+      id: 'attach_file',
+      abbreviation: '+',
+      name: 'Attach file',
+      iconName: 'add',
+      builtin: true,
+      enabledWhenDisconnected: true,
+    ),
+    TerminalPadKey(
+      id: 'home',
+      abbreviation: 'Home',
+      name: 'Home',
+      sequence: '\x1B[H',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'end',
+      abbreviation: 'End',
+      name: 'End',
+      sequence: '\x1B[F',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'page_up',
+      abbreviation: 'PgUp',
+      name: 'Page Up',
+      sequence: '\x1B[5~',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'page_down',
+      abbreviation: 'PgDn',
+      name: 'Page Down',
+      sequence: '\x1B[6~',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'backspace',
+      abbreviation: 'BkSp',
+      name: 'Backspace',
+      iconName: 'backspace',
+      sequence: '\x7F',
+      builtin: true,
+    ),
+    TerminalPadKey(
+      id: 'enter',
+      abbreviation: 'Ent',
+      name: 'Enter',
+      iconName: 'enter',
+      sequence: '\r',
+      builtin: true,
+    ),
+  ];
+
+  /// Every key that can be placed on the pad: built-ins plus the user's customs.
+  List<TerminalPadKey> get _allPadKeys => [
+    ..._builtinPadKeys,
+    ..._padConfig.customKeys,
+  ];
+
+  TerminalPadKey? _padKeyById(String id) {
+    for (final key in _builtinPadKeys) {
+      if (key.id == id) return key;
+    }
+    for (final key in _padConfig.customKeys) {
+      if (key.id == id) return key;
+    }
+    return null;
+  }
+
+  IconData? _padKeyIcon(String? iconName) {
+    switch (iconName) {
+      case 'add':
+        return Icons.add;
+      case 'backspace':
+        return Icons.backspace_outlined;
+      case 'enter':
+        return Icons.keyboard_return;
+    }
+    return null;
+  }
+
+  /// The middle keys of [row] resolved to key objects, in display order (manual
+  /// order, or descending use count when [TerminalPadRowConfig.sortByFrequency]).
+  List<TerminalPadKey> _resolvedRowKeys(TerminalPadRowConfig row) {
+    final keys = <TerminalPadKey>[];
+    for (final id in row.middleIds) {
+      final key = _padKeyById(id);
+      if (key != null) keys.add(key);
+    }
+    if (!row.sortByFrequency) return keys;
+    final indexed = [
+      for (var i = 0; i < keys.length; i++) MapEntry(i, keys[i]),
+    ];
+    indexed.sort((a, b) {
+      final byUse = (_terminalKeyUseCounts[b.value.id] ?? 0).compareTo(
+        _terminalKeyUseCounts[a.value.id] ?? 0,
+      );
+      return byUse != 0 ? byUse : a.key.compareTo(b.key);
+    });
+    return [for (final entry in indexed) entry.value];
+  }
+
+  void _activateTerminalPadKey(TerminalPadKey key) {
+    _activateTerminalKeyButton(key.id, () => _runPadKeyAction(key));
+  }
+
+  void _runPadKeyAction(TerminalPadKey key) {
+    switch (key.id) {
+      case 'esc':
+        if (_tmuxScrollMode) {
+          _exitTmuxScrollModeWithEsc();
+        } else {
+          _sendTerminalKey('\x1B');
+        }
+      case 'attach_file':
+        unawaited(_attachFileToTerminal());
+      case 'slash':
+        _sendTerminalKey('/', fallbackText: '/');
+      default:
+        final sequence = decodeKeySequence(key.sequence);
+        if (sequence.isNotEmpty) _sendTerminalKey(sequence);
+    }
+  }
+
+  Widget _buildPadRow(int rowIndex) {
+    final row = _padConfig.rows[rowIndex];
+    final fixed = row.fixedRightId == null
+        ? null
+        : _padKeyById(row.fixedRightId!);
+    return Row(
+      children: [
+        Expanded(child: _buildPadScrollRow(rowIndex)),
+        if (fixed != null) ...[
+          const SizedBox(width: 4),
+          _buildPadFixedRightButton(fixed),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPadScrollRow(int rowIndex) {
+    final keys = _resolvedRowKeys(_padConfig.rows[rowIndex]);
+    if (keys.isEmpty) return const SizedBox.shrink();
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.zero,
+      physics: const ClampingScrollPhysics(),
+      itemCount: keys.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 4),
+      itemBuilder: (_, index) => Center(child: _buildPadKeyPill(keys[index])),
+    );
+  }
+
+  Widget _buildPadKeyPill(TerminalPadKey key) {
+    final enabled = _connected || key.enabledWhenDisconnected;
+    final icon = _padKeyIcon(key.iconName);
+    final button = SizedBox(
+      height: 30,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          minimumSize: const Size(34, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: enabled ? () => _activateTerminalPadKey(key) : null,
+        child: icon != null
+            ? Icon(icon, size: 16)
+            : Text(key.abbreviation, maxLines: 1),
+      ),
+    );
+    return Tooltip(message: key.name, child: button);
+  }
+
+  Widget _buildPadFixedRightButton(TerminalPadKey key) {
+    final enabled = _connected || key.enabledWhenDisconnected;
+    final icon = _padKeyIcon(key.iconName);
+    return Tooltip(
+      message: key.name,
+      child: Semantics(
+        button: true,
+        label: key.name,
+        child: SizedBox(
+          height: 30,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              minimumSize: const Size(30, 30),
+              padding: EdgeInsets.symmetric(horizontal: icon != null ? 0 : 8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: enabled ? () => _activateTerminalPadKey(key) : null,
+            child: icon != null
+                ? Icon(icon, size: 18)
+                : Text(key.abbreviation, maxLines: 1),
+          ),
         ),
       ),
     );
@@ -1782,123 +1972,485 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _terminalGridGap() => const SizedBox(width: 4);
+  // --- Control-pad customization -------------------------------------------
 
-  Widget _terminalGridButton(
-    String usageId,
-    String label,
-    VoidCallback onPressed, {
-    String? tooltip,
-    bool enabledWhenDisconnected = false,
-  }) {
-    final enabled = _connected || enabledWhenDisconnected;
-    final button = OutlinedButton(
-      style: OutlinedButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        minimumSize: Size.zero,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      onPressed: enabled
-          ? () => _activateTerminalKeyButton(usageId, onPressed)
-          : null,
-      child: FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
-    );
-    return Expanded(
-      child: SizedBox.expand(
-        child: tooltip == null
-            ? button
-            : Tooltip(message: tooltip, child: button),
-      ),
+  Set<String> _allPlacedKeyIds() {
+    final placed = <String>{};
+    for (final row in _padConfig.rows) {
+      placed.addAll(row.middleIds);
+      if (row.fixedRightId != null) placed.add(row.fixedRightId!);
+    }
+    return placed;
+  }
+
+  String _nextCustomKeyId() {
+    var max = 0;
+    for (final key in _padConfig.customKeys) {
+      if (key.id.startsWith('custom:')) {
+        final n = int.tryParse(key.id.substring('custom:'.length)) ?? 0;
+        if (n > max) max = n;
+      }
+    }
+    return 'custom:${max + 1}';
+  }
+
+  // Each mutator changes _padConfig in place; callers wrap them in the sheet's
+  // applyConfig() so the pad rebuilds and the config persists. A key id appears
+  // at most once across both rows, so placing a key removes it from anywhere
+  // else first.
+  void _padUnplaceKey(String id) {
+    for (final row in _padConfig.rows) {
+      row.middleIds.remove(id);
+      if (row.fixedRightId == id) row.fixedRightId = null;
+    }
+  }
+
+  void _padAddToRow(int rowIndex, String id) {
+    _padUnplaceKey(id);
+    _padConfig.rows[rowIndex].middleIds.add(id);
+  }
+
+  void _padSetFixedRight(int rowIndex, String? id) {
+    if (id != null) _padUnplaceKey(id);
+    _padConfig.rows[rowIndex].fixedRightId = id;
+  }
+
+  void _padMoveKey(int rowIndex, int index, int delta) {
+    final ids = _padConfig.rows[rowIndex].middleIds;
+    final target = index + delta;
+    if (target < 0 || target >= ids.length) return;
+    final id = ids.removeAt(index);
+    ids.insert(target, id);
+  }
+
+  void _replaceCustomKey(TerminalPadKey edited) {
+    final i = _padConfig.customKeys.indexWhere((k) => k.id == edited.id);
+    if (i >= 0) _padConfig.customKeys[i] = edited;
+  }
+
+  void _deleteCustomKey(String id) {
+    _padUnplaceKey(id);
+    _padConfig.customKeys.removeWhere((k) => k.id == id);
+  }
+
+  Future<void> _showControlPadSettingsSheet() async {
+    final theme = Theme.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            void applyConfig(void Function() mutate) {
+              setState(mutate);
+              setSheetState(() {});
+              unawaited(_saveTerminalPadConfig());
+            }
+
+            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Control pad buttons',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'The arrow keys and the two right-pinned keys stay fixed. '
+                      'The buttons in between scroll horizontally.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildPadRowSettings(theme, 0, 'Top row', applyConfig),
+                    const Divider(height: 28),
+                    _buildPadRowSettings(theme, 1, 'Bottom row', applyConfig),
+                    const Divider(height: 28),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.restore),
+                        label: const Text('Reset to defaults'),
+                        onPressed: () => applyConfig(
+                          () => _padConfig = TerminalPadConfig.defaults(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  Widget _terminalGridIconButton(
-    String usageId,
-    IconData icon,
-    String tooltip,
-    VoidCallback onPressed, {
-    bool enabledWhenDisconnected = false,
-  }) {
-    final enabled = _connected || enabledWhenDisconnected;
-    return Expanded(
-      child: Tooltip(
-        message: tooltip,
-        child: SizedBox.expand(
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              minimumSize: Size.zero,
-              padding: EdgeInsets.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  Widget _buildPadRowSettings(
+    ThemeData theme,
+    int rowIndex,
+    String title,
+    void Function(void Function()) applyConfig,
+  ) {
+    final row = _padConfig.rows[rowIndex];
+    final middleKeys = _resolvedRowKeys(row);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: theme.textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text('Pinned right:', style: theme.textTheme.bodyMedium),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildFixedRightSelector(theme, rowIndex, applyConfig),
             ),
-            onPressed: enabled
-                ? () => _activateTerminalKeyButton(usageId, onPressed)
-                : null,
-            child: Icon(icon, size: 18),
+          ],
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('Sort by frequency of use'),
+          value: row.sortByFrequency,
+          onChanged: (value) => applyConfig(
+            () => _padConfig.rows[rowIndex].sortByFrequency = value,
           ),
+        ),
+        for (var i = 0; i < middleKeys.length; i++)
+          _buildPadKeySettingsTile(
+            theme,
+            rowIndex,
+            i,
+            middleKeys[i],
+            middleKeys.length,
+            row.sortByFrequency,
+            applyConfig,
+          ),
+        if (middleKeys.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'No scrollable buttons in this row.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _buildAddKeyControl(theme, rowIndex, applyConfig),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFixedRightSelector(
+    ThemeData theme,
+    int rowIndex,
+    void Function(void Function()) applyConfig,
+  ) {
+    const noneValue = '__none__';
+    final current = _padConfig.rows[rowIndex].fixedRightId ?? noneValue;
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(value: noneValue, child: Text('None')),
+      for (final key in _allPadKeys)
+        DropdownMenuItem(
+          value: key.id,
+          child: Text(
+            '${key.abbreviation} — ${key.name}',
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+    ];
+    final value = items.any((item) => item.value == current)
+        ? current
+        : noneValue;
+    return DropdownButton<String>(
+      isExpanded: true,
+      value: value,
+      items: items,
+      onChanged: (selected) => applyConfig(
+        () => _padSetFixedRight(
+          rowIndex,
+          selected == noneValue ? null : selected,
         ),
       ),
     );
   }
 
-  Widget _terminalActionKeyColumn() {
-    return SizedBox(
-      width: 30,
-      height: 64,
-      child: Column(
+  Widget _buildPadKeySettingsTile(
+    ThemeData theme,
+    int rowIndex,
+    int index,
+    TerminalPadKey key,
+    int count,
+    bool sortByFrequency,
+    void Function(void Function()) applyConfig,
+  ) {
+    final icon = _padKeyIcon(key.iconName);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
         children: [
-          _terminalActionKeyButton(
-            'backspace',
-            Icons.backspace_outlined,
-            'Backspace',
-            '\x7F',
+          SizedBox(
+            width: 46,
+            child: icon != null
+                ? Icon(icon, size: 18)
+                : Text(
+                    key.abbreviation,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelLarge,
+                  ),
           ),
-          const SizedBox(height: 4),
-          _terminalActionKeyButton(
-            'enter',
-            Icons.keyboard_return,
-            'Enter',
-            '\r',
+          Expanded(
+            child: Text(
+              key.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+          if (!sortByFrequency) ...[
+            IconButton(
+              icon: const Icon(Icons.arrow_upward, size: 18),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Move up',
+              onPressed: index == 0
+                  ? null
+                  : () => applyConfig(() => _padMoveKey(rowIndex, index, -1)),
+            ),
+            IconButton(
+              icon: const Icon(Icons.arrow_downward, size: 18),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Move down',
+              onPressed: index == count - 1
+                  ? null
+                  : () => applyConfig(() => _padMoveKey(rowIndex, index, 1)),
+            ),
+          ],
+          if (!key.builtin)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Edit',
+              onPressed: () async {
+                final result = await _showCustomPadKeyEditor(existing: key);
+                if (result == null) return;
+                applyConfig(() {
+                  if (result.deleted) {
+                    _deleteCustomKey(key.id);
+                  } else if (result.saved != null) {
+                    _replaceCustomKey(result.saved!);
+                  }
+                });
+              },
+            ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Remove from row',
+            onPressed: () => applyConfig(() => _padUnplaceKey(key.id)),
           ),
         ],
       ),
     );
   }
 
-  Widget _terminalActionKeyButton(
-    String usageId,
-    IconData icon,
-    String tooltip,
-    String sequence,
+  Widget _buildAddKeyControl(
+    ThemeData theme,
+    int rowIndex,
+    void Function(void Function()) applyConfig,
   ) {
-    final enabled = _connected;
-    return Tooltip(
-      message: tooltip,
-      child: Semantics(
-        button: true,
-        label: tooltip,
-        child: SizedBox(
-          width: 30,
-          height: 30,
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              minimumSize: const Size(30, 30),
-              padding: EdgeInsets.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: enabled
-                ? () => _activateTerminalKeyButton(
-                    usageId,
-                    () => _sendTerminalKey(sequence),
-                  )
-                : null,
-            child: Icon(icon, size: 18),
+    final placed = _allPlacedKeyIds();
+    final available = _allPadKeys
+        .where((key) => !placed.contains(key.id))
+        .toList();
+    return PopupMenuButton<String>(
+      tooltip: 'Add a button',
+      onSelected: (value) async {
+        if (value == '__custom__') {
+          final result = await _showCustomPadKeyEditor();
+          if (result?.saved == null) return;
+          applyConfig(() {
+            _padConfig.customKeys.add(result!.saved!);
+            _padAddToRow(rowIndex, result.saved!.id);
+          });
+        } else {
+          applyConfig(() => _padAddToRow(rowIndex, value));
+        }
+      },
+      itemBuilder: (ctx) => [
+        for (final key in available)
+          PopupMenuItem(
+            value: key.id,
+            child: Text('${key.abbreviation} — ${key.name}'),
           ),
+        if (available.isNotEmpty) const PopupMenuDivider(),
+        const PopupMenuItem(value: '__custom__', child: Text('Custom…')),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: theme.colorScheme.outline),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add, size: 18),
+            SizedBox(width: 4),
+            Text('Add button'),
+          ],
         ),
       ),
     );
+  }
+
+  Future<({TerminalPadKey? saved, bool deleted})?> _showCustomPadKeyEditor({
+    TerminalPadKey? existing,
+  }) async {
+    final theme = Theme.of(context);
+    final abbrevController = TextEditingController(
+      text: existing?.abbreviation ?? '',
+    );
+    final nameController = TextEditingController(text: existing?.name ?? '');
+    final sequenceController = TextEditingController(
+      text: existing?.sequence ?? '',
+    );
+    final result = await showDialog<({TerminalPadKey? saved, bool deleted})>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final abbrev = abbrevController.text.trim();
+            final tooLong = abbrev.length >= 5;
+            final canSave =
+                abbrev.isNotEmpty && sequenceController.text.isNotEmpty;
+            return AlertDialog(
+              title: Text(existing == null ? 'New button' : 'Edit button'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: abbrevController,
+                      maxLength: 8,
+                      decoration: InputDecoration(
+                        labelText: 'Abbreviation (shown on the button)',
+                        counterText: '',
+                        helperText: tooLong
+                            ? 'Long abbreviations widen the button — '
+                                  '$kRecommendedAbbrevMax characters or fewer '
+                                  'is recommended'
+                            : 'Recommended: $kRecommendedAbbrevMax characters '
+                                  'or fewer',
+                        helperMaxLines: 2,
+                        helperStyle: tooLong
+                            ? TextStyle(color: theme.colorScheme.error)
+                            : null,
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Name (tooltip)',
+                      ),
+                    ),
+                    TextField(
+                      controller: sequenceController,
+                      decoration: const InputDecoration(
+                        labelText: 'Keys to send',
+                        helperText: r'Supports \t \r \e \xNN — '
+                            r'e.g. \x1a sends Ctrl-Z',
+                        helperMaxLines: 2,
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Wrap(
+                        spacing: 6,
+                        children: [
+                          for (final quick in const [
+                            ('Esc', r'\e'),
+                            ('Tab', r'\t'),
+                            ('Enter', r'\r'),
+                          ])
+                            ActionChip(
+                              label: Text(quick.$1),
+                              onPressed: () {
+                                sequenceController.text += quick.$2;
+                                setDialogState(() {});
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                if (existing != null)
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.pop(ctx, (saved: null, deleted: true)),
+                    child: Text(
+                      'Delete',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, null),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: canSave
+                      ? () {
+                          final id = existing?.id ?? _nextCustomKeyId();
+                          final name = nameController.text.trim();
+                          Navigator.pop(ctx, (
+                            saved: TerminalPadKey(
+                              id: id,
+                              abbreviation: abbrev,
+                              name: name.isEmpty ? abbrev : name,
+                              sequence: sequenceController.text,
+                            ),
+                            deleted: false,
+                          ));
+                        }
+                      : null,
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    abbrevController.dispose();
+    nameController.dispose();
+    sequenceController.dispose();
+    return result;
   }
 
   Widget _buildTmuxKeyBar(ThemeData theme) {
