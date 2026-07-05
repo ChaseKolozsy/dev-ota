@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
+import 'files_tab.dart';
 import 'macro_sync_service.dart';
 import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
@@ -96,7 +97,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 8, vsync: this);
+    _tabController = TabController(length: 9, vsync: this);
     _tabController.addListener(_onTabControllerChanged);
     _macroController.addListener(_onMacroControllerChanged);
     _loadBuildUsePreferences();
@@ -1325,6 +1326,10 @@ class _BuildListScreenState extends State<BuildListScreen>
                       _CompactTab(icon: Icons.playlist_play, label: 'Macros'),
                       _CompactTab(icon: Icons.hub, label: 'Agent'),
                       _CompactTab(icon: Icons.sync, label: 'Backup'),
+                      _CompactTab(
+                        icon: Icons.download_for_offline,
+                        label: 'Files',
+                      ),
                     ],
                   ),
                 ),
@@ -1362,6 +1367,7 @@ class _BuildListScreenState extends State<BuildListScreen>
             serverUrl: _baseUrl,
             onImported: _reloadImportedSettings,
           ),
+          FilesTab(dio: _dio, serverUrl: _baseUrl),
         ],
       ),
     );

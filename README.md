@@ -98,6 +98,9 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
   credential storage, generated phone-owned Ed25519 keys, public-key install
   through the build server, trust-on-first-use host-key verification, a
   lightweight TCP ping, and voice-to-terminal command submission.
+- **Files**: download files an agent has staged on the build server (in the
+  file-transfer directory, or via `POST /files/upload`) straight into the
+  phone's public Downloads folder for re-upload elsewhere.
 - **Backup**: export/import saved servers, commands, issues, agent settings,
   OpenAI API keys, and SSH public/private keys.
 - **Issues**: voice-transcribed notes that can be added to a numbered issue
@@ -163,6 +166,10 @@ escaping its configured root. It does not build apps.
 - `PATCH/DELETE /macros/<id>`
 - `GET /github/workflow/runs?repo=<owner/name>&workflow=<file>`
 - `GET /download/<virtual-apk-path>`
+- `GET /files` — list files staged for the phone, plus the absolute drop directory
+- `GET /files/download/<name>`
+- `POST /files/upload` — multipart `file=@…`, or a raw body with `?name=` / `X-Devota-Filename`
+- `DELETE /files/<name>`
 - `POST /github/workflow/run`
 - `POST /github/workflow/download`
 - `POST /clipboard`

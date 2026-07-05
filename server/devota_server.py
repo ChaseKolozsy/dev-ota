@@ -9,6 +9,7 @@ from email import policy
 from email.parser import BytesParser
 import gzip
 import json
+import mimetypes
 import os
 import platform
 import re
@@ -51,6 +52,8 @@ TERMINAL_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 TERMINAL_UPLOAD_DEFAULT_NAME = "attachment.bin"
 TERMINAL_UPLOAD_NAME_MAX_CHARS = 120
 DEVOTA_CACHE_DIR_ENV = "DEVOTA_CACHE_DIR"
+FILE_TRANSFER_DIR_ENV = "DEVOTA_FILE_TRANSFER_DIR"
+FILE_TRANSFER_MAX_BYTES = 200 * 1024 * 1024
 PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 PHASE_STATUSES = {"not_started", "active", "waiting_client", "completed"}
 CARD_STATUSES = {"todo", "doing", "waiting_client", "review", "done"}
@@ -1907,6 +1910,111 @@ def save_terminal_upload(
     return payload
 
 
+def file_transfer_dir(repo_root: Path) -> Path:
+    override = os.environ.get(FILE_TRANSFER_DIR_ENV)
+    if override:
+        path = Path(override).expanduser()
+        path = path if path.is_absolute() else (repo_root / path)
+    else:
+        path = repo_root / ".devota-cache" / "file-transfer"
+    path = path.resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def resolve_transfer_file(repo_root: Path, name: str) -> Path:
+    if not name or name != Path(name).name:
+        raise ValueError("invalid file name")
+    directory = file_transfer_dir(repo_root)
+    target = (directory / name).resolve()
+    if not is_relative_to(target, directory):
+        raise PermissionError("file path escapes transfer directory")
+    if not target.is_file():
+        raise FileNotFoundError(f"no such file: {name}")
+    return target
+
+
+def transfer_file_entry(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    content_type, _ = mimetypes.guess_type(path.name)
+    return {
+        "name": path.name,
+        "size": stat.st_size,
+        "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+        "modifiedMs": int(stat.st_mtime * 1000),
+        "contentType": content_type or "application/octet-stream",
+        "downloadPath": f"/files/download/{path.name}",
+    }
+
+
+def list_transfer_files(repo_root: Path) -> dict[str, Any]:
+    directory = file_transfer_dir(repo_root)
+    files = [transfer_file_entry(entry) for entry in directory.iterdir() if entry.is_file()]
+    files.sort(key=lambda item: item["modifiedMs"], reverse=True)
+    return {"status": "ok", "dir": str(directory), "files": files}
+
+
+def _unique_transfer_path(directory: Path, safe_name: str) -> Path:
+    dest = directory / safe_name
+    if not dest.exists():
+        return dest
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    return directory / f"{stem}-{uuid.uuid4().hex[:6]}{suffix}"
+
+
+def save_transfer_file(
+    repo_root: Path,
+    content_type: str,
+    raw: bytes,
+    fallback_name: str | None = None,
+) -> dict[str, Any]:
+    filename = fallback_name
+    data = raw
+    if content_type.lower().startswith("multipart/form-data"):
+        message = BytesParser(policy=policy.default).parsebytes(
+            b"Content-Type: "
+            + content_type.encode("utf-8")
+            + b"\r\nMIME-Version: 1.0\r\n\r\n"
+            + raw
+        )
+        if not message.is_multipart():
+            raise ValueError("file upload body is not multipart")
+        file_part = None
+        for part in message.iter_parts():
+            disposition = part.get_content_disposition()
+            if disposition == "form-data" and part.get_param("name", header="content-disposition") == "file":
+                file_part = part
+                break
+        if file_part is None:
+            raise ValueError("file upload is missing file field")
+        data = file_part.get_payload(decode=True)
+        filename = file_part.get_filename() or filename
+    if not data:
+        raise ValueError("file upload is empty")
+    if len(data) > FILE_TRANSFER_MAX_BYTES:
+        raise ValueError("file upload is too large")
+    safe_name = _safe_terminal_upload_name(filename)
+    directory = file_transfer_dir(repo_root)
+    dest = _unique_transfer_path(directory, safe_name)
+    dest.write_bytes(data)
+    content_type_guess, _ = mimetypes.guess_type(dest.name)
+    return {
+        "status": "ok",
+        "name": dest.name,
+        "bytes": len(data),
+        "contentType": content_type_guess or "application/octet-stream",
+        "path": str(dest),
+        "downloadPath": f"/files/download/{dest.name}",
+    }
+
+
+def delete_transfer_file(repo_root: Path, name: str) -> dict[str, Any]:
+    target = resolve_transfer_file(repo_root, name)
+    target.unlink()
+    return {"status": "ok", "deletedName": target.name}
+
+
 def backup_path(repo_root: Path) -> Path:
     return repo_root / ".devota-cache" / "phone-backup" / "profile.json"
 
@@ -2310,6 +2418,31 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 while chunk := f.read(65536):
                     self.wfile.write(chunk)
 
+        def send_transfer_download(self, name: str, head_only: bool = False):
+            try:
+                target = resolve_transfer_file(repo_root, name)
+            except PermissionError:
+                self.send_error(403, "Forbidden")
+                return
+            except FileNotFoundError as exc:
+                self.send_error(404, str(exc))
+                return
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            content_type, _ = mimetypes.guess_type(target.name)
+            size = target.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            if head_only:
+                return
+            with open(target, "rb") as f:
+                while chunk := f.read(65536):
+                    self.wfile.write(chunk)
+
         def apps_payload(self):
             builds = scan_apks(repo_root, manifest)
             by_app = {app["id"]: [] for app in manifest["apps"]}
@@ -2404,6 +2537,30 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_error(400, f"Terminal upload failed: {exc}")
                 return
 
+            if path == "/files/upload":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length <= 0:
+                    self.send_error(400, "Empty body")
+                    return
+                if length > FILE_TRANSFER_MAX_BYTES + (1024 * 1024):
+                    self.send_error(413, "Payload too large")
+                    return
+                try:
+                    raw = self.rfile.read(length)
+                    query = parse_qs(urlparse(self.path).query)
+                    fallback = query.get("name", [None])[0] or self.headers.get("X-Devota-Filename")
+                    self.send_json(
+                        save_transfer_file(
+                            repo_root,
+                            self.headers.get("Content-Type", ""),
+                            raw,
+                            fallback,
+                        )
+                    )
+                except Exception as exc:
+                    self.send_error(400, f"File upload failed: {exc}")
+                return
+
             if path == "/ssh/authorized-key":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length <= 0:
@@ -2451,7 +2608,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     return
                 self.send_json({"status": "ok", "bytes": len(raw)})
                 return
-            self.send_error(404, "Not found. Use POST /clipboard, POST /terminal/upload, or /projects endpoints")
+            self.send_error(404, "Not found. Use POST /clipboard, POST /terminal/upload, POST /files/upload, or /projects endpoints")
 
         def do_PATCH(self):
             path = unquote(urlparse(self.path).path)
@@ -2488,7 +2645,19 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 except Exception as exc:
                     self.send_error(400, f"Macros delete failed: {exc}")
                 return
-            self.send_error(404, "Not found. Use /macros/<id>")
+
+            match = re.fullmatch(r"/files/([^/]+)", path)
+            if match:
+                try:
+                    self.send_json(delete_transfer_file(repo_root, match.group(1)))
+                except FileNotFoundError as exc:
+                    self.send_error(404, str(exc))
+                except PermissionError:
+                    self.send_error(403, "Forbidden")
+                except Exception as exc:
+                    self.send_error(400, f"File delete failed: {exc}")
+                return
+            self.send_error(404, "Not found. Use /macros/<id> or /files/<name>")
 
         def do_HEAD(self):
             parsed = urlparse(self.path)
@@ -2496,7 +2665,10 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):], head_only=True)
                 return
-            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile", "/macros"):
+            if path.startswith("/files/download/"):
+                self.send_transfer_download(path[len("/files/download/"):], head_only=True)
+                return
+            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile", "/macros", "/files"):
                 self.do_GET()
                 return
             self.send_error(404, "Not found")
@@ -2573,11 +2745,22 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_error(400, f"Projects request failed: {exc}")
                 return
 
+            if path == "/files":
+                try:
+                    self.send_json(list_transfer_files(repo_root))
+                except Exception as exc:
+                    self.send_error(500, f"File list failed: {exc}")
+                return
+
+            if path.startswith("/files/download/"):
+                self.send_transfer_download(path[len("/files/download/"):])
+                return
+
             if path.startswith("/download/"):
                 self.send_download(path[len("/download/"):])
                 return
 
-            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /backup/profile, /projects/board, /download/<path>, POST /clipboard, or POST /terminal/upload")
+            self.send_error(404, "Not found. Use /health, /apps, /builds, /latest, /files, /backup/profile, /projects/board, /download/<path>, POST /clipboard, POST /terminal/upload, or POST /files/upload")
 
         def log_message(self, format, *args):
             print(f"[{self.log_date_time_string()}] {format % args}")

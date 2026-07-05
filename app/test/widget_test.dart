@@ -1,9 +1,39 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devota/main.dart';
+import 'package:devota/files_tab.dart';
 import 'package:devota/ssh_terminal_tab.dart';
+
+/// Returns a canned JSON body for every request, so widget tests can render
+/// server-backed tabs without a live build server.
+class _StubAdapter implements HttpClientAdapter {
+  _StubAdapter(this.body);
+
+  final String body;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return ResponseBody.fromString(
+      body,
+      200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
+}
 
 void main() {
   testWidgets('App renders', (WidgetTester tester) async {
@@ -159,5 +189,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('C-z'), findsWidgets);
+  });
+
+  testWidgets('Files tab lists transfer files and offers a download', (
+    WidgetTester tester,
+  ) async {
+    final dio = Dio()
+      ..httpClientAdapter = _StubAdapter(
+        jsonEncode({
+          'status': 'ok',
+          'dir': '/home/chase/dev-ota/.devota-cache/file-transfer',
+          'files': [
+            {
+              'name': 'report.zip',
+              'size': 2048,
+              'modified': '2026-07-04 21:00:00',
+              'contentType': 'application/zip',
+              'downloadPath': '/files/download/report.zip',
+            },
+          ],
+        }),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 700,
+            child: FilesTab(dio: dio, serverUrl: 'http://127.0.0.1:8082'),
+          ),
+        ),
+      ),
+    );
+    // Let the stubbed GET /files resolve (no spinner remains after it loads).
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(find.text('File transfers'), findsOneWidget);
+    expect(find.text('report.zip'), findsOneWidget);
+    expect(find.textContaining('.devota-cache/file-transfer'), findsOneWidget);
+    expect(find.byIcon(Icons.download), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

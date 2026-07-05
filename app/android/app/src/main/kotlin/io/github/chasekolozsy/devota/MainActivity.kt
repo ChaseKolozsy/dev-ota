@@ -1,6 +1,7 @@
 package io.github.chasekolozsy.devota
 
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,13 +9,16 @@ import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.net.Inet4Address
 
 class MainActivity : FlutterActivity() {
@@ -81,6 +85,16 @@ class MainActivity : FlutterActivity() {
                     val timeoutMs = call.argument<Int>("timeoutMs") ?: 3500
                     discoverDevotaServers(timeoutMs.coerceIn(1000, 15000), result)
                 }
+                "saveToDownloads" -> {
+                    val filename = call.argument<String>("filename")?.trim().orEmpty()
+                    val sourcePath = call.argument<String>("sourcePath")?.trim().orEmpty()
+                    val mimeType = call.argument<String>("mimeType")?.trim().orEmpty()
+                    if (filename.isEmpty() || sourcePath.isEmpty()) {
+                        result.error("bad_args", "filename and sourcePath are required", null)
+                        return@setMethodCallHandler
+                    }
+                    saveToDownloads(filename, sourcePath, mimeType, result)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -101,6 +115,58 @@ class MainActivity : FlutterActivity() {
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }
+    }
+
+    private fun saveToDownloads(
+        filename: String,
+        sourcePath: String,
+        mimeType: String,
+        result: MethodChannel.Result,
+    ) {
+        val mainHandler = Handler(Looper.getMainLooper())
+        Thread {
+            try {
+                val source = File(sourcePath)
+                if (!source.isFile) {
+                    throw IllegalArgumentException("source file not found")
+                }
+                val effectiveMime = if (mimeType.isNotEmpty()) mimeType else "application/octet-stream"
+                val savedLabel: String
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val resolver = contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                        put(MediaStore.Downloads.MIME_TYPE, effectiveMime)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("could not create a Downloads entry")
+                    resolver.openOutputStream(uri).use { output ->
+                        if (output == null) throw IllegalStateException("could not open the Downloads stream")
+                        source.inputStream().use { input -> input.copyTo(output) }
+                    }
+                    val done = ContentValues().apply {
+                        put(MediaStore.Downloads.IS_PENDING, 0)
+                    }
+                    resolver.update(uri, done, null, null)
+                    savedLabel = "Downloads/$filename"
+                } else {
+                    @Suppress("DEPRECATION")
+                    val downloads = Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS
+                    )
+                    if (!downloads.exists()) downloads.mkdirs()
+                    val dest = File(downloads, filename)
+                    source.inputStream().use { input ->
+                        dest.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    savedLabel = "Downloads/${dest.name}"
+                }
+                mainHandler.post { result.success(savedLabel) }
+            } catch (e: Exception) {
+                mainHandler.post { result.error("save_failed", e.message, null) }
+            }
+        }.start()
     }
 
     private fun openAppStore(packageName: String) {

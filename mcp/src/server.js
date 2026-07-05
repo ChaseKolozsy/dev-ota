@@ -205,6 +205,27 @@ async function buildServerJson(pathname, options = {}) {
   return payload;
 }
 
+async function buildServerUpload(pathname, { buffer, filename, contentType }) {
+  const base = requireBuildServerUrl();
+  const form = new FormData();
+  const blob = new Blob([buffer], { type: contentType || "application/octet-stream" });
+  form.append("file", blob, filename);
+  const response = await fetch(`${base}${pathname}`, { method: "POST", body: form });
+  const text = await response.text();
+  let payload = {};
+  if (text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`DevOTA build server POST ${pathname} returned HTTP ${response.status}: ${text.trim()}`);
+  }
+  return payload;
+}
+
 function adbArgs(serial, args) {
   return serial ? ["-s", serial, ...args] : args;
 }
@@ -797,6 +818,68 @@ server.registerTool(
   },
   async ({ id }) => textResult(
     await buildServerJson(`/macros/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  ),
+);
+
+server.registerTool(
+  "devota_files_list",
+  {
+    title: "List DevOTA Transfer Files",
+    description: "List files staged for the phone in the DevOTA file-transfer directory, and report that directory's absolute path (where agents can drop files directly).",
+  },
+  async () => textResult(await buildServerJson("/files")),
+);
+
+server.registerTool(
+  "devota_files_send",
+  {
+    title: "Send File To Phone",
+    description: "Stage a file for the user to download in the DevOTA app's Files tab. Provide exactly one of: path (a local file on this machine), text (utf-8 content), or base64 (binary content). filename is required for text/base64 and optional for path.",
+    inputSchema: {
+      path: z.string().optional().describe("Local file path on the agent machine to read and send."),
+      text: z.string().optional().describe("UTF-8 text content to send. Requires filename."),
+      base64: z.string().optional().describe("Base64-encoded binary content to send. Requires filename."),
+      filename: z.string().optional().describe("Name to show on the phone. Defaults to the basename of path."),
+      contentType: z.string().optional().describe("Optional MIME type hint."),
+    },
+  },
+  async ({ path: localPath, text, base64, filename, contentType }) => {
+    const sources = [localPath, text, base64].filter((value) => value !== undefined && value !== null);
+    if (sources.length !== 1) {
+      throw new Error("provide exactly one of: path, text, base64");
+    }
+    let buffer;
+    let name = filename;
+    if (localPath !== undefined && localPath !== null) {
+      buffer = await readFile(localPath);
+      if (!name) name = path.basename(localPath);
+    } else if (text !== undefined && text !== null) {
+      if (!name) throw new Error("filename is required when sending text");
+      buffer = Buffer.from(text, "utf8");
+    } else {
+      if (!name) throw new Error("filename is required when sending base64");
+      buffer = Buffer.from(base64, "base64");
+    }
+    if (!name) throw new Error("could not determine a filename");
+    return textResult(
+      await buildServerUpload("/files/upload", { buffer, filename: name, contentType }),
+    );
+  },
+);
+
+server.registerTool(
+  "devota_files_delete",
+  {
+    title: "Delete DevOTA Transfer File",
+    description: "Delete a file from the DevOTA file-transfer directory by name.",
+    inputSchema: {
+      name: z.string(),
+    },
+  },
+  async ({ name }) => textResult(
+    await buildServerJson(`/files/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
   ),
