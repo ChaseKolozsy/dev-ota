@@ -218,6 +218,18 @@ String newTerminalMacroId(String prefix) {
   return '$prefix-${DateTime.now().microsecondsSinceEpoch}';
 }
 
+TerminalMacroStep newTerminalMacroStep(
+  TerminalMacroStepType type, [
+  String? value,
+]) {
+  return TerminalMacroStep(
+    id: newTerminalMacroId('step'),
+    type: type,
+    value: value ?? defaultTerminalMacroStepValue(type),
+    delaySeconds: defaultTerminalMacroStepDelay(type),
+  );
+}
+
 class TerminalMacroController extends ChangeNotifier {
   Future<void> Function(TerminalMacro macro)? _runner;
   bool Function()? _canRun;
