@@ -103,4 +103,67 @@ void main() {
     expect(snapshot.usageCounts, {'macro-1': 2});
     expect(snapshot.toJson()['macros'], isA<List>());
   });
+
+  test('run progress reports a fraction and a human step label', () {
+    const start = MacroRunProgress(
+      macroName: 'Deploy',
+      stepIndex: 0,
+      stepCount: 0,
+    );
+    expect(start.fraction, isNull);
+    expect(start.stepLabel, 'starting');
+
+    const midway = MacroRunProgress(
+      macroName: 'Deploy',
+      stepIndex: 2,
+      stepCount: 4,
+    );
+    expect(midway.fraction, 0.5);
+    expect(midway.stepLabel, 'step 2 of 4');
+  });
+
+  test('controller exposes progress and stop only while a macro runs', () {
+    final controller = TerminalMacroController();
+    addTearDown(controller.dispose);
+
+    var running = false;
+    var stopRequested = false;
+    var stepIndex = 0;
+    controller.attach(
+      runner: (_) async => running = true,
+      canRun: () => !running,
+      isRunning: () => running,
+      progress: () => MacroRunProgress(
+        macroName: 'Deploy',
+        stepIndex: stepIndex,
+        stepCount: 3,
+        stopping: stopRequested,
+      ),
+      stop: () => stopRequested = true,
+    );
+
+    // Idle: nothing to show and nothing to stop, so no screen renders a
+    // busy banner or an armed Stop button.
+    expect(controller.progress, isNull);
+    expect(controller.canStop, isFalse);
+    controller.requestStop();
+    expect(stopRequested, isFalse);
+
+    running = true;
+    stepIndex = 2;
+    expect(controller.canRun, isFalse);
+    expect(controller.progress?.macroName, 'Deploy');
+    expect(controller.progress?.stepLabel, 'step 2 of 3');
+    expect(controller.canStop, isTrue);
+
+    controller.requestStop();
+    expect(stopRequested, isTrue);
+    expect(controller.progress?.stopping, isTrue);
+
+    running = false;
+    expect(controller.progress, isNull);
+
+    controller.detach();
+    expect(controller.isAttached, isFalse);
+  });
 }

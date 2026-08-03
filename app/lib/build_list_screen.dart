@@ -1327,41 +1327,117 @@ class _BuildListScreenState extends State<BuildListScreen>
                 ),
               ),
             ),
-      body: TabBarView(
-        controller: _tabController,
-        physics: hideShellChrome ? const NeverScrollableScrollPhysics() : null,
+      body: Column(
         children: [
-          ConnectTab(
-            channel: _controlAgentChannel,
-            servers: _servers,
-            activeServer: _activeServer,
-            onServerSelected: _addAndSelectServer,
-          ),
-          _buildBuildsTab(),
-          ProjectsTab(dio: _dio, serverUrl: _baseUrl),
-          SshTerminalTab(
-            key: const PageStorageKey('ssh-terminal-tab'),
-            dio: _dio,
-            serverUrl: _baseUrl,
-            fullscreen: _terminalFullscreen,
-            quickCommands: _quickCommands,
-            quickMacros: _quickMacros,
-            macroController: _macroController,
-            onFullscreenChanged: _setTerminalFullscreen,
-            onCommandUsed: _recordCommandUse,
-            onMacroUsed: _recordMacroUse,
-          ),
-          _buildCommandsTab(),
-          _buildMacrosTab(),
-          _buildAgentTab(),
-          BackupTab(
-            dio: _dio,
-            serverUrl: _baseUrl,
-            onImported: _reloadImportedSettings,
-          ),
-          FilesTab(dio: _dio, serverUrl: _baseUrl),
+          // The terminal tab draws its own (richer) banner right above the
+          // locked controls, so only the other tabs need this strip.
+          if (_tabController.index != _terminalTabIndex)
+            _buildMacroRunningStrip(theme),
+          Expanded(child: _buildTabViews(hideShellChrome)),
         ],
       ),
+    );
+  }
+
+  /// Shown on every non-terminal tab while a macro is running: a macro drives
+  /// the shared SSH session, so anything typed or tapped anywhere lands inside
+  /// its sequence. Also carries the Stop the terminal tab offers.
+  Widget _buildMacroRunningStrip(ThemeData theme) {
+    final progress = _macroController.progress;
+    if (progress == null) return const SizedBox.shrink();
+    final scheme = theme.colorScheme;
+    return Material(
+      color: scheme.tertiaryContainer,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: scheme.onTertiaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    progress.stopping
+                        ? 'Stopping ${progress.macroName}...'
+                        : '${progress.macroName}  •  ${progress.stepLabel}  •  '
+                              'wait before touching the terminal',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onTertiaryContainer,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: scheme.onTertiaryContainer,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: progress.stopping || !_macroController.canStop
+                      ? null
+                      : _macroController.requestStop,
+                  child: const Text('Stop'),
+                ),
+              ],
+            ),
+          ),
+          LinearProgressIndicator(
+            value: progress.fraction,
+            minHeight: 2,
+            backgroundColor: scheme.onTertiaryContainer.withValues(alpha: 0.15),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabViews(bool hideShellChrome) {
+    return TabBarView(
+      controller: _tabController,
+      physics: hideShellChrome ? const NeverScrollableScrollPhysics() : null,
+      children: [
+        ConnectTab(
+          channel: _controlAgentChannel,
+          servers: _servers,
+          activeServer: _activeServer,
+          onServerSelected: _addAndSelectServer,
+        ),
+        _buildBuildsTab(),
+        ProjectsTab(dio: _dio, serverUrl: _baseUrl),
+        SshTerminalTab(
+          key: const PageStorageKey('ssh-terminal-tab'),
+          dio: _dio,
+          serverUrl: _baseUrl,
+          fullscreen: _terminalFullscreen,
+          quickCommands: _quickCommands,
+          quickMacros: _quickMacros,
+          macroController: _macroController,
+          onFullscreenChanged: _setTerminalFullscreen,
+          onCommandUsed: _recordCommandUse,
+          onMacroUsed: _recordMacroUse,
+        ),
+        _buildCommandsTab(),
+        _buildMacrosTab(),
+        _buildAgentTab(),
+        BackupTab(
+          dio: _dio,
+          serverUrl: _baseUrl,
+          onImported: _reloadImportedSettings,
+        ),
+        FilesTab(dio: _dio, serverUrl: _baseUrl),
+      ],
     );
   }
 
@@ -1729,6 +1805,7 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Widget _buildMacrosTab() {
     final rankedMacros = _rankedMacros;
+    final progress = _macroController.progress;
     final running = _macroController.isRunning;
     return Column(
       children: [
@@ -1738,8 +1815,8 @@ class _BuildListScreenState extends State<BuildListScreen>
             children: [
               Expanded(
                 child: Text(
-                  running
-                      ? 'Macro running...'
+                  progress != null
+                      ? 'Running ${progress.macroName} — ${progress.stepLabel}'
                       : 'Create ordered terminal/tmux command sequences.',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -1780,9 +1857,19 @@ class _BuildListScreenState extends State<BuildListScreen>
                   itemBuilder: (context, index) {
                     final macro = rankedMacros[index];
                     final uses = _macroUseCounts[macro.id] ?? 0;
+                    final isRunningMacro =
+                        progress != null && progress.macroName == macro.name;
                     return Card(
                       child: ExpansionTile(
-                        leading: const Icon(Icons.playlist_play),
+                        leading: isRunningMacro
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.playlist_play),
                         title: Text(macro.name),
                         subtitle: Text(
                           '${macro.steps.length} step${macro.steps.length == 1 ? '' : 's'}'

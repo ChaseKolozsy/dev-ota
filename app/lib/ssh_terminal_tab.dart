@@ -219,7 +219,8 @@ class _CustomPadKeyDialogState extends State<_CustomPadKeyDialog> {
       actions: [
         if (existing != null)
           TextButton(
-            onPressed: () => Navigator.pop(context, (saved: null, deleted: true)),
+            onPressed: () =>
+                Navigator.pop(context, (saved: null, deleted: true)),
             child: Text(
               'Delete',
               style: TextStyle(color: theme.colorScheme.error),
@@ -390,6 +391,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _terminalToolsVisible = true;
   bool _nativeKeyboardLocked = false;
   bool _macroRunning = false;
+  String? _macroRunningName;
+  int _macroStepIndex = 0;
+  int _macroStepCount = 0;
+  bool _macroStopRequested = false;
   bool _tmuxBarEnabled = true;
   bool _macroBarEnabled = true;
   bool _commandBarEnabled = true;
@@ -503,7 +508,34 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       runner: _runMacro,
       canRun: () => _connected && !_macroRunning,
       isRunning: () => _macroRunning,
+      progress: _macroProgress,
+      stop: _requestMacroStop,
     );
+  }
+
+  MacroRunProgress? _macroProgress() {
+    if (!_macroRunning) return null;
+    return MacroRunProgress(
+      macroName: _macroRunningName ?? 'Macro',
+      stepIndex: _macroStepIndex,
+      stepCount: _macroStepCount,
+      stopping: _macroStopRequested,
+    );
+  }
+
+  /// The escape hatch that makes locking the controls fair: instead of mashing
+  /// buttons when a macro looks stuck, the user gets one deliberate Stop.
+  void _requestMacroStop() {
+    if (!_macroRunning || _macroStopRequested) return;
+    if (mounted) {
+      setState(() {
+        _macroStopRequested = true;
+        _status = 'Stopping macro...';
+      });
+    } else {
+      _macroStopRequested = true;
+    }
+    _notifyMacroController();
   }
 
   void _notifyMacroController() {
@@ -1159,6 +1191,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       setState(() {
         _connected = false;
         _macroRunning = false;
+        _macroStopRequested = false;
+        _macroRunningName = null;
+        _macroStepIndex = 0;
+        _macroStepCount = 0;
       });
     }
     _resetTerminalScrollGestures();
@@ -1177,9 +1213,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       // for the terminal; without this reset the focus change can stick on the
       // composer (the bug this fixes). The terminal re-opens it on the frames
       // below.
-      unawaited(
-        SystemChannels.textInput.invokeMethod<void>('TextInput.hide'),
-      );
+      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
     }
     void requestTerminalFocus() {
       if (!mounted || !_connected || _tmuxScrollMode) return;
@@ -1217,6 +1251,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   void _sendTerminalKey(String sequence, {String? fallbackText}) {
+    // Last line of defence: the macro writes through _writeToSession, so any
+    // other keystroke path stays shut until the sequence finishes.
+    if (_macroRunning) return;
     if (_connected) {
       _writeToSession(sequence);
       return;
@@ -1310,7 +1347,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _submitTextToTerminal(String text) {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || !_connected) return;
+    if (trimmed.isEmpty || !_connected || _macroRunning) return;
     _writeToSession('$trimmed\n');
     _composerController.clear();
     _focusTerminalInput();
@@ -1318,7 +1355,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _runSavedCommand(String command) {
     final trimmed = command.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty || _macroRunning) return;
     widget.onCommandUsed?.call(trimmed);
     if (_composerController.text.trim().isNotEmpty) {
       _prefixComposerText(trimmed);
@@ -1376,13 +1413,21 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     widget.onMacroUsed?.call(macro);
     setState(() {
       _macroRunning = true;
+      _macroStopRequested = false;
+      _macroRunningName = macro.name;
+      _macroStepIndex = 0;
+      _macroStepCount = macro.steps.length;
       _status = 'Running macro: ${macro.name}';
     });
     _notifyMacroController();
     _focusTerminalInput();
     try {
-      for (final step in macro.steps) {
+      for (var i = 0; i < macro.steps.length; i++) {
+        if (_macroStopRequested) break;
         if (!_connected) throw StateError('SSH disconnected.');
+        final step = macro.steps[i];
+        if (mounted) setState(() => _macroStepIndex = i + 1);
+        _notifyMacroController();
         switch (step.type) {
           case TerminalMacroStepType.shell:
             final command = step.value.trimRight();
@@ -1406,22 +1451,47 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             break;
         }
         if (step.delaySeconds > 0) {
-          await Future<void>.delayed(
-            Duration(milliseconds: (step.delaySeconds * 1000).round()),
-          );
+          if (!await _macroDelay(step.delaySeconds)) break;
         }
       }
-      if (mounted) setState(() => _status = 'Macro complete: ${macro.name}');
+      if (mounted) {
+        setState(
+          () => _status = _macroStopRequested
+              ? 'Macro stopped at step $_macroStepIndex: ${macro.name}'
+              : 'Macro complete: ${macro.name}',
+        );
+      }
     } catch (e) {
       if (mounted) setState(() => _status = 'Macro stopped: $e');
       rethrow;
     } finally {
       if (mounted) {
-        setState(() => _macroRunning = false);
+        setState(() {
+          _macroRunning = false;
+          _macroStopRequested = false;
+          _macroRunningName = null;
+          _macroStepIndex = 0;
+          _macroStepCount = 0;
+        });
         _notifyMacroController();
         _focusTerminalInput();
       }
     }
+  }
+
+  /// Sleeps a step's delay in short slices so Stop lands mid-wait instead of
+  /// after a 30-second pause. Returns false when the run should end.
+  Future<bool> _macroDelay(double seconds) async {
+    final total = (seconds * 1000).round();
+    var elapsed = 0;
+    while (elapsed < total) {
+      if (_macroStopRequested || !mounted || !_connected) return false;
+      final remaining = total - elapsed;
+      final slice = remaining < 100 ? remaining : 100;
+      await Future<void>.delayed(Duration(milliseconds: slice));
+      elapsed += slice;
+    }
+    return !_macroStopRequested && mounted;
   }
 
   Future<void> _attachFileToTerminal() async {
@@ -1561,19 +1631,119 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     scrollController: _terminalScrollController,
                     textStyle: TerminalStyle(fontSize: _terminalFontSize),
                     autofocus: true,
-                    readOnly: _tmuxScrollMode,
+                    // Keystrokes (soft or hardware) would interleave with the
+                    // macro's own input, so the terminal is read-only until the
+                    // sequence finishes.
+                    readOnly: _tmuxScrollMode || _macroRunning,
                     hardwareKeyboardOnly: _nativeKeyboardLocked,
                   ),
                 ),
               ),
             ),
           ),
+          if (_macroRunning) _buildMacroRunBanner(theme),
           _buildTerminalToolsHeader(theme),
           if (_terminalToolsVisible) ...[
-            _buildTerminalControlPad(theme),
-            ..._buildToolBarRows(theme),
+            _macroLock(_buildTerminalControlPad(theme)),
+            for (final row in _buildToolBarRows(theme)) _macroLock(row),
           ],
-          _buildComposer(),
+          _macroLock(_buildComposer()),
+        ],
+      ),
+    );
+  }
+
+  /// Makes an input surface inert while a macro runs. The buttons inside also
+  /// render themselves disabled; this additionally swallows taps that land in
+  /// the gaps between them, so nothing reaches the session mid-sequence.
+  Widget _macroLock(Widget child) {
+    if (!_macroRunning) return child;
+    return AbsorbPointer(child: Opacity(opacity: 0.55, child: child));
+  }
+
+  /// The "busy circle" every terminal control wears while a macro runs — the
+  /// same signal the macro buttons use, so no button in the pad or bars looks
+  /// tappable in the middle of a sequence.
+  Widget _macroBusySpinner({double size = 12, double strokeWidth = 2}) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CircularProgressIndicator(strokeWidth: strokeWidth),
+    );
+  }
+
+  Widget _buildMacroRunBanner(ThemeData theme) {
+    final scheme = theme.colorScheme;
+    final progress = _macroProgress();
+    final fraction = progress?.fraction;
+    return Material(
+      color: scheme.tertiaryContainer,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: scheme.onTertiaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _macroStopRequested
+                            ? 'Stopping macro'
+                            : 'Macro running — controls are locked',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: scheme.onTertiaryContainer,
+                        ),
+                      ),
+                      Text(
+                        '${_macroRunningName ?? 'Macro'}  •  '
+                        '${progress?.stepLabel ?? ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onTertiaryContainer.withValues(
+                            alpha: 0.8,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: scheme.onTertiaryContainer,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                  label: const Text('Stop'),
+                  onPressed: _macroStopRequested ? null : _requestMacroStop,
+                ),
+              ],
+            ),
+          ),
+          LinearProgressIndicator(
+            value: fraction,
+            minHeight: 2,
+            backgroundColor: scheme.onTertiaryContainer.withValues(alpha: 0.15),
+          ),
         ],
       ),
     );
@@ -2192,7 +2362,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _buildPadKeyPill(TerminalPadKey key) {
-    final enabled = _connected || key.enabledWhenDisconnected;
+    final enabled =
+        (_connected || key.enabledWhenDisconnected) && !_macroRunning;
     final icon = _padKeyIcon(key.iconName);
     final button = SizedBox(
       height: 30,
@@ -2213,7 +2384,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _buildPadFixedRightButton(TerminalPadKey key) {
-    final enabled = _connected || key.enabledWhenDisconnected;
+    final enabled =
+        (_connected || key.enabledWhenDisconnected) && !_macroRunning;
     final icon = _padKeyIcon(key.iconName);
     return Tooltip(
       message: key.name,
@@ -2303,7 +2475,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
         icon: Icon(icon, size: 20),
-        onPressed: _connected
+        onPressed: _connected && !_macroRunning
             ? () => _activateTerminalKeyButton(
                 usageId,
                 () => _sendTerminalKey(sequence),
@@ -2767,11 +2939,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     ];
   }
 
-  Widget _buildToolRow(
-    ThemeData theme,
-    List<_ToolBar> bars,
-    _ToolBar? active,
-  ) {
+  Widget _buildToolRow(ThemeData theme, List<_ToolBar> bars, _ToolBar? active) {
     // Every bar folded: one compact horizontal strip of mini-buttons, no content.
     if (active == null) {
       return Material(
@@ -2812,9 +2980,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               ),
             ),
           ),
-          Expanded(
-            child: SizedBox(height: 40, child: active.buildContent()),
-          ),
+          Expanded(child: SizedBox(height: 40, child: active.buildContent())),
         ],
       ),
     );
@@ -3060,8 +3226,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               padding: const EdgeInsets.symmetric(horizontal: 10),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            icon: const Icon(Icons.keyboard_return, size: 16),
-            onPressed: _commandBarEnabled
+            icon: _macroRunning
+                ? _macroBusySpinner(size: 16)
+                : const Icon(Icons.keyboard_return, size: 16),
+            onPressed: _commandBarEnabled && !_macroRunning
                 ? () => _runSavedCommand(command)
                 : null,
             label: ConstrainedBox(
@@ -3086,7 +3254,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     String? tooltip,
     bool enabledWhenDisconnected = false,
   }) {
-    final enabled = (_connected || enabledWhenDisconnected) && _tmuxBarEnabled;
+    final enabled =
+        (_connected || enabledWhenDisconnected) &&
+        _tmuxBarEnabled &&
+        !_macroRunning;
     final button = SizedBox(
       height: 32,
       child: OutlinedButton(
@@ -3098,7 +3269,22 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         onPressed: enabled
             ? () => _activateTerminalKeyButton(usageId, onPressed)
             : null,
-        child: Text(label),
+        child: _macroRunning
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _macroBusySpinner(),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              )
+            : Text(label),
       ),
     );
     return Padding(
@@ -3173,7 +3359,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                             foregroundColor: theme.colorScheme.onErrorContainer,
                           )
                         : null,
-                    onPressed: _transcribing
+                    onPressed: _transcribing || _macroRunning
                         ? null
                         : (_recording
                               ? _finishVoiceRecording
@@ -3189,7 +3375,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                           )
                         : const Icon(Icons.send),
                     tooltip: 'Submit to SSH',
-                    onPressed: _connected && !_transcribing && !_recording
+                    onPressed:
+                        _connected &&
+                            !_transcribing &&
+                            !_recording &&
+                            !_macroRunning
                         ? _submitComposer
                         : null,
                   ),

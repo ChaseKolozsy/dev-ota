@@ -230,23 +230,68 @@ TerminalMacroStep newTerminalMacroStep(
   );
 }
 
+/// Live state of a macro run. Surfaced through [TerminalMacroController] so any
+/// screen can show that the session is busy — a stray tap on a tmux or command
+/// button mid-sequence lands in the middle of the macro's own input and
+/// corrupts it, so every input surface has to be able to see this.
+class MacroRunProgress {
+  const MacroRunProgress({
+    required this.macroName,
+    required this.stepIndex,
+    required this.stepCount,
+    this.stopping = false,
+  });
+
+  final String macroName;
+
+  /// 1-based step being executed; 0 before the first step starts.
+  final int stepIndex;
+  final int stepCount;
+
+  /// The user asked to stop and the run is unwinding at the next safe point.
+  final bool stopping;
+
+  double? get fraction =>
+      stepCount > 0 ? (stepIndex / stepCount).clamp(0.0, 1.0) : null;
+
+  String get stepLabel =>
+      stepCount > 0 ? 'step $stepIndex of $stepCount' : 'starting';
+}
+
 class TerminalMacroController extends ChangeNotifier {
   Future<void> Function(TerminalMacro macro)? _runner;
   bool Function()? _canRun;
   bool Function()? _isRunning;
+  MacroRunProgress? Function()? _progress;
+  VoidCallback? _stop;
 
   bool get canRun => _canRun?.call() ?? false;
   bool get isRunning => _isRunning?.call() ?? false;
   bool get isAttached => _runner != null;
 
+  /// Non-null only while a macro is actually running.
+  MacroRunProgress? get progress => isRunning ? _progress?.call() : null;
+
+  bool get canStop => isRunning && _stop != null;
+
+  /// Asks the runner to stop at the next step boundary (delays are sliced, so
+  /// this takes effect quickly even mid-wait).
+  void requestStop() {
+    if (isRunning) _stop?.call();
+  }
+
   void attach({
     required Future<void> Function(TerminalMacro macro) runner,
     required bool Function() canRun,
     required bool Function() isRunning,
+    MacroRunProgress? Function()? progress,
+    VoidCallback? stop,
   }) {
     _runner = runner;
     _canRun = canRun;
     _isRunning = isRunning;
+    _progress = progress;
+    _stop = stop;
     notifyListeners();
   }
 
@@ -254,6 +299,8 @@ class TerminalMacroController extends ChangeNotifier {
     _runner = null;
     _canRun = null;
     _isRunning = null;
+    _progress = null;
+    _stop = null;
     notifyListeners();
   }
 
