@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
@@ -48,6 +49,20 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getAgentStatus" -> result.success(ControlAgentService.statusMap(this))
+                "startSshSession" -> {
+                    val label = call.argument<String>("label")?.trim().orEmpty()
+                    SshSessionService.start(this, label)
+                    result.success(true)
+                }
+                "stopSshSession" -> {
+                    SshSessionService.stop(this)
+                    result.success(true)
+                }
+                "isSshSessionServiceRunning" -> result.success(SshSessionService.isRunning())
+                "isIgnoringBatteryOptimizations" -> result.success(isIgnoringBatteryOptimizations())
+                "requestIgnoreBatteryOptimizations" -> {
+                    result.success(requestIgnoreBatteryOptimizations())
+                }
                 "openAccessibilitySettings" -> {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     result.success(true)
@@ -107,6 +122,36 @@ class MainActivity : FlutterActivity() {
                     extractZipToDownloads(zipPath, topName, result)
                 }
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    /**
+     * Doze/App Standby can still stall an idle session even with a foreground
+     * service holding the process, so offer the exemption dialog. Falls back to
+     * the system list if the direct prompt is unavailable on this build.
+     */
+    private fun requestIgnoreBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        if (isIgnoringBatteryOptimizations()) return true
+        return try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName"))
+            )
+            true
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                true
+            } catch (_: ActivityNotFoundException) {
+                false
             }
         }
     }

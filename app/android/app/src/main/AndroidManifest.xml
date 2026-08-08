@@ -5,7 +5,11 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Doze can still stall an idle screen-off session even behind a foreground
+         service; the app asks for this only when the user opts in. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
     <application
@@ -37,7 +41,20 @@
         <service
             android:name=".ControlAgentService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds the control-relay connection so a remote agent can drive this device; the relay must stay live for the length of the run." />
+        </service>
+        <service
+            android:name=".SshSessionService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds an interactive SSH terminal session the user is actively working in; the connection must survive app switches." />
+        </service>
         <service
             android:name=".ControlAccessibilityService"
             android:exported="true"

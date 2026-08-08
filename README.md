@@ -97,7 +97,12 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 - **Terminal**: SSH terminal using password or private-key auth, secure
   credential storage, generated phone-owned Ed25519 keys, public-key install
   through the build server, trust-on-first-use host-key verification, a
-  lightweight TCP ping, and voice-to-terminal command submission.
+  lightweight TCP ping, and voice-to-terminal command submission. While a
+  session is live the app runs an ongoing notification so Android 12+ cannot
+  freeze the process (and drop SSH) when you switch apps; dropped sessions
+  reconnect on their own with a backoff and immediately when you return. Turn
+  it off under the terminal's SSH settings if you would rather not have the
+  notification.
 - **Files**: download files an agent has staged on the build server (in the
   file-transfer directory, or via `POST /files/upload`) straight into the
   phone's public Downloads folder for re-upload elsewhere. Staged **folders**

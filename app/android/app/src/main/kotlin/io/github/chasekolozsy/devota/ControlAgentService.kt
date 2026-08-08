@@ -7,6 +7,7 @@ import android.app.Service
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -101,7 +102,7 @@ class ControlAgentService : Service() {
 
         activeUrl = url
         running = true
-        startForeground(NOTIFICATION_ID, notification("Connecting to control relay"))
+        startForegroundCompat(notification("Connecting to control relay"))
         connect()
         return START_STICKY
     }
@@ -374,6 +375,26 @@ class ControlAgentService : Service() {
         }
         val sep = if (ws.contains("?")) "&" else "?"
         return ws + sep + "token=" + URLEncoder.encode(token, "UTF-8")
+    }
+
+    /**
+     * Android 15 caps a dataSync foreground service at 6 hours per day, which
+     * would cut an agent run short mid-session; specialUse carries no such cap.
+     */
+    private fun startForegroundCompat(notification: Notification) {
+        when {
+            Build.VERSION.SDK_INT >= 34 -> startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+            else -> startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun createNotificationChannel() {

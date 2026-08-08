@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import 'backup_service.dart';
+import 'background_session_service.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
 import 'terminal_pad_key.dart';
@@ -418,6 +419,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   StreamSubscription<String>? _stderrSub;
   Timer? _backupDebounce;
 
+  /// True between a user-initiated Connect and a user-initiated Disconnect.
+  /// Anything that breaks the session in between is treated as a drop worth
+  /// recovering from, not as the user leaving.
+  bool _wantConnected = false;
+  bool _keepAliveInBackground = true;
+  bool _batteryOptimizationExempt = true;
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+
   @override
   void initState() {
     super.initState();
@@ -434,6 +444,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadNativeKeyboardLock();
     _loadTerminalFontSize();
     _loadTerminalPadConfig();
+    _loadBackgroundKeepAlive();
     _attachMacroController();
   }
 
@@ -441,6 +452,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void dispose() {
     widget.macroController?.detach();
     WidgetsBinding.instance.removeObserver(this);
+    _reconnectTimer?.cancel();
     _disconnect();
     _hostController.dispose();
     _portController.dispose();
@@ -473,6 +485,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed || !mounted) return;
+    // Coming back is the one moment we know the user is watching, so retry
+    // immediately with a clean slate instead of waiting out the backoff.
+    if (_wantConnected && !_connected && !_busy) {
+      _reconnectAttempts = 0;
+      _reconnectTimer?.cancel();
+      unawaited(_connect(auto: true));
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_connected) _terminalFocusNode.requestFocus();
@@ -497,6 +516,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   static const _nativeKeyboardLockedKey = 'terminal_native_keyboard_locked';
   static const _terminalFontSizeKey = 'terminal_font_size';
   static const _terminalPadConfigKey = 'terminal_pad_config_json';
+  static const _backgroundKeepAliveKey = 'terminal_background_keepalive';
+  static const _backgroundBatteryPromptKey = 'terminal_background_battery_ask';
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
   static const _terminalMaxFontSize = 22.0;
@@ -825,6 +846,80 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _scheduleServerBackup();
   }
 
+  Future<void> _loadBackgroundKeepAlive() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool(_backgroundKeepAliveKey) ?? true;
+    final exempt = Platform.isAndroid
+        ? await BackgroundSessionService.isBatteryOptimizationExempt()
+        : true;
+    if (!mounted) return;
+    setState(() {
+      _keepAliveInBackground = enabled;
+      _batteryOptimizationExempt = exempt;
+    });
+  }
+
+  Future<void> _setKeepAliveInBackground(bool enabled) async {
+    setState(() => _keepAliveInBackground = enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_backgroundKeepAliveKey, enabled);
+    await _syncBackgroundSession();
+    _scheduleServerBackup();
+  }
+
+  /// Mirrors the foreground service to the session state: running whenever a
+  /// session is up or being recovered, gone the moment the user disconnects.
+  Future<void> _syncBackgroundSession() async {
+    if (!Platform.isAndroid) return;
+    if (!_keepAliveInBackground || !(_connected || _wantConnected)) {
+      await BackgroundSessionService.stop();
+      return;
+    }
+    final target = '$_username@$_host';
+    await BackgroundSessionService.start(
+      _connected ? 'Connected to $target' : 'Reconnecting to $target',
+    );
+  }
+
+  /// A foreground service keeps the process off the freezer, but Doze can still
+  /// stall an idle screen-off session. Ask once, the first time it matters.
+  Future<void> _maybePromptBatteryExemption() async {
+    if (!Platform.isAndroid || !_keepAliveInBackground) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_backgroundBatteryPromptKey) ?? false) return;
+    if (await BackgroundSessionService.isBatteryOptimizationExempt()) {
+      if (mounted) setState(() => _batteryOptimizationExempt = true);
+      return;
+    }
+    await prefs.setBool(_backgroundBatteryPromptKey, true);
+    if (!mounted) return;
+    final allow = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Keep the session alive?'),
+        content: const Text(
+          'Android can still suspend DevOTA while the screen is off, which '
+          'drops the SSH session. Marking DevOTA as unrestricted in battery '
+          'settings keeps long builds and agent runs connected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Allow'),
+          ),
+        ],
+      ),
+    );
+    if (allow != true) return;
+    await BackgroundSessionService.requestBatteryOptimizationExemption();
+    final exempt = await BackgroundSessionService.isBatteryOptimizationExempt();
+    if (mounted) setState(() => _batteryOptimizationExempt = exempt);
+  }
+
   void _scheduleServerBackup() {
     _backupDebounce?.cancel();
     _backupDebounce = Timer(const Duration(seconds: 2), () {
@@ -1097,17 +1192,24 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     return false;
   }
 
-  Future<void> _connect() async {
+  Future<void> _connect({bool auto = false}) async {
     if (_host.isEmpty || _username.isEmpty) {
       setState(() => _status = 'Host and username are required.');
       return;
     }
+    if (_busy || _connected) return;
+    _reconnectTimer?.cancel();
+    _wantConnected = true;
+    if (!auto) _reconnectAttempts = 0;
     await _saveProfile();
+    if (!mounted) return;
     setState(() {
       _busy = true;
-      _status = 'Connecting...';
+      _status = auto ? 'Reconnecting...' : 'Connecting...';
     });
-    _terminal.write('\r\nConnecting to $_username@$_host:$_port...\r\n');
+    _terminal.write(
+      '\r\n${auto ? 'Reconnecting' : 'Connecting'} to $_username@$_host:$_port...\r\n',
+    );
     try {
       List<SSHKeyPair>? identities;
       if (_usePrivateKey) {
@@ -1135,6 +1237,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             ? null
             : () => _passwordController.text,
         onVerifyHostKey: _verifyHostKey,
+        // Keep the socket warm through phone NATs and idle-timeout sshd
+        // configs. This only helps while the process is actually running,
+        // which is what the foreground service below guarantees.
+        keepAliveInterval: const Duration(seconds: 15),
       );
       await client.authenticated;
       final session = await client.shell(
@@ -1155,30 +1261,91 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           .cast<List<int>>()
           .transform(const Utf8Decoder())
           .listen(_terminal.write);
-      session.done.whenComplete(() {
-        if (!mounted) return;
+      // Either end of the connection dying should look the same to the user:
+      // the shell going away, or the transport dropping under it.
+      session.done.whenComplete(() => _handleSessionClosed(client));
+      client.done.whenComplete(() => _handleSessionClosed(client));
+      _reconnectAttempts = 0;
+      if (mounted) {
         setState(() {
-          _connected = false;
-          _status = 'SSH session closed.';
+          _connected = true;
+          _status = 'Connected to $_host:$_port';
         });
-        _notifyMacroController();
-      });
-      setState(() {
-        _connected = true;
-        _status = 'Connected to $_host:$_port';
-      });
+      }
+      unawaited(_syncBackgroundSession());
+      if (!auto) unawaited(_maybePromptBatteryExemption());
       _notifyMacroController();
     } catch (e) {
       _terminal.write('Connection failed: $e\r\n');
-      setState(() => _status = 'Connection failed: $e');
-      _disconnect();
+      if (mounted) setState(() => _status = 'Connection failed: $e');
+      await _disconnect(userInitiated: false);
+      _scheduleReconnect('Connection failed');
     } finally {
       if (mounted) setState(() => _busy = false);
       _notifyMacroController();
     }
   }
 
-  Future<void> _disconnect() async {
+  /// Called when the shell or the transport goes away on its own — an idle
+  /// timeout, a network change, or the OS having frozen us for long enough that
+  /// the peer gave up.
+  void _handleSessionClosed(SSHClient client) {
+    if (!identical(_client, client)) return; // A stale connection winding down.
+    _client = null;
+    _session = null;
+    unawaited(_stdoutSub?.cancel());
+    unawaited(_stderrSub?.cancel());
+    _stdoutSub = null;
+    _stderrSub = null;
+    if (mounted) {
+      setState(() {
+        _connected = false;
+        _status = _wantConnected ? 'SSH session dropped.' : 'SSH session closed.';
+      });
+    } else {
+      _connected = false;
+    }
+    _notifyMacroController();
+    if (_wantConnected) {
+      _scheduleReconnect('SSH session dropped');
+    } else {
+      unawaited(_syncBackgroundSession());
+    }
+  }
+
+  /// Retries with a widening backoff. The foreground service is what makes this
+  /// worth doing while backgrounded — without it the retry timer would be
+  /// frozen alongside everything else.
+  void _scheduleReconnect(String reason) {
+    if (!_wantConnected) return;
+    _reconnectTimer?.cancel();
+    const backoff = [2, 5, 10, 20, 30, 60];
+    if (_reconnectAttempts >= 8) {
+      _wantConnected = false;
+      if (mounted) {
+        setState(() => _status = '$reason. Auto-reconnect gave up; tap Connect.');
+      }
+      unawaited(_syncBackgroundSession());
+      return;
+    }
+    final delay = backoff[_reconnectAttempts.clamp(0, backoff.length - 1)];
+    _reconnectAttempts++;
+    if (mounted) {
+      setState(() => _status = '$reason. Reconnecting in ${delay}s...');
+    }
+    unawaited(_syncBackgroundSession());
+    _reconnectTimer = Timer(Duration(seconds: delay), () {
+      if (!_wantConnected || _connected || _busy) return;
+      unawaited(_connect(auto: true));
+    });
+  }
+
+  Future<void> _disconnect({bool userInitiated = true}) async {
+    if (userInitiated) {
+      _wantConnected = false;
+      _reconnectAttempts = 0;
+      _reconnectTimer?.cancel();
+    }
     await _stdoutSub?.cancel();
     await _stderrSub?.cancel();
     _stdoutSub = null;
@@ -1196,7 +1363,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _macroStepIndex = 0;
         _macroStepCount = 0;
       });
+    } else {
+      _connected = false;
     }
+    unawaited(_syncBackgroundSession());
     _resetTerminalScrollGestures();
     _notifyMacroController();
   }
@@ -1795,7 +1965,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               _terminalPanelIconButton(
                 icon: Icon(_connected ? Icons.link_off : Icons.link),
                 tooltip: _connected ? 'Disconnect' : 'Connect',
-                onPressed: _busy ? null : (_connected ? _disconnect : _connect),
+                onPressed: _busy
+                    ? null
+                    : () => _connected ? _disconnect() : _connect(),
               ),
               _buildTerminalFontControls(theme),
               _terminalPanelIconButton(
@@ -2032,7 +2204,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                           label: Text(_connected ? 'Disconnect' : 'Connect'),
                           onPressed: _busy
                               ? null
-                              : (_connected ? _disconnect : _connect),
+                              : () => _connected ? _disconnect() : _connect(),
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.network_ping),
@@ -2065,6 +2237,58 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         ),
                       ],
                     ),
+                    const Divider(height: 20),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('Stay connected in the background'),
+                      subtitle: const Text(
+                        'Runs an ongoing notification so Android does not '
+                        'freeze the session when you switch apps.',
+                      ),
+                      value: _keepAliveInBackground,
+                      onChanged: (v) {
+                        setSheetState(() => _keepAliveInBackground = v);
+                        unawaited(_setKeepAliveInBackground(v));
+                      },
+                    ),
+                    if (_keepAliveInBackground &&
+                        !_batteryOptimizationExempt &&
+                        Platform.isAndroid)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.battery_alert,
+                              size: 18,
+                              color: theme.colorScheme.error,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Battery optimization can still drop idle '
+                                'sessions with the screen off.',
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () async {
+                                await BackgroundSessionService
+                                    .requestBatteryOptimizationExemption();
+                                final exempt = await BackgroundSessionService
+                                    .isBatteryOptimizationExempt();
+                                if (!mounted) return;
+                                setState(
+                                  () => _batteryOptimizationExempt = exempt,
+                                );
+                                setSheetState(() {});
+                              },
+                              child: const Text('Fix'),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (_status != null) ...[
                       const SizedBox(height: 8),
                       Text(
