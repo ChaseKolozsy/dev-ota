@@ -2434,17 +2434,38 @@ def download_github_artifact(
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    run_gh([
-        "run",
-        "download",
-        str(actual_run_id),
-        "--repo",
-        repo,
-        "--name",
-        artifact_name,
-        "--dir",
-        str(target_dir),
-    ], timeout=180)
+    # Try requested artifact name, fallback between old/new default names for backward compat.
+    candidates = [artifact_name]
+    if artifact_name == "devota-android-debug-apks" and "devota-android-apks" not in candidates:
+        candidates.append("devota-android-apks")
+    elif artifact_name == "devota-android-apks" and "devota-android-debug-apks" not in candidates:
+        candidates.append("devota-android-debug-apks")
+    last_exc: Exception | None = None
+    for cand in candidates:
+        try:
+            run_gh([
+                "run",
+                "download",
+                str(actual_run_id),
+                "--repo",
+                repo,
+                "--name",
+                cand,
+                "--dir",
+                str(target_dir),
+            ], timeout=180)
+            artifact_name = cand
+            last_exc = None
+            break
+        except Exception as exc:
+            # If artifact not found, try alternate name; otherwise re-raise.
+            msg = str(exc).lower()
+            if "not found" in msg or "no artifacts" in msg or "artifact" in msg:
+                last_exc = exc
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
     apks = scan_github_artifact_apks(repo_root)
     run_apks = [build for build in apks if f"/{actual_run_id}/" in f"/{build['path']}"]
     return {
@@ -2619,7 +2640,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                         repo_root,
                         str(payload.get("repo") or ""),
                         str(payload.get("workflow") or "android.yml"),
-                        str(payload.get("artifactName") or "devota-android-debug-apks"),
+                        str(payload.get("artifactName") or "devota-android-apks"),
                         run_id,
                     )
                     self.send_json(result)

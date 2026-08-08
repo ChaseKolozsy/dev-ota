@@ -112,13 +112,25 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 
 ## GitHub Builds
 
-The `Android` GitHub Actions workflow builds one public debug APK artifact:
+The `Android` GitHub Actions workflow builds two public APK artifacts:
 
-- `devota-arm64-debug.apk`: the public ARM64 DevOTA package,
-  `io.github.chasekolozsy.devota`.
+- `devota-universal-release.apk`: sideload-friendly **release** universal APK
+  (`io.github.chasekolozsy.devota`, all ABIs, `debuggable=false`,
+  zipaligned + v1/v2/v3 signed). Use this for browser/direct sideload
+  from the Actions artifact or a GitHub Release.
+- `devota-arm64-debug.apk`: public ARM64 debug APK for local OTA iteration
+  via the DevOTA Builds tab.
 
-The default `devota.yaml` serves only the public DevOTA staged output from
-`app/dist/public`.
+Both are staged to `app/dist/public` by the scripts in `scripts/build/`:
+
+- `scripts/build/devota-public-release.sh` — `flutter build apk --release`
+  (universal, release signing via `app/android/app/build.gradle.kts`
+  `signingConfigs.release`; defaults to the committed
+  `app/keystores/dev.keystore` but honours `keystore.properties` or
+  `DEVOTA_KEYSTORE_*`/`ANDROID_KEYSTORE_*` env vars for private signing)
+- `scripts/build/devota-public-debug.sh` — `flutter build apk --debug --split-per-abi --target-platform android-arm64`
+
+The default `devota.yaml` serves everything staged in `app/dist/public`.
 
 The Builds tab can ask the build server to dispatch this workflow through the
 server's authenticated `gh` CLI, list recent runs, and download the configured

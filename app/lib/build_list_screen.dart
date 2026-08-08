@@ -714,8 +714,12 @@ class _BuildListScreenState extends State<BuildListScreen>
     _githubWorkflowController.text =
         prefs.getString('github_workflow') ?? 'android.yml';
     _githubRefController.text = prefs.getString('github_ref') ?? 'main';
-    _githubArtifactController.text =
-        prefs.getString('github_artifact') ?? 'devota-android-debug-apks';
+    var artifact = prefs.getString('github_artifact') ?? 'devota-android-apks';
+    // Migrate legacy debug-only artifact name to unified name that includes release.
+    if (artifact == 'devota-android-debug-apks') {
+      artifact = 'devota-android-apks';
+    }
+    _githubArtifactController.text = artifact;
     if (mounted) setState(() {});
   }
 
@@ -1555,7 +1559,7 @@ class _BuildListScreenState extends State<BuildListScreen>
                   _buildGithubTextField(
                     controller: _githubArtifactController,
                     label: 'Artifact',
-                    hint: 'devota-android-debug-apks',
+                    hint: 'devota-android-apks',
                   ),
                 ];
                 if (narrow) {

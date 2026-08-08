@@ -40,19 +40,58 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build public ARM64 DevOTA APK
+      - name: Build public ARM64 DevOTA APK (debug)
         run: ../scripts/build/devota-public-debug.sh
 
-      - name: Verify public package id
+      - name: Build public Universal DevOTA APK (release, sideload-ready)
+        run: ../scripts/build/devota-public-release.sh
+
+      - name: Verify APKs
         run: |
+          set -euo pipefail
           AAPT="$(find "$ANDROID_HOME/build-tools" -path '*/aapt' -type f | sort -V | tail -1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -path '*/apksigner' -type f | sort -V | tail -1)"
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -path '*/zipalign' -type f | sort -V | tail -1)"
+
+          echo "=== Debug APK (arm64) ==="
           "$AAPT" dump badging dist/public/devota-arm64-debug.apk | tee dist/public/devota-arm64-debug.badging.txt
           grep "package: name='io.github.chasekolozsy.devota'" dist/public/devota-arm64-debug.badging.txt
+          echo "Debug versionCode/versionName:"
+          grep -o "versionCode='[^']*' versionName='[^']*'" dist/public/devota-arm64-debug.badging.txt || true
+
+          echo "=== Release APK (universal, sideload) ==="
+          "$AAPT" dump badging dist/public/devota-universal-release.apk | tee dist/public/devota-universal-release.badging.txt
+          grep "package: name='io.github.chasekolozsy.devota'" dist/public/devota-universal-release.badging.txt
+          echo "Release versionCode/versionName:"
+          grep -o "versionCode='[^']*' versionName='[^']*'" dist/public/devota-universal-release.badging.txt || true
+
+          # Release must NOT be debuggable (sideload/Play Protect friendly)
+          if grep -q "application-debuggable" dist/public/devota-universal-release.badging.txt; then
+            echo "ERROR: release APK is debuggable — expected debuggable=false" >&2
+            exit 1
+          fi
+          echo "Release APK is not debuggable (OK)."
+
+          # Verify signing + alignment when tools are available
+          if [[ -n "$APKSIGNER" ]]; then
+            echo "Verifying release APK signature..."
+            "$APKSIGNER" verify --verbose dist/public/devota-universal-release.apk
+            echo "Verifying debug APK signature..."
+            "$APKSIGNER" verify --verbose dist/public/devota-arm64-debug.apk || true
+          fi
+          if [[ -n "$ZIPALIGN" ]]; then
+            echo "Checking release APK zipalign..."
+            "$ZIPALIGN" -c 4 dist/public/devota-universal-release.apk
+            echo "Release APK is zipaligned (OK)."
+          fi
+
+          echo "--- SHA256 ---"
+          cat dist/public/*.sha256 || true
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: devota-android-debug-apks
+          name: devota-android-apks
           path: |
             app/dist/public/*.apk
             app/dist/public/*.sha256

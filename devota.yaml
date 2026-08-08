@@ -22,6 +22,7 @@ apps:
       workingDir: app
       commands:
         debug: ../scripts/build/devota-public-debug.sh
+        release: ../scripts/build/devota-public-release.sh
   - id: perfect-drivers-club
     root: perfect-drivers-club
     label: Perfect Driver's Club

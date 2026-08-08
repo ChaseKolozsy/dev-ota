@@ -1,3 +1,9 @@
+// Imported rather than fully qualified: inside `signingConfigs` the `java`
+// identifier resolves to Gradle's java extension, so `java.util.Properties`
+// fails to compile there.
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -43,11 +49,44 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("release") {
+            // Sideload-friendly release signing: defaults to the committed dev.keystore
+            // so local and GitHub Actions builds share the same upgrade identity.
+            // Override with keystore.properties or DEVOTA_KEYSTORE_* env vars for private signing.
+            val keystorePropsFile = rootProject.file("keystore.properties")
+            val keystoreProps = Properties()
+            if (keystorePropsFile.exists()) {
+                keystorePropsFile.inputStream().use { keystoreProps.load(it) }
+            }
+            fun propOrEnv(propKey: String, vararg envKeys: String): String? {
+                for (k in envKeys) {
+                    val v = providers.environmentVariable(k).orElse("").get()
+                    if (v.isNotBlank()) return v
+                }
+                return keystoreProps.getProperty(propKey)
+            }
+            val storeFileProp = propOrEnv("storeFile", "DEVOTA_KEYSTORE_FILE", "ANDROID_KEYSTORE_FILE", "KEYSTORE_FILE")
+                ?: "../keystores/dev.keystore"
+            val storePasswordProp = propOrEnv("storePassword", "DEVOTA_KEYSTORE_PASSWORD", "ANDROID_KEYSTORE_PASSWORD", "KEYSTORE_PASSWORD")
+                ?: "android"
+            val keyAliasProp = propOrEnv("keyAlias", "DEVOTA_KEY_ALIAS", "ANDROID_KEY_ALIAS", "KEY_ALIAS")
+                ?: "androiddebugkey"
+            val keyPasswordProp = propOrEnv("keyPassword", "DEVOTA_KEY_PASSWORD", "ANDROID_KEY_PASSWORD", "KEY_PASSWORD")
+                ?: "android"
+            // Resolve storeFile relative to the app module unless absolute.
+            val f = File(storeFileProp)
+            storeFile = if (f.isAbsolute) f else rootProject.file(storeFileProp)
+            storePassword = storePasswordProp
+            keyAlias = keyAliasProp
+            keyPassword = keyPasswordProp
+        }
     }
 
     buildTypes {
         release {
-            // Add your own release signing config when distributing DevOTA.
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
