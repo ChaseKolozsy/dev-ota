@@ -513,17 +513,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     }
   }
 
-  List<TerminalMacro> get _rankedMacros {
-    final indexed = _macros.asMap().entries.toList();
-    indexed.sort((a, b) {
-      final usage = (_macroUseCounts[b.value.id] ?? 0).compareTo(
-        _macroUseCounts[a.value.id] ?? 0,
-      );
-      if (usage != 0) return usage;
-      return a.key.compareTo(b.key);
-    });
-    return indexed.map((entry) => entry.value).toList();
-  }
+  List<TerminalMacro> get _rankedMacros => rankTerminalMacros(_macros);
 
   List<TerminalMacro> get _quickMacros => _rankedMacros.take(8).toList();
 

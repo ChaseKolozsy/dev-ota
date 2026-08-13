@@ -7,6 +7,7 @@ void main() {
     const macro = TerminalMacro(
       id: 'macro-1',
       name: 'Build check',
+      priority: 7,
       steps: [
         TerminalMacroStep(
           id: 'step-1',
@@ -27,12 +28,44 @@ void main() {
 
     expect(restored.id, 'macro-1');
     expect(restored.name, 'Build check');
+    expect(restored.priority, 7);
     expect(restored.steps, hasLength(2));
     expect(restored.steps[0].type, TerminalMacroStepType.shell);
     expect(restored.steps[0].value, 'flutter test');
     expect(restored.steps[0].delaySeconds, 0.5);
     expect(restored.steps[1].type, TerminalMacroStepType.tmux);
     expect(restored.steps[1].value, 'n');
+  });
+
+  test('macro ranking uses priority and keeps saved order for ties', () {
+    TerminalMacro macro(String id, int priority) =>
+        TerminalMacro(id: id, name: id, priority: priority, steps: const []);
+
+    final ranked = rankTerminalMacros([
+      macro('first-default', 0),
+      macro('high-a', 10),
+      macro('high-b', 10),
+      macro('last-default', 0),
+      macro('low', -2),
+    ]);
+
+    expect(ranked.map((macro) => macro.id), [
+      'high-a',
+      'high-b',
+      'first-default',
+      'last-default',
+      'low',
+    ]);
+  });
+
+  test('legacy macro JSON defaults priority to zero', () {
+    final macro = TerminalMacro.fromJson({
+      'id': 'legacy',
+      'name': 'Legacy',
+      'steps': const [],
+    });
+
+    expect(macro.priority, 0);
   });
 
   test('terminal macro steps fall back to safe defaults', () {

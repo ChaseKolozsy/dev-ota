@@ -169,21 +169,25 @@ class TerminalMacro {
     required this.id,
     required this.name,
     required this.steps,
+    this.priority = 0,
   });
 
   final String id;
   final String name;
   final List<TerminalMacroStep> steps;
+  final int priority;
 
   TerminalMacro copyWith({
     String? id,
     String? name,
     List<TerminalMacroStep>? steps,
+    int? priority,
   }) {
     return TerminalMacro(
       id: id ?? this.id,
       name: name ?? this.name,
       steps: steps ?? this.steps,
+      priority: priority ?? this.priority,
     );
   }
 
@@ -191,6 +195,7 @@ class TerminalMacro {
     return {
       'id': id,
       'name': name,
+      'priority': priority,
       'steps': steps.map((step) => step.toJson()).toList(),
     };
   }
@@ -209,9 +214,24 @@ class TerminalMacro {
     return TerminalMacro(
       id: json['id']?.toString() ?? newTerminalMacroId('macro'),
       name: json['name']?.toString() ?? 'Macro',
+      priority: json['priority'] is num
+          ? (json['priority'] as num).toInt()
+          : int.tryParse(json['priority']?.toString() ?? '') ?? 0,
       steps: steps,
     );
   }
+}
+
+/// Ranks macros without letting use-count updates move buttons during a run.
+/// Higher user-selected priorities appear first; ties preserve saved order.
+List<TerminalMacro> rankTerminalMacros(List<TerminalMacro> macros) {
+  final indexed = macros.asMap().entries.toList();
+  indexed.sort((a, b) {
+    final priority = b.value.priority.compareTo(a.value.priority);
+    if (priority != 0) return priority;
+    return a.key.compareTo(b.key);
+  });
+  return indexed.map((entry) => entry.value).toList();
 }
 
 String newTerminalMacroId(String prefix) {

@@ -45,6 +45,7 @@ class MacroStoreTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["macros"][0]["name"], "hello")
+            self.assertEqual(result["macros"][0]["priority"], 0)
             self.assertEqual(result["usageCounts"], {"macro-1": 2})
             self.assertTrue(devota_server.macros_path(repo).is_file())
 
@@ -56,6 +57,7 @@ class MacroStoreTests(unittest.TestCase):
                 repo,
                 {
                     "name": "Build check",
+                    "priority": 4,
                     "steps": [
                         {
                             "type": "shell",
@@ -67,18 +69,21 @@ class MacroStoreTests(unittest.TestCase):
             )
             macro_id = created["item"]["id"]
             self.assertEqual(created["item"]["name"], "Build check")
+            self.assertEqual(created["item"]["priority"], 4)
 
             updated = devota_server.update_macro(
                 repo,
                 macro_id,
                 {
                     "name": "Build and check",
+                    "priority": 9,
                     "steps": [
                         {"type": "tmux", "value": "n", "delaySeconds": 0},
                     ],
                 },
             )
             self.assertEqual(updated["item"]["name"], "Build and check")
+            self.assertEqual(updated["item"]["priority"], 9)
             self.assertEqual(updated["item"]["steps"][0]["type"], "tmux")
 
             deleted = devota_server.delete_macro(repo, macro_id)

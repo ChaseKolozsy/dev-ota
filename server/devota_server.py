@@ -2164,9 +2164,15 @@ def normalize_macro(raw: Any) -> dict[str, Any]:
     steps_raw = raw.get("steps")
     if not isinstance(steps_raw, list) or not steps_raw:
         raise ValueError("macro steps must be a non-empty list")
+    raw_priority = raw.get("priority", 0)
+    try:
+        priority = int(raw_priority or 0)
+    except (TypeError, ValueError):
+        priority = 0
     return {
         "id": str(raw.get("id") or new_macro_id("macro")),
         "name": name,
+        "priority": priority,
         "steps": [normalize_macro_step(step) for step in steps_raw],
     }
 
@@ -2303,6 +2309,8 @@ def update_macro(repo_root: Path, macro_id: str, payload: dict[str, Any]) -> dic
         merged = dict(macro)
         if "name" in raw_update:
             merged["name"] = raw_update.get("name")
+        if "priority" in raw_update:
+            merged["priority"] = raw_update.get("priority")
         if "steps" in raw_update:
             merged["steps"] = raw_update.get("steps")
         merged["id"] = macro_id

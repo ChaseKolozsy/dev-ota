@@ -146,6 +146,9 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
   late final TextEditingController _nameController = TextEditingController(
     text: widget.macro.name,
   );
+  late final TextEditingController _priorityController = TextEditingController(
+    text: widget.macro.priority.toString(),
+  );
   final ScrollController _scrollController = ScrollController();
   final List<_StepDraft> _drafts = [];
   late String _originalJson;
@@ -163,6 +166,7 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _priorityController.dispose();
     _scrollController.dispose();
     for (final draft in _drafts) {
       draft.dispose();
@@ -173,6 +177,7 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
   TerminalMacro _currentMacro() {
     return widget.macro.copyWith(
       name: _nameController.text.trim(),
+      priority: int.tryParse(_priorityController.text.trim()) ?? 0,
       steps: _drafts.map((draft) => draft.toStep()).toList(),
     );
   }
@@ -310,8 +315,13 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
       return;
     }
     final name = _nameController.text.trim();
+    final priority = int.tryParse(_priorityController.text.trim()) ?? 0;
     Navigator.of(context).pop(
-      widget.macro.copyWith(name: name.isEmpty ? 'Macro' : name, steps: steps),
+      widget.macro.copyWith(
+        name: name.isEmpty ? 'Macro' : name,
+        priority: priority,
+        steps: steps,
+      ),
     );
   }
 
@@ -362,6 +372,24 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
                 ),
                 textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _priorityController,
+                decoration: const InputDecoration(
+                  labelText: 'Priority',
+                  helperText:
+                      'Higher numbers appear first. Ties keep their saved order.',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  signed: true,
+                ),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^-?\d*$')),
+                ],
+                textInputAction: TextInputAction.done,
               ),
               const SizedBox(height: 12),
               for (var index = 0; index < _drafts.length; index++)

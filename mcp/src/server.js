@@ -772,13 +772,14 @@ server.registerTool(
     description: "Create a terminal macro for the DevOTA Macros tab.",
     inputSchema: {
       name: z.string(),
+      priority: z.number().int().default(0),
       steps: z.array(macroStepSchema).min(1),
     },
   },
-  async ({ name, steps }) => textResult(
+  async ({ name, priority, steps }) => textResult(
     await buildServerJson("/macros", {
       method: "POST",
-      data: { name, steps },
+      data: { name, priority, steps },
     }),
   ),
 );
@@ -791,12 +792,14 @@ server.registerTool(
     inputSchema: {
       id: z.string(),
       name: z.string().optional(),
+      priority: z.number().int().optional(),
       steps: z.array(macroStepSchema).min(1).optional(),
     },
   },
-  async ({ id, name, steps }) => {
+  async ({ id, name, priority, steps }) => {
     const data = {};
     if (name !== undefined) data.name = name;
+    if (priority !== undefined) data.priority = priority;
     if (steps !== undefined) data.steps = steps;
     return textResult(
       await buildServerJson(`/macros/${encodeURIComponent(id)}`, {

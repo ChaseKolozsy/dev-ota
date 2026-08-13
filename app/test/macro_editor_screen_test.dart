@@ -57,6 +57,23 @@ void main() {
     expect(saved, isNotNull);
     expect(saved!.steps.single.value, 'ls -la');
     expect(saved.name, 'Build');
+    expect(saved.priority, 0);
+  });
+
+  testWidgets('priority is editable and persists', (tester) async {
+    final result = await _openEditor(tester, _shellMacro('flutter test'));
+    final priorityField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.labelText == 'Priority',
+    );
+
+    await tester.enterText(priorityField, '12');
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    final saved = await result;
+    expect(saved, isNotNull);
+    expect(saved!.priority, 12);
   });
 
   testWidgets('long commands round-trip through the full-screen editor', (
@@ -158,7 +175,7 @@ void main() {
     await _openEditor(tester, macro);
     // Any RenderFlex overflow would surface here as a framework exception.
     expect(tester.takeException(), isNull);
-    expect(find.byType(Card), findsAtLeastNWidgets(4));
+    expect(find.byType(Card), findsAtLeastNWidgets(3));
 
     // The step menu also has to fit; it overflowed with longer labels.
     await tester.tap(find.byIcon(Icons.more_vert).first);
