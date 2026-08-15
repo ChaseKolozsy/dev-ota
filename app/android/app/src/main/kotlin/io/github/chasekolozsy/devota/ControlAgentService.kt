@@ -14,6 +14,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import androidx.core.content.FileProvider
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -58,9 +60,175 @@ class ControlAgentService : Service() {
                 "connected" to connected,
                 "lastError" to lastError,
                 "url" to (activeUrl ?: prefs.getString(EXTRA_URL, "")),
-                "wholeDeviceAllowed" to wholeDeviceAllowed,
+                "wholeDeviceAllowed" to if (running) {
+                    wholeDeviceAllowed
+                } else {
+                    prefs.getBoolean(EXTRA_WHOLE, false)
+                },
                 "accessibility" to ControlAccessibilityService.statusJson().toMap(),
             )
+        }
+
+        /**
+         * The single allowlisted device-command implementation shared by the
+         * remote control agent and locally pressed integration-test macros.
+         */
+        fun executeLocalCommand(
+            context: Context,
+            action: String,
+            args: JSONObject,
+            allowWholeDevice: Boolean,
+        ): JSONObject {
+            fun requireWholeDevice() {
+                if (!allowWholeDevice) {
+                    throw IllegalStateException("whole-device control is disabled in DevOTA")
+                }
+            }
+            return when (action) {
+                "launchApp" -> launchApp(context, args.optString("packageName", DEFAULT_APP_PACKAGE))
+                "launchIntent" -> launchIntent(context, args, allowWholeDevice)
+                "tap" -> ControlAccessibilityService.tap(
+                    args.getDouble("x"),
+                    args.getDouble("y"),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "tapImage" -> ControlAccessibilityService.tapImage(
+                    args,
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "tapUi" -> ControlAccessibilityService.tapUi(
+                    args.getJSONObject("selector"),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "longTap" -> ControlAccessibilityService.longTap(
+                    args.getDouble("x"),
+                    args.getDouble("y"),
+                    args.optLong("durationMs", 750),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "swipe" -> ControlAccessibilityService.swipe(
+                    args.getDouble("x1"),
+                    args.getDouble("y1"),
+                    args.getDouble("x2"),
+                    args.getDouble("y2"),
+                    args.optLong("durationMs", 300),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "typeText" -> ControlAccessibilityService.typeText(
+                    args.optString("text", ""),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "back" -> ControlAccessibilityService.globalAction(
+                    AccessibilityService.GLOBAL_ACTION_BACK,
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "home" -> {
+                    requireWholeDevice()
+                    ControlAccessibilityService.globalAction(AccessibilityService.GLOBAL_ACTION_HOME, null, true)
+                }
+                "recents" -> {
+                    requireWholeDevice()
+                    ControlAccessibilityService.globalAction(AccessibilityService.GLOBAL_ACTION_RECENTS, null, true)
+                }
+                "openSettings" -> {
+                    requireWholeDevice()
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    JSONObject().put("ok", true)
+                }
+                "openUri" -> {
+                    requireWholeDevice()
+                    val uri = args.optString("uri")
+                    if (uri.isBlank()) throw IllegalArgumentException("uri is required")
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    JSONObject().put("ok", true).put("uri", uri)
+                }
+                "deviceProfile" -> deviceProfile(context)
+                "screenshot" -> ControlAccessibilityService.screenshot()
+                "uiDump" -> ControlAccessibilityService.uiDump()
+                "humanCheckpoint" -> {
+                    requireWholeDevice()
+                    ControlAccessibilityService.humanCheckpoint(args)
+                }
+                else -> throw IllegalArgumentException("unknown local device action: $action")
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        private fun deviceProfile(context: Context): JSONObject {
+            val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val (widthPx, heightPx) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bounds = windowManager.maximumWindowMetrics.bounds
+                bounds.width() to bounds.height()
+            } else {
+                val metrics = DisplayMetrics()
+                windowManager.defaultDisplay.getRealMetrics(metrics)
+                metrics.widthPixels to metrics.heightPixels
+            }
+            return JSONObject()
+                .put("profileSource", "android")
+                .put("model", Build.MODEL)
+                .put("manufacturer", Build.MANUFACTURER)
+                .put("androidSdk", Build.VERSION.SDK_INT)
+                .put("widthPx", widthPx)
+                .put("heightPx", heightPx)
+                .put("shortSidePx", minOf(widthPx, heightPx))
+                .put("longSidePx", maxOf(widthPx, heightPx))
+                .put("densityDpi", context.resources.configuration.densityDpi)
+        }
+
+        private fun launchApp(context: Context, packageName: String): JSONObject {
+            val launch = context.packageManager.getLaunchIntentForPackage(packageName)
+                ?: throw IllegalArgumentException("package has no launcher activity: $packageName")
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launch)
+            return JSONObject().put("ok", true).put("packageName", packageName)
+        }
+
+        private fun launchIntent(
+            context: Context,
+            args: JSONObject,
+            allowWholeDevice: Boolean,
+        ): JSONObject {
+            val packageName = args.optString("packageName", DEFAULT_APP_PACKAGE).takeIf { it.isNotBlank() }
+            if (packageName == null && !allowWholeDevice) {
+                throw IllegalStateException("whole-device control is disabled in DevOTA")
+            }
+            val action = args.optString("action").takeIf { it.isNotBlank() }
+            val uri = args.optString("uri").takeIf { it.isNotBlank() }
+            if (action == null && uri == null && packageName != null) {
+                return launchApp(context, packageName)
+            }
+            val intent = Intent(action ?: if (uri != null) Intent.ACTION_VIEW else Intent.ACTION_MAIN)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (uri != null) intent.data = Uri.parse(uri)
+            if (packageName != null) intent.setPackage(packageName)
+            val extras = args.optJSONObject("extras") ?: JSONObject()
+            val keys = extras.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                when (val value = extras.opt(key)) {
+                    is Boolean -> intent.putExtra(key, value)
+                    is Int -> intent.putExtra(key, value)
+                    is Long -> intent.putExtra(key, value)
+                    is Double -> intent.putExtra(key, value)
+                    is Float -> intent.putExtra(key, value)
+                    null, JSONObject.NULL -> {}
+                    else -> intent.putExtra(key, value.toString())
+                }
+            }
+            context.startActivity(intent)
+            return JSONObject()
+                .put("ok", true)
+                .put("packageName", packageName)
+                .put("action", intent.action)
+                .put("uri", uri)
         }
     }
 
@@ -192,119 +360,9 @@ class ControlAgentService : Service() {
     private fun handleCommand(action: String, args: JSONObject): JSONObject {
         return when (action) {
             "status" -> statusJson()
-            "launchApp" -> launchApp(args.optString("packageName", DEFAULT_APP_PACKAGE))
-            "launchIntent" -> launchIntent(args)
-            "tap" -> ControlAccessibilityService.tap(
-                args.getDouble("x"),
-                args.getDouble("y"),
-                args.optString("packageName", DEFAULT_APP_PACKAGE),
-                wholeDeviceAllowed,
-            )
-            "longTap" -> ControlAccessibilityService.longTap(
-                args.getDouble("x"),
-                args.getDouble("y"),
-                args.optLong("durationMs", 750),
-                args.optString("packageName", DEFAULT_APP_PACKAGE),
-                wholeDeviceAllowed,
-            )
-            "swipe" -> ControlAccessibilityService.swipe(
-                args.getDouble("x1"),
-                args.getDouble("y1"),
-                args.getDouble("x2"),
-                args.getDouble("y2"),
-                args.optLong("durationMs", 300),
-                args.optString("packageName", DEFAULT_APP_PACKAGE),
-                wholeDeviceAllowed,
-            )
-            "typeText" -> ControlAccessibilityService.typeText(
-                args.optString("text", ""),
-                args.optString("packageName", DEFAULT_APP_PACKAGE),
-                wholeDeviceAllowed,
-            )
-            "back" -> ControlAccessibilityService.globalAction(
-                AccessibilityService.GLOBAL_ACTION_BACK,
-                args.optString("packageName", DEFAULT_APP_PACKAGE),
-                wholeDeviceAllowed,
-            )
-            "home" -> {
-                requireWholeDevice()
-                ControlAccessibilityService.globalAction(AccessibilityService.GLOBAL_ACTION_HOME, null, true)
-            }
-            "recents" -> {
-                requireWholeDevice()
-                ControlAccessibilityService.globalAction(AccessibilityService.GLOBAL_ACTION_RECENTS, null, true)
-            }
-            "openSettings" -> {
-                requireWholeDevice()
-                startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                JSONObject().put("ok", true)
-            }
-            "openUri" -> {
-                requireWholeDevice()
-                val uri = args.optString("uri")
-                if (uri.isBlank()) throw IllegalArgumentException("uri is required")
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                JSONObject().put("ok", true).put("uri", uri)
-            }
-            "screenshot" -> ControlAccessibilityService.screenshot()
-            "uiDump" -> ControlAccessibilityService.uiDump()
             "installFromBuild" -> installFromBuild(args)
-            else -> throw IllegalArgumentException("unknown action: $action")
+            else -> executeLocalCommand(this, action, args, wholeDeviceAllowed)
         }
-    }
-
-    private fun requireWholeDevice() {
-        if (!wholeDeviceAllowed) {
-            throw IllegalStateException("whole-device control is disabled in DevOTA")
-        }
-    }
-
-    private fun launchApp(packageName: String): JSONObject {
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
-            ?: throw IllegalArgumentException("package has no launcher activity: $packageName")
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(launch)
-        return JSONObject().put("ok", true).put("packageName", packageName)
-    }
-
-    private fun launchIntent(args: JSONObject): JSONObject {
-        val packageName = args.optString("packageName", DEFAULT_APP_PACKAGE)
-            .takeIf { it.isNotBlank() }
-        if (packageName == null) requireWholeDevice()
-
-        val action = args.optString("action").takeIf { it.isNotBlank() }
-        val uri = args.optString("uri").takeIf { it.isNotBlank() }
-        if (action == null && uri == null && packageName != null) {
-            return launchApp(packageName)
-        }
-
-        val intent = Intent(action ?: if (uri != null) Intent.ACTION_VIEW else Intent.ACTION_MAIN)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (uri != null) intent.data = Uri.parse(uri)
-        if (packageName != null) intent.setPackage(packageName)
-
-        val extras = args.optJSONObject("extras") ?: JSONObject()
-        val keys = extras.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            when (val value = extras.opt(key)) {
-                is Boolean -> intent.putExtra(key, value)
-                is Int -> intent.putExtra(key, value)
-                is Long -> intent.putExtra(key, value)
-                is Double -> intent.putExtra(key, value)
-                is Float -> intent.putExtra(key, value)
-                null -> {}
-                JSONObject.NULL -> {}
-                else -> intent.putExtra(key, value.toString())
-            }
-        }
-
-        startActivity(intent)
-        return JSONObject()
-            .put("ok", true)
-            .put("packageName", packageName)
-            .put("action", intent.action)
-            .put("uri", uri)
     }
 
     private fun installFromBuild(args: JSONObject): JSONObject {
@@ -342,11 +400,33 @@ class ControlAgentService : Service() {
     }
 
     private fun sendHello() {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val targetPackageInfo = runCatching {
+            packageManager.getPackageInfo(DEFAULT_APP_PACKAGE, 0)
+        }.getOrNull()
+        @Suppress("DEPRECATION")
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            packageInfo.versionCode.toLong()
+        }
+        @Suppress("DEPRECATION")
+        val targetVersionCode = targetPackageInfo?.let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode else it.versionCode.toLong()
+        }
         webSocket?.send(JSONObject()
             .put("type", "hello")
             .put("deviceId", deviceId)
             .put("packageName", packageName)
+            .put("model", Build.MODEL)
+            .put("manufacturer", Build.MANUFACTURER)
             .put("androidSdk", Build.VERSION.SDK_INT)
+            .put("appVersionCode", versionCode)
+            .put("appVersionName", packageInfo.versionName)
+            .put("targetAppPackageName", DEFAULT_APP_PACKAGE)
+            .put("targetAppInstalled", targetPackageInfo != null)
+            .put("targetAppVersionCode", targetVersionCode)
+            .put("targetAppVersionName", targetPackageInfo?.versionName)
             .put("wholeDeviceAllowed", wholeDeviceAllowed)
             .put("accessibility", ControlAccessibilityService.statusJson())
             .toString())

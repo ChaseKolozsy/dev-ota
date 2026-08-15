@@ -1300,7 +1300,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (mounted) {
       setState(() {
         _connected = false;
-        _status = _wantConnected ? 'SSH session dropped.' : 'SSH session closed.';
+        _status = _wantConnected
+            ? 'SSH session dropped.'
+            : 'SSH session closed.';
       });
     } else {
       _connected = false;
@@ -1323,7 +1325,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (_reconnectAttempts >= 8) {
       _wantConnected = false;
       if (mounted) {
-        setState(() => _status = '$reason. Auto-reconnect gave up; tap Connect.');
+        setState(
+          () => _status = '$reason. Auto-reconnect gave up; tap Connect.',
+        );
       }
       unawaited(_syncBackgroundSession());
       return;
@@ -1619,6 +1623,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             break;
           case TerminalMacroStepType.wait:
             break;
+          case TerminalMacroStepType.device:
+            throw StateError(
+              'Device actions run from the Macros tab, not the SSH terminal.',
+            );
         }
         if (step.delaySeconds > 0) {
           if (!await _macroDelay(step.delaySeconds)) break;
@@ -2274,10 +2282,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                             ),
                             TextButton(
                               onPressed: () async {
-                                await BackgroundSessionService
-                                    .requestBatteryOptimizationExemption();
-                                final exempt = await BackgroundSessionService
-                                    .isBatteryOptimizationExempt();
+                                await BackgroundSessionService.requestBatteryOptimizationExemption();
+                                final exempt =
+                                    await BackgroundSessionService.isBatteryOptimizationExempt();
                                 if (!mounted) return;
                                 setState(
                                   () => _batteryOptimizationExempt = exempt,

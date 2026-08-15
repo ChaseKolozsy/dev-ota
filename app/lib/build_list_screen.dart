@@ -11,6 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'backup_service.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
+import 'device_macro_evidence_outbox.dart';
+import 'device_macro_local_http.dart';
+import 'device_macro_runner.dart';
 import 'files_tab.dart';
 import 'macro_editor_screen.dart';
 import 'macro_sync_service.dart';
@@ -49,6 +52,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       receiveTimeout: const Duration(minutes: 5),
     ),
   );
+  late final DeviceMacroEvidenceOutbox _macroEvidenceOutbox;
   List<Map<String, dynamic>> _builds = [];
   bool _loading = false;
   String? _error;
@@ -73,8 +77,14 @@ class _BuildListScreenState extends State<BuildListScreen>
   Map<String, int> _commandUseCounts = {};
   List<TerminalMacro> _macros = [];
   Map<String, int> _macroUseCounts = {};
-  bool _macrosSyncing = false;
+  Future<void>? _macrosSyncFuture;
   final _macroController = TerminalMacroController();
+  bool _deviceMacroRunning = false;
+  bool _deviceMacroStopRequested = false;
+  String? _deviceMacroName;
+  int _deviceMacroStepIndex = 0;
+  int _deviceMacroStepCount = 0;
+  String? _lastDeviceMacroRunId;
   final _commandController = TextEditingController();
   final _agentUrlController = TextEditingController();
   final _agentTokenController = TextEditingController();
@@ -97,6 +107,20 @@ class _BuildListScreenState extends State<BuildListScreen>
   @override
   void initState() {
     super.initState();
+    _macroEvidenceOutbox = DeviceMacroEvidenceOutbox(
+      rootDirectory: _getMacroEvidenceOutboxDir,
+      sender: (url, payload) async {
+        await _dio.post(
+          url,
+          data: payload,
+          options: Options(
+            headers: const {'Content-Type': 'application/json'},
+            sendTimeout: const Duration(minutes: 2),
+            receiveTimeout: const Duration(minutes: 2),
+          ),
+        );
+      },
+    );
     WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 9, vsync: this);
     _tabController.addListener(_onTabControllerChanged);
@@ -110,6 +134,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     _loadAgentSettings();
     _loadGithubSettings();
     _refreshCachedApks();
+    unawaited(_macroEvidenceOutbox.flush());
   }
 
   @override
@@ -142,7 +167,13 @@ class _BuildListScreenState extends State<BuildListScreen>
       _refreshCachedApks();
       _refreshInstalledPackages();
       unawaited(_syncMacrosFromServerSilently());
+      unawaited(_macroEvidenceOutbox.flush());
     }
+  }
+
+  Future<Directory> _getMacroEvidenceOutboxDir() async {
+    final support = await getApplicationSupportDirectory();
+    return Directory('${support.path}/device_macro_evidence_outbox');
   }
 
   void _onMacroControllerChanged() {
@@ -490,10 +521,22 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _syncMacrosFromServerSilently() async {
-    if (_macrosSyncing) return;
+    final inFlight = _macrosSyncFuture;
+    if (inFlight != null) return inFlight;
+    final future = _syncMacrosFromServerOnce();
+    _macrosSyncFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_macrosSyncFuture, future)) {
+        _macrosSyncFuture = null;
+      }
+    }
+  }
+
+  Future<void> _syncMacrosFromServerOnce() async {
     final server = _baseUrl;
     if (server.isEmpty) return;
-    _macrosSyncing = true;
     try {
       final snapshot = await MacroSyncService.fetch(_dio, server);
       if (snapshot == null) {
@@ -508,14 +551,28 @@ class _BuildListScreenState extends State<BuildListScreen>
       await _saveMacros(syncServer: false);
     } catch (_) {
       // A missing or unreachable build server must not block local macros.
-    } finally {
-      _macrosSyncing = false;
     }
   }
 
   List<TerminalMacro> get _rankedMacros => rankTerminalMacros(_macros);
 
-  List<TerminalMacro> get _quickMacros => _rankedMacros.take(8).toList();
+  List<TerminalMacro> get _quickMacros =>
+      _rankedMacros.where((macro) => !macro.isDeviceMacro).take(8).toList();
+
+  bool get _anyMacroRunning =>
+      _deviceMacroRunning || _macroController.isRunning;
+
+  MacroRunProgress? get _visibleMacroProgress {
+    if (_deviceMacroRunning) {
+      return MacroRunProgress(
+        macroName: _deviceMacroName ?? 'Device macro',
+        stepIndex: _deviceMacroStepIndex,
+        stepCount: _deviceMacroStepCount,
+        stopping: _deviceMacroStopRequested,
+      );
+    }
+    return _macroController.progress;
+  }
 
   void _recordMacroUse(TerminalMacro macro) {
     setState(() {
@@ -566,17 +623,183 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _runMacroFromMacrosTab(TerminalMacro macro) async {
-    if (_macroController.isRunning) return;
+    if (_anyMacroRunning) return;
+    await _syncMacrosFromServerSilently();
+    if (!mounted || _anyMacroRunning) return;
+    TerminalMacro? currentMacro;
+    for (final item in _macros) {
+      if (item.id == macro.id) {
+        currentMacro = item;
+        break;
+      }
+    }
+    if (currentMacro == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Macro no longer exists on the server')),
+      );
+      return;
+    }
+    if (currentMacro.isDeviceMacro) {
+      await _runDeviceMacro(currentMacro);
+      return;
+    }
     _tabController.animateTo(3);
     await Future<void>.delayed(const Duration(milliseconds: 250));
     try {
-      await _macroController.run(macro);
+      await _macroController.run(currentMacro);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Macro failed: ${_briefErrorMessage(e)}')),
       );
     }
+  }
+
+  String _newDeviceMacroRunId(TerminalMacro macro) {
+    final timestamp = DateTime.now().toUtc().toIso8601String().replaceAll(
+      RegExp(r'[^0-9]'),
+      '',
+    );
+    final safeMacro = macro.id.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '-');
+    final end = safeMacro.length > 80 ? 80 : safeMacro.length;
+    return 'run-$timestamp-${safeMacro.substring(0, end)}';
+  }
+
+  Future<void> _queueDeviceMacroEvidence(
+    String runId,
+    TerminalMacro macro,
+    DateTime runStartedAt,
+    DeviceMacroEvidence evidence,
+  ) async {
+    await _macroEvidenceOutbox.enqueueStep(
+      runId: runId,
+      baseUrl: _baseUrl,
+      payload: {
+        'macroId': macro.id,
+        'macroName': macro.name,
+        'runStartedAt': runStartedAt.toUtc().toIso8601String(),
+        ...evidence.toJson(),
+      },
+    );
+    // Delivery remains best-effort and asynchronous so a weak relay cannot
+    // alter local execution or screenshot cadence, but completed steps should
+    // become observable while a long-running macro is still in progress.
+    unawaited(_macroEvidenceOutbox.flush());
+  }
+
+  Future<void> _queueDeviceMacroRunCompletion(
+    String runId,
+    TerminalMacro macro,
+    DateTime startedAt, {
+    required String status,
+    Object? error,
+  }) async {
+    await _macroEvidenceOutbox.enqueueCompletion(
+      runId: runId,
+      baseUrl: _baseUrl,
+      payload: {
+        'macroId': macro.id,
+        'macroName': macro.name,
+        'startedAt': startedAt.toUtc().toIso8601String(),
+        'completedAt': DateTime.now().toUtc().toIso8601String(),
+        'status': status,
+        if (error != null) 'error': error.toString(),
+      },
+    );
+    unawaited(_macroEvidenceOutbox.flush());
+  }
+
+  Future<Map<String, dynamic>> _installBuildFromMacro(
+    Map<String, dynamic> args,
+  ) async {
+    final appId = args['appId']?.toString().trim();
+    final requestedPath = args['path']?.toString().trim();
+    final candidates = _builds.where((build) {
+      if (requestedPath?.isNotEmpty == true &&
+          _buildPath(build) != requestedPath) {
+        return false;
+      }
+      if (appId?.isNotEmpty == true && _buildAppId(build) != appId) {
+        return false;
+      }
+      return true;
+    }).toList();
+    if (candidates.isEmpty) {
+      throw StateError(
+        'no DevOTA build matched appId=${appId ?? '*'} path=${requestedPath ?? '*'}',
+      );
+    }
+    final build = candidates.first;
+    return _downloadAndInstall(build, throwOnError: true);
+  }
+
+  Future<void> _runDeviceMacro(TerminalMacro macro) async {
+    final runId = _newDeviceMacroRunId(macro);
+    final startedAt = DateTime.now();
+    Object? failure;
+    var status = 'passed';
+    setState(() {
+      _deviceMacroRunning = true;
+      _deviceMacroStopRequested = false;
+      _deviceMacroName = macro.name;
+      _deviceMacroStepIndex = 0;
+      _deviceMacroStepCount = macro.steps.length;
+      _lastDeviceMacroRunId = runId;
+    });
+    try {
+      final runner = DeviceMacroRunner(
+        channel: _controlAgentChannel,
+        evidenceSink: (evidence) =>
+            _queueDeviceMacroEvidence(runId, macro, startedAt, evidence),
+        installBuild: _installBuildFromMacro,
+        localHttpAssert: (args, {onAttempt}) =>
+            runDeviceMacroLocalHttpAssert(_dio, args, onAttempt: onAttempt),
+        shouldStop: () => _deviceMacroStopRequested,
+        onProgress: (stepIndex, stepCount, _) {
+          if (!mounted) return;
+          setState(() {
+            _deviceMacroStepIndex = stepIndex;
+            _deviceMacroStepCount = stepCount;
+          });
+        },
+      );
+      await runner.run(macro);
+      if (_deviceMacroStopRequested) status = 'stopped';
+      _recordMacroUse(macro);
+    } catch (error) {
+      failure = error;
+      status = 'failed';
+    }
+    try {
+      await _queueDeviceMacroRunCompletion(
+        runId,
+        macro,
+        startedAt,
+        status: status,
+        error: failure,
+      );
+    } catch (error) {
+      failure ??= error;
+      status = 'failed';
+    }
+    if (!mounted) return;
+    setState(() {
+      _deviceMacroRunning = false;
+      _deviceMacroStopRequested = false;
+      _deviceMacroName = null;
+      _deviceMacroStepIndex = 0;
+      _deviceMacroStepCount = 0;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failure == null
+              ? 'Macro $status locally. Evidence queued: $runId'
+              : 'Macro failed locally: ${_briefErrorMessage(failure)} '
+                    '(evidence queued: $runId)',
+        ),
+      ),
+    );
   }
 
   String _issuesAsText() {
@@ -1151,11 +1374,16 @@ class _BuildListScreenState extends State<BuildListScreen>
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
-  Future<void> _downloadAndInstall(Map<String, dynamic> build) async {
+  Future<Map<String, dynamic>> _downloadAndInstall(
+    Map<String, dynamic> build, {
+    bool throwOnError = false,
+  }) async {
     final path = build['path'] as String;
     final cacheFileName = _cacheFileName(build);
 
-    if (_downloading[path] == true) return;
+    if (_downloading[path] == true) {
+      throw StateError('build download is already in progress: $path');
+    }
 
     final stopwatch = Stopwatch()..start();
     _downloadTimers[path] = stopwatch;
@@ -1236,8 +1464,18 @@ class _BuildListScreenState extends State<BuildListScreen>
       } else if (result.type == ResultType.done) {
         await _recordBuildUse(build);
       }
+      if (result.type != ResultType.done) {
+        throw StateError('could not open installer: ${result.message}');
+      }
       await Future.delayed(const Duration(milliseconds: 500));
       await _refreshInstalledPackages();
+      return {
+        'ok': true,
+        'appId': _buildAppId(build),
+        'path': path,
+        'packageName': _buildPackageName(build),
+        'installerOpened': true,
+      };
     } catch (e) {
       setState(() {
         _downloading[path] = false;
@@ -1249,6 +1487,8 @@ class _BuildListScreenState extends State<BuildListScreen>
           context,
         ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
       }
+      if (throwOnError) rethrow;
+      return {'ok': false, 'path': path, 'error': e.toString()};
     }
   }
 
@@ -1337,7 +1577,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   /// the shared SSH session, so anything typed or tapped anywhere lands inside
   /// its sequence. Also carries the Stop the terminal tab offers.
   Widget _buildMacroRunningStrip(ThemeData theme) {
-    final progress = _macroController.progress;
+    final progress = _visibleMacroProgress;
     if (progress == null) return const SizedBox.shrink();
     final scheme = theme.colorScheme;
     return Material(
@@ -1362,6 +1602,9 @@ class _BuildListScreenState extends State<BuildListScreen>
                   child: Text(
                     progress.stopping
                         ? 'Stopping ${progress.macroName}...'
+                        : _deviceMacroRunning
+                        ? '${progress.macroName}  •  ${progress.stepLabel}  •  '
+                              'device integration test is controlling this phone'
                         : '${progress.macroName}  •  ${progress.stepLabel}  •  '
                               'wait before touching the terminal',
                     maxLines: 2,
@@ -1379,7 +1622,11 @@ class _BuildListScreenState extends State<BuildListScreen>
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  onPressed: progress.stopping || !_macroController.canStop
+                  onPressed: progress.stopping
+                      ? null
+                      : _deviceMacroRunning
+                      ? () => setState(() => _deviceMacroStopRequested = true)
+                      : !_macroController.canStop
                       ? null
                       : _macroController.requestStop,
                   child: const Text('Stop'),
@@ -1799,8 +2046,8 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Widget _buildMacrosTab() {
     final rankedMacros = _rankedMacros;
-    final progress = _macroController.progress;
-    final running = _macroController.isRunning;
+    final progress = _visibleMacroProgress;
+    final running = _anyMacroRunning;
     return Column(
       children: [
         Padding(
@@ -1811,7 +2058,9 @@ class _BuildListScreenState extends State<BuildListScreen>
                 child: Text(
                   progress != null
                       ? 'Running ${progress.macroName} — ${progress.stepLabel}'
-                      : 'Create ordered terminal/tmux command sequences.',
+                      : _lastDeviceMacroRunId == null
+                      ? 'Create terminal sequences or visible device integration tests.'
+                      : 'Last device evidence: $_lastDeviceMacroRunId',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1834,7 +2083,7 @@ class _BuildListScreenState extends State<BuildListScreen>
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'No macros yet.\nAdd one to run multiple terminal steps.',
+                      'No macros yet.\nAdd terminal or visible device-test steps.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1940,7 +2189,20 @@ class _BuildListScreenState extends State<BuildListScreen>
       TerminalMacroStepType.tmux =>
         'tmux ${terminalMacroStepValueLabel(step)}$delay',
       TerminalMacroStepType.wait => 'wait$delay',
+      TerminalMacroStepType.device => _deviceMacroStepSummary(step, delay),
     };
+  }
+
+  String _deviceMacroStepSummary(TerminalMacroStep step, String delay) {
+    try {
+      final decoded = jsonDecode(step.value);
+      if (decoded is Map) {
+        final action = decoded['action']?.toString() ?? 'device';
+        final label = decoded['label']?.toString();
+        return '${label?.trim().isNotEmpty == true ? label : action}$delay';
+      }
+    } catch (_) {}
+    return 'device (invalid JSON)$delay';
   }
 
   Future<TerminalMacro?> _showMacroEditor(

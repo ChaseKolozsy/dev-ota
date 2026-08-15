@@ -44,8 +44,51 @@ Useful environment variables:
 ## Tool Groups
 
 - Build/install: `android_list_builds`, `android_build_apk`, `android_install_latest`, `android_rebuild_install_launch`.
+- Visual control: `android_tap_ui` prefers semantic accessibility selectors;
+  `android_tap_image` explicitly replays a bounded recorded template through
+  the phone-local matcher and reports match confidence/bounds without sending
+  the current screenshot back through ZeroTier.
 - Macros: `devota_macros_list`, `devota_macros_create`,
-  `devota_macros_update`, `devota_macros_delete`.
+  `devota_macros_update`, `devota_macros_delete`, `devota_macro_runs_list`,
+  `devota_macro_run_get`, `devota_macro_run_collect`, plus
+  `devota_macro_recording_start`, `devota_macro_recording_status`,
+  `devota_macro_recording_stop`, and `devota_macro_recording_compile`.
+  Device-step macros run
+  visibly on the phone when pressed in DevOTA and collect one screenshot/UI
+  record per step; records queue durably on the phone and retry delivery after
+  connectivity returns, then the collect tool downloads the complete evidence
+  ZIP.
+  `humanCheckpoint` steps show a countdown overlay, then collect timestamped
+  frames at the macro's declared `screenshotsPerSecond` while a person tests.
+  `localHttpAssert` performs read-only `GET`/`HEAD` assertions against an app's
+  loopback API. It rejects non-loopback URLs and mutating methods. Long local
+  installs can use bounded `retryUntilSeconds` polling (up to one hour), which
+  records attempts and elapsed time rather than relying on a fixed UI timeout.
+  `jsonPaths` records selected progress fields, and
+  `captureIntervalSeconds` saves periodic screenshot/UI evidence while the
+  poll is active (maximum 120 frames).
+  `assertDeviceProfile` fails before navigation unless the phone/emulator
+  matches the declared model set, Android SDK, screen sides, and density.
+
+  For an unknown workflow, start a recording, explore with the Android control
+  tools, then stop and compile it. Failed actions and observation-only calls
+  are excluded automatically; `omitEntryIndexes` prunes additional detours.
+  Raw coordinate actions and redacted `${INPUT_n}` values keep the draft in
+  `needsReview` and prevent automatic publication. During an active recording,
+  Pillow captures a private pre-tap crop: semantic selectors retain it as a
+  fallback and coordinate taps compile to the offline `tapImage` action. The
+  Android Agent rescales and searches the expected region before tapping, so a
+  small layout/density shift recalibrates the click rather than replaying stale
+  coordinates. Replace any remaining uncaptured coordinates with stable UI
+  selectors or visual templates before publishing the reusable macro.
+  The fast path is to record and mature the macro through DevOTA inside a
+  profile-matched emulator, then publish and execute that exact macro on the
+  corresponding physical phone.
+  A macro may declare a bounded top-level `failureDiagnostics` observer. After
+  a failed step, normal actions stop while DevOTA continues collecting local
+  screenshots, UI trees, and allowlisted loopback status probes into the same
+  durable evidence run. This keeps a client timeout from hiding later backend
+  progress without ever continuing unsafe mutations after a failure.
 - Project board: `devota_projects_board`, `devota_projects_create_client`,
   `devota_projects_create_project`, `devota_projects_create_template`,
   `devota_projects_create_card`, `devota_projects_advance_card`,

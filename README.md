@@ -115,6 +115,131 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 - **Commands** and **Agent**: saved command snippets and the Android MCP phone
   control agent.
 
+### Device integration-test macros
+
+Macros may contain terminal steps or allowlisted **Device action** JSON steps.
+Device macros execute locally through DevOTA's accessibility service, so a
+person pressing **Run** sees the phone launch apps, tap controls, type, swipe,
+or navigate in real time. Each action can assert the active package and visible
+text. DevOTA captures a PNG screenshot and accessibility UI tree after every
+step, including a failed step. Evidence is first committed to an app-private
+on-phone outbox; delivery to the paired build server retries after reconnect or
+app resume. A slow or missing VPN path therefore does not turn successful local
+execution into a failed test.
+
+Agents create the same macros through `devota_macros_create`; there is no
+separate hidden automation format. A device step value looks like:
+
+```json
+{"action":"launchApp","args":{"packageName":"io.github.chasekolozsy.cradlespeak"},"expect":{"activePackage":"io.github.chasekolozsy.cradlespeak"},"capture":true}
+```
+
+Supported actions are `launchApp`, `launchIntent`, `tap`, `tapImage`, `longTap`, `swipe`,
+`typeText`, `back`, `home`, `recents`, `openSettings`, `openUri`, `tapUi`,
+`assertUi`, `assertDeviceProfile`, `localHttpAssert`, `installBuild`,
+`humanCheckpoint`, `screenshot`, and `uiDump`. Device macros may also contain Wait steps. Whole-device actions
+require both the accessibility service and DevOTA's explicit whole-device
+control toggle.
+
+`localHttpAssert` is a read-only product-state oracle for apps such as
+Cradlespeak that expose an embedded loopback API. It permits only `GET` or
+`HEAD` to `127.0.0.1`, `localhost`, or `::1`, and can assert an HTTP status,
+selected JSON paths, and body inclusions/exclusions. DevOTA records only the
+requested observations rather than the complete response body:
+
+```json
+{"action":"localHttpAssert","args":{"url":"http://127.0.0.1:8002/license?lang=en","method":"GET","expectedStatus":200,"jsonPathEquals":{"licensed":false}}}
+```
+
+Long local work such as pack installation can be polled without turning the
+macro into a timing guess. `retryUntilSeconds` bounds the whole poll (maximum
+3600 seconds), while `timeoutSeconds` bounds each GET/HEAD attempt and
+`retryIntervalSeconds` controls the interval. Evidence records attempt and
+elapsed counts without retaining the response body:
+
+```json
+{"action":"localHttpAssert","args":{"url":"http://127.0.0.1:8002/packs/presence?sku=hu-v2&version=2.1.0","expectedStatus":200,"jsonPathEquals":{"presence":"installed"},"retryUntilSeconds":1800,"retryIntervalSeconds":2}}
+```
+
+Add `jsonPaths` to retain non-secret progress fields and
+`captureIntervalSeconds` (2–300 seconds, at most 120 frames) to collect
+screenshots and UI trees throughout the poll. Expectations such as
+`textExcludes:["TimeoutException"]` are checked on every captured frame, not
+only after installation finishes.
+
+A device macro can also declare a top-level `failureDiagnostics` tail. Normal
+mutating steps stop on the first unexpected failure, but DevOTA remains
+connected and performs only bounded read-only observation: screenshots, UI
+trees, and optional loopback HTTP probes. Frames enter the same durable
+evidence outbox. This is useful when an app reports a client timeout while an
+embedded installer may still be working:
+
+```json
+{"failureDiagnostics":{"durationSeconds":1800,"intervalSeconds":60,"captureScreenshot":true,"captureUi":true,"probes":[{"url":"http://127.0.0.1:8002/market-client/install-status?sku=hu-v2","expectedStatus":200,"timeoutSeconds":10,"jsonPaths":["phase","bytes_done","bytes_total","updated_at","error"]}]}}
+```
+
+Diagnostics last at most one hour, use intervals of 2–300 seconds, collect at
+most 120 frames, allow at most eight read-only loopback probes, and never
+resume later mutating steps. The original failure remains the run result even
+if diagnostic collection itself encounters an error.
+
+Start hardware-specific suites with `assertDeviceProfile`. The profile names a
+target and checks real properties before any navigation occurs. One profile may
+allow both the physical model and a deliberately tuned emulator model while
+requiring the same Android SDK, short/long screen sides, and density:
+
+```json
+{"action":"assertDeviceProfile","args":{"profile":"revvl7pro-android36-1080x2436","models":["TMRV07P5G","sdk_gphone64_x86_64"],"androidSdk":36,"shortSidePx":1080,"longSidePx":2436,"densityDpi":480}}
+```
+
+### Record exploration, then prune it into a macro
+
+When a workflow has to be discovered interactively, start
+`devota_macro_recording_start` before using the Android control tools. Stop it
+with `devota_macro_recording_stop`, passing any trial-and-error entry indexes
+in `omitEntryIndexes`. The compiler keeps successful actions, drops failed
+attempts and observation-only screenshots/UI dumps, and prefers semantic
+`tapUi` selectors over their resolved screen coordinates.
+
+While recording, DevOTA uses Pillow on the workstation to save a private
+pre-tap screenshot plus a bounded PNG crop around every tap. Semantic `tapUi`
+steps carry that crop as an `imageFallback`; raw exploratory taps compile to
+`tapImage`. On replay the Android Agent rescales the crop, searches near its
+normalized expected region, and recalculates the click from the visual match
+and recorded click offset. It refuses low-confidence matches instead of
+guessing. Matching and tapping run locally on the phone, so Python and a live
+ZeroTier connection are not required during macro execution.
+
+Recordings are durable private JSON artifacts. Typed values and secret-like
+fields are redacted. A draft containing a coordinate action or an
+`${INPUT_n}` placeholder is marked `needsReview` and cannot be auto-published;
+replace those with stable selectors and non-secret test fixtures, then
+recompile with `devota_macro_recording_compile`. This makes exploratory work a
+source artifact for a reusable test without preserving its dead ends.
+
+Prefer authoring and maturing the workflow in DevOTA running inside a matching
+emulator. Publish that pruned macro to the shared build server, then run the
+identical macro on the physical phone as the hardware/network acceptance gate.
+The emulator is allowed to replace the physical model name only when the macro
+still passes the declared device-profile geometry, Android, and density checks.
+
+Use `humanCheckpoint` when timing, animation, audio, or game feel needs a real
+person. DevOTA overlays the instructions and countdown above the prepared app,
+then removes the overlay and captures the declared cadence while the person
+interacts. Frames are captured and timestamped locally before entering the
+durable upload outbox, so ZeroTier latency does not alter the requested
+schedule:
+
+```json
+{"action":"humanCheckpoint","args":{"title":"Prime Mentality check","instructions":"Play briefly and confirm the emoji pacing feels fair.","countdownSeconds":10,"durationSeconds":15,"screenshotsPerSecond":2},"expect":{"activePackage":"io.github.chasekolozsy.cradlespeak"}}
+```
+
+Duration is limited to 120 seconds, rate to 0.1–5 screenshots per second, and
+each checkpoint to 120 frames. Evidence records every actual capture timestamp.
+This local-first behavior is intentional for phones operating far from the
+build server—including mobile use in the Philippines, where the phone may move
+between good signal, a congested link, and a dead zone during one macro run.
+
 ## GitHub Builds
 
 The `Android` GitHub Actions workflow builds two public APK artifacts:
@@ -183,6 +308,9 @@ escaping its configured root. It does not build apps.
 - `GET/POST /macros`
 - `POST /macros/sync`
 - `PATCH/DELETE /macros/<id>`
+- `GET /macro-runs` and `GET /macro-runs/<id>` — run/evidence manifests
+- `POST /macro-runs/<id>/steps` and `/complete` — phone evidence ingestion
+- `GET /macro-runs/<id>/archive` — one ZIP with gallery, UI records, and screenshots
 - `GET /github/workflow/runs?repo=<owner/name>&workflow=<file>`
 - `GET /download/<virtual-apk-path>`
 - `GET /files` — list files and folders staged for the phone, plus the absolute drop directory

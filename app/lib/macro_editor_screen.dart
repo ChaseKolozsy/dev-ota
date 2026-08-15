@@ -33,6 +33,7 @@ IconData macroStepTypeIcon(TerminalMacroStepType type) {
     TerminalMacroStepType.terminalKey => Icons.keyboard,
     TerminalMacroStepType.tmux => Icons.tab,
     TerminalMacroStepType.wait => Icons.timer_outlined,
+    TerminalMacroStepType.device => Icons.smartphone,
   };
 }
 
@@ -64,11 +65,17 @@ class _StepDraft {
   _StepDraft.fromStep(TerminalMacroStep step)
     : id = step.id.isEmpty ? newTerminalMacroId('step') : step.id,
       type = step.type,
-      optionValue = step.type == TerminalMacroStepType.shell
+      optionValue =
+          step.type == TerminalMacroStepType.shell ||
+              step.type == TerminalMacroStepType.device
           ? defaultTerminalMacroStepValue(step.type)
           : step.value,
       valueController = TextEditingController(
-        text: step.type == TerminalMacroStepType.shell ? step.value : '',
+        text:
+            step.type == TerminalMacroStepType.shell ||
+                step.type == TerminalMacroStepType.device
+            ? step.value
+            : '',
       ),
       delayController = TextEditingController(
         text: formatMacroDelaySeconds(step.delaySeconds),
@@ -85,7 +92,9 @@ class _StepDraft {
     return TerminalMacroStep(
       id: id,
       type: type,
-      value: type == TerminalMacroStepType.shell
+      value:
+          type == TerminalMacroStepType.shell ||
+              type == TerminalMacroStepType.device
           ? valueController.text.trimRight()
           : optionValue,
       delaySeconds: parseMacroDelaySeconds(delayController.text),
@@ -97,8 +106,13 @@ class _StepDraft {
   void changeType(TerminalMacroStepType next) {
     if (next == type) return;
     type = next;
-    if (next != TerminalMacroStepType.shell) {
+    if (next != TerminalMacroStepType.shell &&
+        next != TerminalMacroStepType.device) {
       optionValue = defaultTerminalMacroStepValue(next);
+    }
+    if (next == TerminalMacroStepType.device &&
+        valueController.text.trim().isEmpty) {
+      valueController.text = defaultTerminalMacroStepValue(next);
     }
     if (next == TerminalMacroStepType.wait &&
         parseMacroDelaySeconds(delayController.text) == 0) {
@@ -120,6 +134,7 @@ enum _StepAction {
   insertKey,
   insertTmux,
   insertWait,
+  insertDevice,
   moveUp,
   moveDown,
   duplicate,
@@ -269,6 +284,11 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
           newTerminalMacroStep(TerminalMacroStepType.wait),
           afterIndex: index,
         );
+      case _StepAction.insertDevice:
+        _addStep(
+          newTerminalMacroStep(TerminalMacroStepType.device),
+          afterIndex: index,
+        );
       case _StepAction.moveUp:
         _moveStep(index, -1);
       case _StepAction.moveDown:
@@ -313,6 +333,24 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
         const SnackBar(content: Text('Add at least one runnable step.')),
       );
       return;
+    }
+    for (var index = 0; index < steps.length; index++) {
+      final step = steps[index];
+      if (step.type != TerminalMacroStepType.device) continue;
+      try {
+        final decoded = jsonDecode(step.value);
+        if (decoded is! Map ||
+            (decoded['action']?.toString().trim().isEmpty ?? true)) {
+          throw const FormatException('action is required');
+        }
+      } catch (error) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Step ${index + 1} has invalid device JSON: $error'),
+          ),
+        );
+        return;
+      }
     }
     final name = _nameController.text.trim();
     final priority = int.tryParse(_priorityController.text.trim()) ?? 0;
@@ -537,6 +575,10 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
                       value: _StepAction.insertWait,
                       child: _MenuRow(Icons.timer_outlined, 'Wait'),
                     ),
+                    const PopupMenuItem(
+                      value: _StepAction.insertDevice,
+                      child: _MenuRow(Icons.smartphone, 'Device action'),
+                    ),
                   ],
                 ),
               ],
@@ -663,6 +705,40 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
             ),
           ],
         );
+      case TerminalMacroStepType.device:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: draft.valueController,
+              focusNode: draft.valueFocusNode,
+              minLines: 3,
+              maxLines: 8,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              autocorrect: false,
+              enableSuggestions: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                labelText: 'Device action JSON',
+                helperText:
+                    'Agent-compatible action, args, expectations, and capture policy.',
+                border: OutlineInputBorder(),
+                alignLabelWithHint: true,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                icon: const Icon(Icons.open_in_full, size: 16),
+                label: const Text('Edit JSON full screen'),
+                onPressed: () => _openCommandEditor(draft, index),
+              ),
+            ),
+          ],
+        );
     }
   }
 
@@ -734,6 +810,12 @@ class _MacroEditorScreenState extends State<MacroEditorScreen> {
               label: const Text('Wait'),
               onPressed: () =>
                   _addStep(newTerminalMacroStep(TerminalMacroStepType.wait)),
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.smartphone),
+              label: const Text('Device'),
+              onPressed: () =>
+                  _addStep(newTerminalMacroStep(TerminalMacroStepType.device)),
             ),
             if (widget.savedCommands.isNotEmpty)
               PopupMenuButton<String>(

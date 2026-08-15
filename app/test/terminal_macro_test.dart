@@ -68,6 +68,26 @@ void main() {
     expect(macro.priority, 0);
   });
 
+  test('device macro steps round trip and identify device macros', () {
+    const macro = TerminalMacro(
+      id: 'device-1',
+      name: 'Visible device proof',
+      priority: 100,
+      steps: [
+        TerminalMacroStep(
+          id: 'device-step-1',
+          type: TerminalMacroStepType.device,
+          value: '{"action":"openSettings"}',
+          delaySeconds: 0.25,
+        ),
+      ],
+    );
+    final restored = TerminalMacro.fromJson(macro.toJson());
+    expect(restored.isDeviceMacro, isTrue);
+    expect(restored.steps.single.type, TerminalMacroStepType.device);
+    expect(restored.steps.single.value, '{"action":"openSettings"}');
+  });
+
   test('terminal macro steps fall back to safe defaults', () {
     final step = TerminalMacroStep.fromJson({
       'id': 'step-1',
