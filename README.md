@@ -137,9 +137,29 @@ separate hidden automation format. A device step value looks like:
 Supported actions are `launchApp`, `launchIntent`, `tap`, `tapImage`, `longTap`, `swipe`,
 `typeText`, `back`, `home`, `recents`, `openSettings`, `openUri`, `tapUi`,
 `assertUi`, `assertDeviceProfile`, `localHttpAssert`, `installBuild`,
-`humanCheckpoint`, `screenshot`, and `uiDump`. Device macros may also contain Wait steps. Whole-device actions
+`humanCheckpoint`, `hostCommand`, `screenshot`, and `uiDump`. Device macros may also contain Wait steps. Whole-device actions
 require both the accessibility service and DevOTA's explicit whole-device
 control toggle.
+
+`hostCommand` is an optional, disabled-by-default bridge for the few test
+operations Android cannot perform from its own app sandbox. The macro format
+does not name a host backend:
+
+```json
+{"action":"hostCommand","args":{"action":"clearAppData","args":{"packageName":"io.github.chasekolozsy.cradlespeak"}},"capture":true}
+```
+
+The current MCP host implements it with trusted ADB only when
+`DEVOTA_ENABLE_PRIVILEGED_MACROS=1`. The nested action must be one of
+`clearAppData`, `grantPermission`, `revokePermission`, `forceStop`,
+`launchApp`, or `installLatest`. Packages/app IDs must resolve uniquely from
+`devota.yaml`; a macro may never target DevOTA itself. Permission changes are
+limited to `android.permission.POST_NOTIFICATIONS` and
+`android.permission.RECORD_AUDIO`. Unknown actions, extra arguments, arbitrary
+shell, other permissions, and unmatched/ambiguous phones fail closed. The
+authenticated phone's private device ID is compared internally with the
+`android_id` of every connected ADB transport and must match exactly one; raw
+device IDs and ADB serials are excluded from results and macro evidence.
 
 `localHttpAssert` is a read-only product-state oracle for apps such as
 Cradlespeak that expose an embedded loopback API. It permits only `GET` or

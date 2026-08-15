@@ -46,6 +46,7 @@ class ControlAgentService : Service() {
         @Volatile private var lastError: String? = null
         @Volatile private var activeUrl: String? = null
         @Volatile private var wholeDeviceAllowed = false
+        @Volatile private var activeInstance: ControlAgentService? = null
 
         fun intent(context: Context, url: String, token: String, allowWholeDevice: Boolean): Intent =
             Intent(context, ControlAgentService::class.java)
@@ -67,6 +68,14 @@ class ControlAgentService : Service() {
                 },
                 "accessibility" to ControlAccessibilityService.statusJson().toMap(),
             )
+        }
+
+        fun executeHostMacroCommand(args: JSONObject): JSONObject {
+            val command = HostMacroPolicy.validate(args)
+            val service = activeInstance
+                ?: throw IllegalStateException("DevOTA agent service is not running")
+            if (!connected) throw IllegalStateException("DevOTA agent is not connected to the host relay")
+            return service.hostCommandBridge.request(command)
         }
 
         /**
@@ -240,7 +249,10 @@ class ControlAgentService : Service() {
         .readTimeout(0, TimeUnit.SECONDS)
         .build()
 
-    private var webSocket: WebSocket? = null
+    @Volatile private var webSocket: WebSocket? = null
+    private val hostCommandBridge = HostCommandBridge(
+        sendText = { payload -> webSocket?.send(payload) == true },
+    )
     private var desiredStop = false
     private var url = ""
     private var token = ""
@@ -248,6 +260,7 @@ class ControlAgentService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
             ?: UUID.randomUUID().toString()
         createNotificationChannel()
@@ -279,6 +292,8 @@ class ControlAgentService : Service() {
         desiredStop = true
         running = false
         connected = false
+        if (activeInstance === this) activeInstance = null
+        hostCommandBridge.failAll("DevOTA agent service stopped")
         webSocket?.close(1000, "service stopped")
         webSocket = null
         executor.shutdownNow()
@@ -298,6 +313,10 @@ class ControlAgentService : Service() {
             .build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (this@ControlAgentService.webSocket !== webSocket) {
+                    webSocket.close(1000, "superseded connection")
+                    return
+                }
                 connected = true
                 lastError = null
                 sendHello()
@@ -306,17 +325,24 @@ class ControlAgentService : Service() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (this@ControlAgentService.webSocket !== webSocket) return
                 handleMessage(webSocket, text)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (this@ControlAgentService.webSocket !== webSocket) return
+                this@ControlAgentService.webSocket = null
                 connected = false
+                hostCommandBridge.failAll()
                 updateNotification("Control relay disconnected")
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (this@ControlAgentService.webSocket !== webSocket) return
+                this@ControlAgentService.webSocket = null
                 connected = false
+                hostCommandBridge.failAll()
                 lastError = t.message ?: t.javaClass.simpleName
                 updateNotification("Control relay connection failed")
                 scheduleReconnect()
@@ -335,6 +361,7 @@ class ControlAgentService : Service() {
         } catch (e: Exception) {
             return
         }
+        if (hostCommandBridge.handleHostResult(msg)) return
         if (msg.optString("type") != "command") return
         val id = msg.optString("id")
         val action = msg.optString("action")

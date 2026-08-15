@@ -29,6 +29,7 @@ Useful environment variables:
 | `DEVOTA_BUILD_SERVER_URL` | unset | Build server URL reachable from the phone. Required for phone-agent installs. |
 | `DEVOTA_ENABLE_WHOLE_DEVICE` | `0` | Enables whole-phone MCP tools on the PC side. The phone app must also opt in. |
 | `DEVOTA_ENABLE_BUILD_COMMANDS` | `0` | Enables optional manifest build commands. |
+| `DEVOTA_ENABLE_PRIVILEGED_MACROS` | `0` | Enables the narrowly allowlisted host-backed `hostCommand` macro action. |
 | `DEVOTA_ADB_HOST` | unset | Optional `ip:port` for probing network ADB. |
 
 ## Phone Setup
@@ -69,6 +70,20 @@ Useful environment variables:
   poll is active (maximum 120 frames).
   `assertDeviceProfile` fails before navigation unless the phone/emulator
   matches the declared model set, Android SDK, screen sides, and density.
+
+  `hostCommand` is disabled unless `DEVOTA_ENABLE_PRIVILEGED_MACROS=1`. Its
+  public macro envelope is backend-neutral, while this relay currently uses a
+  trusted local ADB executable. The only nested actions are `clearAppData`,
+  `grantPermission`, `revokePermission`, `forceStop`, `launchApp`, and
+  `installLatest`. Target packages and app IDs must be unique entries in the
+  active `devota.yaml`, and DevOTA itself is never a valid target. Permission
+  changes allow only `android.permission.POST_NOTIFICATIONS` and
+  `android.permission.RECORD_AUDIO`. There is no raw shell field or raw device
+  selector. The relay uses the authenticated phone identity from its WebSocket
+  hello only to find exactly one connected ADB transport with the same Android
+  `android_id`; it does not expose that identity or the ADB serial in results.
+  Each accepted result records the nested action and `backend: trusted-adb`
+  plus a small allowlisted result payload for macro evidence.
 
   For an unknown workflow, start a recording, explore with the Android control
   tools, then stop and compile it. Failed actions and observation-only calls

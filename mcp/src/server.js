@@ -5,12 +5,14 @@ import { z } from "zod";
 import { WebSocketServer } from "ws";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import YAML from "yaml";
 import { compileMacroRecording, sanitizeRecordedArgs } from "./macro_recording.js";
+import { PhoneRegistry } from "./phone_registry.js";
+import { createPrivilegedMacroExecutor } from "./privileged_macro.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,6 +27,7 @@ const wsPort = Number.parseInt(env.DEVOTA_WS_PORT || "8083", 10);
 const buildServerUrl = env.DEVOTA_BUILD_SERVER_URL ? stripTrailingSlash(env.DEVOTA_BUILD_SERVER_URL) : null;
 const wholeDeviceEnabled = env.DEVOTA_ENABLE_WHOLE_DEVICE === "1";
 const buildCommandsEnabled = env.DEVOTA_ENABLE_BUILD_COMMANDS === "1";
+const privilegedMacrosEnabled = env.DEVOTA_ENABLE_PRIVILEGED_MACROS === "1";
 const repoRoot = path.resolve(env.DEVOTA_REPO_ROOT || path.resolve(TOOL_ROOT, ".."));
 const manifestPath = path.resolve(repoRoot, env.DEVOTA_MANIFEST || "devota.yaml");
 const artifactRoot = path.resolve(env.DEVOTA_ARTIFACT_DIR || path.join(TOOL_ROOT, "artifacts"));
@@ -63,120 +66,6 @@ const macroStepSchema = z.object({
   type: z.enum(["shell", "terminalKey", "tmux", "wait", "device"]).default("shell"),
   value: z.string().default(""),
   delaySeconds: z.number().min(0).default(0),
-});
-
-class PhoneRelay {
-  constructor() {
-    this.socket = null;
-    this.pending = new Map();
-    this.nextId = 1;
-    this.hello = null;
-    this.status = null;
-    this.connectedAt = null;
-    this.lastDisconnect = null;
-  }
-
-  attach(socket, request) {
-    const url = new URL(request.url || "/", `ws://${request.headers.host || "localhost"}`);
-    const token = url.searchParams.get("token") || request.headers["x-devota-token"] || request.headers["x-cradle-token"];
-    if (token !== pairToken) {
-      socket.close(1008, "bad token");
-      return;
-    }
-    if (this.socket) {
-      this.socket.close(1000, "replaced by new phone connection");
-    }
-    this.socket = socket;
-    this.connectedAt = new Date().toISOString();
-    this.lastDisconnect = null;
-    socket.on("message", (data) => this.onMessage(data));
-    socket.on("close", () => this.detach(socket));
-    socket.on("error", (err) => {
-      console.error(`[devota_mcp] phone websocket error: ${err.message}`);
-    });
-    console.error("[devota_mcp] phone agent connected");
-  }
-
-  detach(socket) {
-    if (this.socket !== socket) return;
-    this.socket = null;
-    this.lastDisconnect = new Date().toISOString();
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("phone disconnected"));
-    }
-    this.pending.clear();
-    console.error("[devota_mcp] phone agent disconnected");
-  }
-
-  onMessage(data) {
-    let msg;
-    try {
-      msg = JSON.parse(data.toString("utf8"));
-    } catch {
-      return;
-    }
-    if (msg.type === "hello") {
-      this.hello = msg;
-      return;
-    }
-    if (msg.type === "status") {
-      this.status = msg.status || msg;
-      return;
-    }
-    if (!msg.id || !this.pending.has(msg.id)) return;
-    const pending = this.pending.get(msg.id);
-    this.pending.delete(msg.id);
-    clearTimeout(pending.timer);
-    if (msg.ok) {
-      pending.resolve(msg.result ?? {});
-    } else {
-      pending.reject(new Error(msg.error || "phone command failed"));
-    }
-  }
-
-  async command(action, args = {}, timeoutMs = 30000) {
-    if (!this.socket || this.socket.readyState !== this.socket.OPEN) {
-      throw new Error("DevOTA phone agent is not connected");
-    }
-    const id = String(this.nextId++);
-    const payload = { type: "command", id, action, args };
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`phone command timed out: ${action}`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify(payload), (err) => {
-        if (!err) return;
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(err);
-      });
-    });
-  }
-
-  summary() {
-    return {
-      connected: Boolean(this.socket && this.socket.readyState === 1),
-      connectedAt: this.connectedAt,
-      lastDisconnect: this.lastDisconnect,
-      hello: this.hello,
-      status: this.status,
-    };
-  }
-}
-
-const phone = new PhoneRelay();
-
-const wss = new WebSocketServer({ host: "0.0.0.0", port: wsPort, path: "/phone" });
-wss.on("connection", (socket, request) => phone.attach(socket, request));
-wss.on("listening", () => {
-  const address = wss.address();
-  const actualPort = typeof address === "object" && address ? address.port : wsPort;
-  console.error(`[devota_mcp] phone relay listening on ws://0.0.0.0:${actualPort}/phone`);
-  console.error(`[devota_mcp] pair token: ${pairToken}`);
-  console.error(`[devota_mcp] build server URL for phone installs: ${buildServerUrl || "not configured"}`);
 });
 
 function stripTrailingSlash(value) {
@@ -388,6 +277,31 @@ async function adbDevices() {
     });
 }
 
+const executePrivilegedMacroCommand = createPrivilegedMacroExecutor({
+  enabled: privilegedMacrosEnabled,
+  loadManifest,
+  adbDevices,
+  runAdb,
+  latestBuild,
+  devotaPackage,
+});
+
+const phone = new PhoneRegistry({
+  pairToken,
+  onHostCommand: privilegedMacrosEnabled ? executePrivilegedMacroCommand : null,
+});
+
+const wss = new WebSocketServer({ host: "0.0.0.0", port: wsPort, path: "/phone" });
+wss.on("connection", (socket, request) => phone.attach(socket, request));
+wss.on("listening", () => {
+  const address = wss.address();
+  const actualPort = typeof address === "object" && address ? address.port : wsPort;
+  console.error(`[devota_mcp] phone relay listening on ws://0.0.0.0:${actualPort}/phone`);
+  console.error(`[devota_mcp] pair token: ${env.DEVOTA_PAIR_TOKEN ? "configured" : "generated for this process"}`);
+  console.error(`[devota_mcp] build server URL for phone installs: ${buildServerUrl || "not configured"}`);
+  console.error(`[devota_mcp] privileged host macros: ${privilegedMacrosEnabled ? "enabled" : "disabled"}`);
+});
+
 async function chooseAdbSerial(serial) {
   if (serial) return serial;
   const devices = (await adbDevices()).filter((d) => d.state === "device");
@@ -413,6 +327,25 @@ async function loadManifest() {
   if (!data || !Array.isArray(data.apps) || data.apps.length === 0) {
     throw new Error(`DevOTA manifest must define a non-empty apps list: ${manifestPath}`);
   }
+  const roots = new Map([["default", repoRoot]]);
+  const rawRoots = data.roots || {};
+  if (Array.isArray(rawRoots)) {
+    for (const [index, root] of rawRoots.entries()) {
+      const id = String(root?.id || "").trim();
+      const value = String(root?.path || "").trim();
+      if (!id || !value) throw new Error(`roots[${index}].id and path are required`);
+      roots.set(id, path.resolve(repoRoot, value));
+    }
+  } else if (rawRoots && typeof rawRoots === "object") {
+    for (const [rawId, spec] of Object.entries(rawRoots)) {
+      const id = String(rawId).trim();
+      const value = String(spec && typeof spec === "object" ? spec.path || "" : spec || "").trim();
+      if (!id || !value) throw new Error(`manifest root ${id || "<empty>"} must define a path`);
+      roots.set(id, path.resolve(repoRoot, value));
+    }
+  } else {
+    throw new Error("manifest roots must be a mapping or list");
+  }
   const seen = new Set();
   const apps = data.apps.map((app, index) => {
     const id = String(app?.id || "").trim();
@@ -421,19 +354,30 @@ async function loadManifest() {
     seen.add(id);
     const buildDirs = Array.isArray(app.buildDirs) ? app.buildDirs : [];
     if (buildDirs.length === 0) throw new Error(`${id}.buildDirs must be a non-empty list`);
+    const rootRef = String(app.root || app.repoRoot || "default").trim();
+    const appRoot = roots.get(rootRef) || path.resolve(repoRoot, rootRef);
     return {
       id,
       label: String(app.label || id),
       packageName: String(app.packageName || ""),
       notes: String(app.notes || ""),
+      root: { id: rootRef, absolute: appRoot },
       buildDirs: buildDirs.map((rel) => ({
         relative: String(rel),
-        absolute: path.resolve(repoRoot, String(rel)),
+        absolute: requireContainedPath(appRoot, path.resolve(appRoot, String(rel)), `${id}.buildDirs`),
       })),
       build: app.build || null,
     };
   });
-  return { version: data.version || 1, apps };
+  return { version: data.version || 1, roots, apps };
+}
+
+function requireContainedPath(root, target, label) {
+  const relative = path.relative(root, target);
+  if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) {
+    return target;
+  }
+  throw new Error(`${label} entry escapes its configured app root`);
 }
 
 async function resolveApp(appId) {
@@ -464,15 +408,23 @@ async function walkApks(dir, app, out) {
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith(".apk")) continue;
-    const st = await stat(full);
-    const relativePath = path.relative(repoRoot, full).split(path.sep).join("/");
+    let resolved;
+    try {
+      resolved = await realpath(full);
+      requireContainedPath(app.root.absolute, resolved, `${app.id} APK`);
+    } catch {
+      continue;
+    }
+    const st = await stat(resolved);
+    const appRelativePath = path.relative(app.root.absolute, resolved).split(path.sep).join("/");
+    const relativePath = `apps/${app.id}/${appRelativePath}`;
     out.push({
       filename: entry.name,
       size: st.size,
       modifiedMs: st.mtimeMs,
       modified: new Date(st.mtimeMs).toISOString(),
       path: relativePath,
-      absolutePath: full,
+      absolutePath: resolved,
       appId: app.id,
       appLabel: app.label,
       packageName: app.packageName,
@@ -573,7 +525,11 @@ async function runConfiguredBuild(appId, mode, runDir) {
   if (!configured) {
     throw new Error(`app ${app.id} does not define a build command in devota.yaml`);
   }
-  const cwd = path.resolve(repoRoot, configured.workingDir);
+  const cwd = requireContainedPath(
+    app.root.absolute,
+    path.resolve(app.root.absolute, configured.workingDir),
+    `${app.id}.build.workingDir`,
+  );
   const { command, args } = commandRunner(configured.command);
 
   const startedAt = new Date().toISOString();

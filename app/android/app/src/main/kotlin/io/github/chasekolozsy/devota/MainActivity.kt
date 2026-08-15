@@ -61,12 +61,16 @@ class MainActivity : FlutterActivity() {
                     val allowWholeDevice = ControlAgentService.statusMap(this)["wholeDeviceAllowed"] == true
                     Thread {
                         try {
-                            val value = ControlAgentService.executeLocalCommand(
-                                this,
-                                action,
-                                JSONObject(rawArgs),
-                                allowWholeDevice,
-                            )
+                            val value = if (action == "hostCommand") {
+                                ControlAgentService.executeHostMacroCommand(JSONObject(rawArgs))
+                            } else {
+                                ControlAgentService.executeLocalCommand(
+                                    this,
+                                    action,
+                                    JSONObject(rawArgs),
+                                    allowWholeDevice,
+                                )
+                            }
                             runOnUiThread { result.success(jsonObjectToMap(value)) }
                         } catch (error: Exception) {
                             runOnUiThread {

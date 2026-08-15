@@ -27,7 +27,112 @@ const deviceMacroActions = <String>{
   'installBuild',
   'humanCheckpoint',
   'localHttpAssert',
+  'hostCommand',
 };
+
+const deviceHostMacroActions = <String>{
+  'clearAppData',
+  'grantPermission',
+  'revokePermission',
+  'forceStop',
+  'launchApp',
+  'installLatest',
+};
+
+const deviceHostMacroPermissions = <String>{
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.RECORD_AUDIO',
+};
+
+final _androidPackagePattern = RegExp(
+  r'^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$',
+);
+final _devotaAppIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$');
+
+Map<String, dynamic> validateDeviceHostMacroArgs(Map<String, dynamic> raw) {
+  if (raw.keys.toSet().difference(const {'action', 'args'}).isNotEmpty ||
+      !raw.containsKey('action') ||
+      !raw.containsKey('args')) {
+    throw const FormatException(
+      'hostCommand args must contain exactly action and args',
+    );
+  }
+  final action = raw['action']?.toString().trim() ?? '';
+  if (!deviceHostMacroActions.contains(action)) {
+    throw FormatException('unsupported host macro action: $action');
+  }
+  final nestedRaw = raw['args'];
+  if (nestedRaw is! Map) {
+    throw const FormatException('host macro action args must be an object');
+  }
+  final args = Map<String, dynamic>.from(nestedRaw);
+  final allowedKeys = switch (action) {
+    'grantPermission' ||
+    'revokePermission' => const {'packageName', 'permission'},
+    'installLatest' => const {'appId'},
+    _ => const {'packageName'},
+  };
+  final suppliedKeys = args.keys.toSet();
+  if (suppliedKeys.length != allowedKeys.length ||
+      !suppliedKeys.containsAll(allowedKeys)) {
+    throw FormatException(
+      '$action args must contain exactly ${allowedKeys.toList()..sort()}',
+    );
+  }
+  if (action == 'installLatest') {
+    final appId = args['appId']?.toString().trim() ?? '';
+    if (!_devotaAppIdPattern.hasMatch(appId)) {
+      throw const FormatException('host macro appId is invalid');
+    }
+    return {
+      'action': action,
+      'args': {'appId': appId},
+    };
+  }
+  final packageName = args['packageName']?.toString().trim() ?? '';
+  if (!_androidPackagePattern.hasMatch(packageName)) {
+    throw const FormatException('host macro packageName is invalid');
+  }
+  if (action == 'grantPermission' || action == 'revokePermission') {
+    final permission = args['permission']?.toString().trim() ?? '';
+    if (!deviceHostMacroPermissions.contains(permission)) {
+      throw const FormatException(
+        'runtime permission is not allowlisted for host macros',
+      );
+    }
+    return {
+      'action': action,
+      'args': {'packageName': packageName, 'permission': permission},
+    };
+  }
+  return {
+    'action': action,
+    'args': {'packageName': packageName},
+  };
+}
+
+Map<String, dynamic> hostMacroEvidenceResult(
+  String expectedAction,
+  Map<String, dynamic> raw,
+) {
+  if (raw['ok'] != true || raw['action']?.toString() != expectedAction) {
+    throw StateError('host macro result did not confirm $expectedAction');
+  }
+  const allowedEvidenceKeys = {
+    'ok',
+    'backend',
+    'action',
+    'packageName',
+    'permission',
+    'appId',
+    'filename',
+    'size',
+  };
+  return {
+    for (final entry in raw.entries)
+      if (allowedEvidenceKeys.contains(entry.key)) entry.key: entry.value,
+  };
+}
 
 class HumanCheckpointConfig {
   const HumanCheckpointConfig({
@@ -177,9 +282,12 @@ class DeviceMacroStepSpec {
     }
     final rawArgs = json['args'];
     final rawExpect = json['expect'];
+    final Map<String, dynamic> args = rawArgs is Map
+        ? Map<String, dynamic>.from(rawArgs)
+        : <String, dynamic>{};
     return DeviceMacroStepSpec(
       action: action,
-      args: rawArgs is Map ? Map<String, dynamic>.from(rawArgs) : {},
+      args: action == 'hostCommand' ? validateDeviceHostMacroArgs(args) : args,
       expect: rawExpect is Map ? Map<String, dynamic>.from(rawExpect) : {},
       capture: json['capture'] != false,
       allowError: json['allowError'] == true,
@@ -567,6 +675,9 @@ class DeviceMacroRunner {
         return _installBuild(spec.args);
       case 'localHttpAssert':
         return _localHttpAssert(spec.args);
+      case 'hostCommand':
+        final result = await _invoke('hostCommand', spec.args);
+        return hostMacroEvidenceResult(spec.args['action']!.toString(), result);
       default:
         return _invoke(
           spec.action,

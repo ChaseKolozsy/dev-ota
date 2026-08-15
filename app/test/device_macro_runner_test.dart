@@ -27,6 +27,84 @@ void main() {
     );
   });
 
+  test('hostCommand validates exact nested action and permission allowlists', () {
+    final spec = DeviceMacroStepSpec.parse(
+      '{"action":"hostCommand","args":{"action":"grantPermission","args":{"packageName":"com.example.target","permission":"android.permission.POST_NOTIFICATIONS"}}}',
+    );
+    expect(spec.action, 'hostCommand');
+    expect(spec.args['action'], 'grantPermission');
+    expect(
+      () => DeviceMacroStepSpec.parse(
+        '{"action":"hostCommand","args":{"action":"shell","args":{"command":"id"}}}',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => DeviceMacroStepSpec.parse(
+        '{"action":"hostCommand","args":{"action":"forceStop","args":{"packageName":"com.example.target","shell":"id"}}}',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => DeviceMacroStepSpec.parse(
+        '{"action":"hostCommand","args":{"action":"grantPermission","args":{"packageName":"com.example.target","permission":"android.permission.READ_SMS"}}}',
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('hostCommand stores explicit sanitized host result evidence', () async {
+    final actions = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final envelope = Map<String, dynamic>.from(call.arguments as Map);
+          final action = envelope['action'] as String;
+          actions.add(action);
+          expect(action, 'hostCommand');
+          expect((envelope['args'] as Map)['action'], 'forceStop');
+          return {
+            'ok': true,
+            'backend': 'trusted-adb',
+            'action': 'forceStop',
+            'packageName': 'com.example.target',
+            'serial': 'must-not-enter-evidence',
+            'deviceId': 'must-not-enter-evidence',
+          };
+        });
+    final evidence = <DeviceMacroEvidence>[];
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async => evidence.add(item),
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'host-command',
+      name: 'Host command',
+      steps: [
+        TerminalMacroStep(
+          id: 'stop-target',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"hostCommand","args":{"action":"forceStop","args":{"packageName":"com.example.target"}},"capture":false}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+
+    await runner.run(macro);
+
+    expect(actions, ['hostCommand']);
+    expect(evidence.single.actionResult, {
+      'ok': true,
+      'backend': 'trusted-adb',
+      'action': 'forceStop',
+      'packageName': 'com.example.target',
+    });
+    expect(evidence.single.toJson().toString(), isNot(contains('serial')));
+    expect(evidence.single.toJson().toString(), isNot(contains('deviceId')));
+  });
+
   test('human checkpoint validates bounded screenshot cadence', () {
     final config = HumanCheckpointConfig.fromArgs({
       'durationSeconds': 10,
@@ -250,47 +328,50 @@ void main() {
     },
   );
 
-  test('tapUi can delegate a package window without a generic UI precheck', () async {
-    final actions = <String>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-          final envelope = Map<String, dynamic>.from(call.arguments as Map);
-          final action = envelope['action'] as String;
-          actions.add(action);
-          if (action == 'tapUi') {
-            final args = Map<String, dynamic>.from(envelope['args'] as Map);
-            expect(args['packageName'], 'com.android.permissioncontroller');
-            expect((args['selector'] as Map)['textExact'], 'Allow');
-            return {'ok': true, 'method': 'accessibility_click'};
-          }
-          if (action == 'screenshot') return {'pngBase64': 'frame'};
-          return {'ok': true};
-        });
-    final runner = DeviceMacroRunner(
-      channel: channel,
-      evidenceSink: (_) async {},
-      installBuild: (_) async => {'ok': true},
-      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
-    );
-    const macro = TerminalMacro(
-      id: 'system-window-click',
-      name: 'System window click',
-      steps: [
-        TerminalMacroStep(
-          id: 'allow',
-          type: TerminalMacroStepType.device,
-          value:
-              '{"action":"tapUi","args":{"selector":{"textExact":"Allow"},"packageName":"com.android.permissioncontroller","selectorPrecheck":false}}',
-          delaySeconds: 0,
-        ),
-      ],
-    );
+  test(
+    'tapUi can delegate a package window without a generic UI precheck',
+    () async {
+      final actions = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            final envelope = Map<String, dynamic>.from(call.arguments as Map);
+            final action = envelope['action'] as String;
+            actions.add(action);
+            if (action == 'tapUi') {
+              final args = Map<String, dynamic>.from(envelope['args'] as Map);
+              expect(args['packageName'], 'com.android.permissioncontroller');
+              expect((args['selector'] as Map)['textExact'], 'Allow');
+              return {'ok': true, 'method': 'accessibility_click'};
+            }
+            if (action == 'screenshot') return {'pngBase64': 'frame'};
+            return {'ok': true};
+          });
+      final runner = DeviceMacroRunner(
+        channel: channel,
+        evidenceSink: (_) async {},
+        installBuild: (_) async => {'ok': true},
+        localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+      );
+      const macro = TerminalMacro(
+        id: 'system-window-click',
+        name: 'System window click',
+        steps: [
+          TerminalMacroStep(
+            id: 'allow',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"tapUi","args":{"selector":{"textExact":"Allow"},"packageName":"com.android.permissioncontroller","selectorPrecheck":false}}',
+            delaySeconds: 0,
+          ),
+        ],
+      );
 
-    await runner.run(macro);
+      await runner.run(macro);
 
-    expect(actions.first, 'tapUi');
-    expect(actions.indexOf('uiDump'), greaterThan(actions.indexOf('tapUi')));
-  });
+      expect(actions.first, 'tapUi');
+      expect(actions.indexOf('uiDump'), greaterThan(actions.indexOf('tapUi')));
+    },
+  );
 
   test('normalized swipe resolves against the live device profile', () async {
     Map<String, dynamic>? swipeArgs;
