@@ -248,6 +248,30 @@ List<TerminalMacro> rankTerminalMacros(List<TerminalMacro> macros) {
   return indexed.map((entry) => entry.value).toList();
 }
 
+/// Applies a drag-reposition: [macroId] moves to [targetRankedIndex] of the
+/// ranked order, and every macro is handed an explicit descending priority.
+///
+/// Priorities are rewritten rather than swapped so the arrangement the user
+/// dragged into place survives the priority sort, a server round trip, and any
+/// later usage-count update. Returns the original list when nothing moves.
+List<TerminalMacro> repositionTerminalMacro(
+  List<TerminalMacro> macros,
+  String macroId,
+  int targetRankedIndex,
+) {
+  final ranked = rankTerminalMacros(macros);
+  if (ranked.isEmpty) return macros;
+  final from = ranked.indexWhere((macro) => macro.id == macroId);
+  if (from < 0) return macros;
+  final to = targetRankedIndex.clamp(0, ranked.length - 1);
+  if (from == to) return macros;
+  ranked.insert(to, ranked.removeAt(from));
+  return [
+    for (var i = 0; i < ranked.length; i++)
+      ranked[i].copyWith(priority: ranked.length - i),
+  ];
+}
+
 String newTerminalMacroId(String prefix) {
   return '$prefix-${DateTime.now().microsecondsSinceEpoch}';
 }

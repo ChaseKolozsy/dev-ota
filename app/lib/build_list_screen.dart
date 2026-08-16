@@ -16,6 +16,7 @@ import 'device_macro_local_http.dart';
 import 'device_macro_runner.dart';
 import 'files_tab.dart';
 import 'macro_editor_screen.dart';
+import 'macro_reorder.dart';
 import 'macro_sync_service.dart';
 import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
@@ -77,6 +78,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   Map<String, int> _commandUseCounts = {};
   List<TerminalMacro> _macros = [];
   Map<String, int> _macroUseCounts = {};
+  bool _repositioningMacro = false;
   Future<void>? _macrosSyncFuture;
   final _macroController = TerminalMacroController();
   bool _deviceMacroRunning = false;
@@ -579,6 +581,37 @@ class _BuildListScreenState extends State<BuildListScreen>
       _macroUseCounts[macro.id] = (_macroUseCounts[macro.id] ?? 0) + 1;
     });
     unawaited(_saveMacros());
+  }
+
+  /// Drops a dragged macro at [targetRankedIndex] of the ranked order shared by
+  /// the Macros tab and the terminal macro bar.
+  void _moveMacroToRank(String macroId, int targetRankedIndex) {
+    final reordered = repositionTerminalMacro(
+      _macros,
+      macroId,
+      targetRankedIndex,
+    );
+    if (identical(reordered, _macros)) return;
+    setState(() => _macros = reordered);
+    unawaited(_saveMacros());
+  }
+
+  /// Repositions from the terminal's quick-macro strip. The strip shows only the
+  /// first few non-device macros, so a move there is translated into the ranked
+  /// position of the quick macro it was dropped onto — the macro lands exactly
+  /// where the user saw it land, and hidden macros between them keep their
+  /// relative order.
+  void _repositionQuickMacro(int fromIndex, int toIndex) {
+    final quick = _quickMacros;
+    if (fromIndex < 0 || fromIndex >= quick.length) return;
+    final target = toIndex.clamp(0, quick.length - 1);
+    if (fromIndex == target) return;
+    final ranked = _rankedMacros;
+    final targetRank = ranked.indexWhere(
+      (macro) => macro.id == quick[target].id,
+    );
+    if (targetRank < 0) return;
+    _moveMacroToRank(quick[fromIndex].id, targetRank);
   }
 
   Future<void> _addMacro() async {
@@ -1668,6 +1701,7 @@ class _BuildListScreenState extends State<BuildListScreen>
           onFullscreenChanged: _setTerminalFullscreen,
           onCommandUsed: _recordCommandUse,
           onMacroUsed: _recordMacroUse,
+          onMacroReorder: _repositionQuickMacro,
         ),
         _buildCommandsTab(),
         _buildMacrosTab(),
@@ -2056,10 +2090,14 @@ class _BuildListScreenState extends State<BuildListScreen>
             children: [
               Expanded(
                 child: Text(
-                  progress != null
+                  _repositioningMacro
+                      ? 'Repositioning — drag to move one slot, flick to send '
+                            'it to the top or bottom.'
+                      : progress != null
                       ? 'Running ${progress.macroName} — ${progress.stepLabel}'
                       : _lastDeviceMacroRunId == null
-                      ? 'Create terminal sequences or visible device integration tests.'
+                      ? 'Hold a macro to reposition it. Create terminal '
+                            'sequences or visible device integration tests.'
                       : 'Last device evidence: $_lastDeviceMacroRunId',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -2091,12 +2129,20 @@ class _BuildListScreenState extends State<BuildListScreen>
                     ),
                   ),
                 )
-              : ListView.builder(
+              : MacroReorderableList(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 4,
                   ),
                   itemCount: rankedMacros.length,
+                  itemKey: (index) => ValueKey(rankedMacros[index].id),
+                  onRepositionStart: (_) =>
+                      setState(() => _repositioningMacro = true),
+                  onRepositionEnd: (_) {
+                    if (mounted) setState(() => _repositioningMacro = false);
+                  },
+                  onReposition: (fromIndex, toIndex) =>
+                      _moveMacroToRank(rankedMacros[fromIndex].id, toIndex),
                   itemBuilder: (context, index) {
                     final macro = rankedMacros[index];
                     final uses = _macroUseCounts[macro.id] ?? 0;
