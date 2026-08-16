@@ -8,7 +8,10 @@ import base64
 from email import policy
 from email.parser import BytesParser
 import gzip
+import html
+import io
 import json
+import math
 import mimetypes
 import os
 import platform
@@ -28,6 +31,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
+from PIL import Image, UnidentifiedImageError
 
 try:
     import yaml
@@ -60,15 +65,92 @@ PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 PHASE_STATUSES = {"not_started", "active", "waiting_client", "completed"}
 CARD_STATUSES = {"todo", "doing", "waiting_client", "review", "done"}
 COMMENT_AUTHOR_TYPES = {"me", "client", "system"}
-MACRO_STEP_TYPES = {"shell", "terminalKey", "tmux", "wait"}
+MACRO_STEP_TYPES = {"shell", "terminalKey", "tmux", "wait", "device"}
 MACRO_STEP_DEFAULT_VALUES = {
     "shell": "",
     "terminalKey": "enter",
     "tmux": "c",
     "wait": "",
+    "device": '{"action":"openSettings","args":{},"capture":true}',
 }
 MACRO_STORE_FORMAT = "devota-terminal-macros"
-MACRO_STORE_VERSION = 1
+MACRO_STORE_VERSION = 3
+DEVICE_MACRO_ACTIONS = {
+    "launchApp",
+    "launchIntent",
+    "tap",
+    "tapImage",
+    "longTap",
+    "swipe",
+    "typeText",
+    "back",
+    "home",
+    "recents",
+    "openSettings",
+    "openUri",
+    "screenshot",
+    "uiDump",
+    "tapUi",
+    "assertUi",
+    "assertDeviceProfile",
+    "installBuild",
+    "humanCheckpoint",
+    "localHttpAssert",
+}
+
+
+def validate_image_template(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("image template must be an object")
+    template = dict(raw)
+    if template.get("format") != "devota-image-template" or template.get("version") != 1:
+        raise ValueError("unsupported DevOTA image template")
+    encoded = template.get("pngBase64")
+    if not isinstance(encoded, str) or not encoded or len(encoded) > 600_000:
+        raise ValueError("image template pngBase64 is missing or too large")
+    try:
+        png = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("image template pngBase64 is invalid") from exc
+    if len(png) > 384 * 1024 or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("image template must be a PNG no larger than 384 KiB")
+    try:
+        with Image.open(io.BytesIO(png)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(png)) as image:
+            width, height = image.size
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("image template PNG is invalid") from exc
+    if width < 8 or height < 8 or width > 512 or height > 512:
+        raise ValueError("image template dimensions must be from 8 to 512 pixels")
+    if template.get("width") != width or template.get("height") != height:
+        raise ValueError("image template dimensions do not match metadata")
+    for field in ("sourceWidth", "sourceHeight"):
+        value = template.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 10_000:
+            raise ValueError(f"image template {field} is invalid")
+    numeric_bounds = {
+        "expectedCenterX": (0.0, 1.0),
+        "expectedCenterY": (0.0, 1.0),
+        "clickOffsetX": (0.0, 1.0),
+        "clickOffsetY": (0.0, 1.0),
+        "searchRadiusX": (0.02, 0.5),
+        "searchRadiusY": (0.02, 0.5),
+        "threshold": (0.5, 0.99),
+    }
+    for field, (lower, upper) in numeric_bounds.items():
+        value = template.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < lower
+            or value > upper
+        ):
+            raise ValueError(f"image template {field} must be from {lower} to {upper}")
+    return template
+MACRO_RUN_LOCK = threading.Lock()
+MACRO_RUN_MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
 DEFAULT_PHASE_TEMPLATE = [
     "Discovery",
     "Design",
@@ -2147,11 +2229,241 @@ def normalize_macro_step(raw: Any) -> dict[str, Any]:
         delay = float(str(raw_delay or "0"))
     if delay < 0:
         delay = 0
+    value = str(raw.get("value") if raw.get("value") is not None else MACRO_STEP_DEFAULT_VALUES[step_type])
+    if step_type == "device":
+        try:
+            spec = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"device macro value must be valid JSON: {exc.msg}") from exc
+        if not isinstance(spec, dict):
+            raise ValueError("device macro value must be a JSON object")
+        action = str(spec.get("action") or "").strip()
+        if action not in DEVICE_MACRO_ACTIONS:
+            raise ValueError(f"unsupported device macro action: {action}")
+        for field in ("args", "expect"):
+            if field in spec and not isinstance(spec[field], dict):
+                raise ValueError(f"device macro {field} must be an object")
+        if action == "tapImage":
+            args = spec.get("args", {})
+            validate_image_template(args.get("template"))
+            if "durationMs" in args:
+                duration = args["durationMs"]
+                if (
+                    isinstance(duration, bool)
+                    or not isinstance(duration, (int, float))
+                    or not math.isfinite(duration)
+                    or duration < 80
+                    or duration > 5000
+                ):
+                    raise ValueError("tapImage durationMs must be from 80 to 5000")
+        if action == "tapUi" and "imageFallback" in spec.get("args", {}):
+            validate_image_template(spec["args"]["imageFallback"])
+        if action == "humanCheckpoint":
+            args = spec.get("args", {})
+            countdown = args.get("countdownSeconds", 10)
+            duration = args.get("durationSeconds", 10)
+            rate = args.get("screenshotsPerSecond", 1)
+            if isinstance(countdown, bool) or not isinstance(countdown, (int, float)) or countdown < 0 or countdown > 60:
+                raise ValueError("humanCheckpoint countdownSeconds must be from 0 to 60")
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)) or duration <= 0 or duration > 120:
+                raise ValueError("humanCheckpoint durationSeconds must be greater than 0 and at most 120")
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate < 0.1 or rate > 5:
+                raise ValueError("humanCheckpoint screenshotsPerSecond must be from 0.1 to 5")
+            if math.ceil(duration * rate) > 120:
+                raise ValueError("humanCheckpoint may capture at most 120 screenshots")
+        if action == "localHttpAssert":
+            args = spec.get("args", {})
+            parsed = urlparse(str(args.get("url") or ""))
+            if (
+                parsed.scheme != "http"
+                or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.fragment
+            ):
+                raise ValueError("localHttpAssert url must be an http:// loopback URL")
+            method = str(args.get("method") or "GET").upper()
+            if method not in {"GET", "HEAD"}:
+                raise ValueError("localHttpAssert permits only GET or HEAD")
+            expected_status = args.get("expectedStatus")
+            if (
+                isinstance(expected_status, bool)
+                or not isinstance(expected_status, int)
+                or expected_status < 100
+                or expected_status > 599
+            ):
+                raise ValueError("localHttpAssert expectedStatus must be an HTTP status integer")
+            if "jsonPathEquals" in args and not isinstance(args["jsonPathEquals"], dict):
+                raise ValueError("localHttpAssert jsonPathEquals must be an object")
+            numeric_bounds = {
+                "timeoutSeconds": (0, 120, False),
+                "retryUntilSeconds": (0, 3600, True),
+                "retryIntervalSeconds": (0.1, 30, True),
+            }
+            for field, (lower, upper, include_lower) in numeric_bounds.items():
+                if field not in args:
+                    continue
+                observed = args[field]
+                numeric = (
+                    not isinstance(observed, bool)
+                    and isinstance(observed, (int, float))
+                    and math.isfinite(observed)
+                )
+                below = (
+                    observed < lower if include_lower else observed <= lower
+                ) if numeric else True
+                if (
+                    not numeric
+                    or below
+                    or observed > upper
+                ):
+                    if field == "retryUntilSeconds":
+                        raise ValueError(
+                            "localHttpAssert retryUntilSeconds must be from 0 to 3600"
+                        )
+                    if field == "retryIntervalSeconds":
+                        raise ValueError(
+                            "localHttpAssert retryIntervalSeconds must be from 0.1 to 30"
+                        )
+                    raise ValueError(
+                        "localHttpAssert timeoutSeconds must be greater than 0 and at most 120"
+                    )
+            for field in ("jsonPaths", "bodyIncludes", "bodyExcludes"):
+                if field in args and (
+                    not isinstance(args[field], list)
+                    or any(not isinstance(item, str) for item in args[field])
+                ):
+                    raise ValueError(f"localHttpAssert {field} must be a string array")
+            if "captureIntervalSeconds" in args:
+                capture_interval = args["captureIntervalSeconds"]
+                if (
+                    isinstance(capture_interval, bool)
+                    or not isinstance(capture_interval, (int, float))
+                    or not math.isfinite(capture_interval)
+                    or capture_interval < 2
+                    or capture_interval > 300
+                ):
+                    raise ValueError(
+                        "localHttpAssert captureIntervalSeconds must be from 2 to 300"
+                    )
+                retry_until = args.get("retryUntilSeconds", 0)
+                if retry_until > 0 and math.ceil(retry_until / capture_interval) + 1 > 120:
+                    raise ValueError(
+                        "localHttpAssert may capture at most 120 polling screenshots"
+                    )
+        if action == "assertDeviceProfile":
+            args = spec.get("args", {})
+            profile = str(args.get("profile") or "").strip()
+            if not profile:
+                raise ValueError("assertDeviceProfile requires args.profile")
+            constrained = False
+            if "models" in args:
+                models = args["models"]
+                if (
+                    not isinstance(models, list)
+                    or not models
+                    or any(not isinstance(value, str) or not value.strip() for value in models)
+                ):
+                    raise ValueError("assertDeviceProfile models must be a non-empty string array")
+                constrained = True
+            for field in ("androidSdk", "shortSidePx", "longSidePx", "densityDpi"):
+                if field not in args:
+                    continue
+                observed = args[field]
+                if isinstance(observed, bool) or not isinstance(observed, int) or observed <= 0:
+                    raise ValueError(f"assertDeviceProfile {field} must be a positive integer")
+                constrained = True
+            if not constrained:
+                raise ValueError("assertDeviceProfile requires at least one hardware constraint")
+        value = json.dumps(spec, separators=(",", ":"), ensure_ascii=False)
     return {
         "id": str(raw.get("id") or new_macro_id("step")),
         "type": step_type,
-        "value": str(raw.get("value") if raw.get("value") is not None else MACRO_STEP_DEFAULT_VALUES[step_type]),
+        "value": value,
         "delaySeconds": delay,
+    }
+
+
+def normalize_failure_diagnostics(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("failureDiagnostics must be an object")
+    duration = raw.get("durationSeconds", 300)
+    interval = raw.get("intervalSeconds", 30)
+    for name, value, lower, upper in (
+        ("durationSeconds", duration, 2, 3600),
+        ("intervalSeconds", interval, 2, 300),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < lower
+            or value > upper
+        ):
+            raise ValueError(f"failureDiagnostics {name} must be from {lower} to {upper}")
+    frame_count = math.floor(duration / interval) + 1
+    if frame_count > 120:
+        raise ValueError("failureDiagnostics may capture at most 120 frames")
+    probes_raw = raw.get("probes", [])
+    if not isinstance(probes_raw, list) or len(probes_raw) > 8:
+        raise ValueError("failureDiagnostics probes must be a list of at most 8 items")
+    probes: list[dict[str, Any]] = []
+    for item in probes_raw:
+        if not isinstance(item, dict):
+            raise ValueError("failureDiagnostics probe must be an object")
+        parsed = urlparse(str(item.get("url") or ""))
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise ValueError("failureDiagnostics probe must use an http loopback URL")
+        expected_status = item.get("expectedStatus")
+        if (
+            isinstance(expected_status, bool)
+            or not isinstance(expected_status, int)
+            or expected_status < 100
+            or expected_status > 599
+        ):
+            raise ValueError("failureDiagnostics probe expectedStatus must be an HTTP status integer")
+        timeout = item.get("timeoutSeconds", 10)
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+            or timeout > 30
+        ):
+            raise ValueError("failureDiagnostics probe timeoutSeconds must be greater than 0 and at most 30")
+        json_paths = item.get("jsonPaths", [])
+        if (
+            not isinstance(json_paths, list)
+            or len(json_paths) > 20
+            or any(not isinstance(value, str) or not value.strip() for value in json_paths)
+        ):
+            raise ValueError("failureDiagnostics probe jsonPaths must be a string list of at most 20 items")
+        probes.append(
+            {
+                "url": parsed.geturl(),
+                "expectedStatus": expected_status,
+                "timeoutSeconds": timeout,
+                "jsonPaths": json_paths,
+            }
+        )
+    capture_screenshot = raw.get("captureScreenshot", True) is not False
+    capture_ui = raw.get("captureUi", True) is not False
+    if not capture_screenshot and not capture_ui and not probes:
+        raise ValueError("failureDiagnostics must capture or probe something")
+    return {
+        "durationSeconds": duration,
+        "intervalSeconds": interval,
+        "captureScreenshot": capture_screenshot,
+        "captureUi": capture_ui,
+        "probes": probes,
     }
 
 
@@ -2164,17 +2476,23 @@ def normalize_macro(raw: Any) -> dict[str, Any]:
     steps_raw = raw.get("steps")
     if not isinstance(steps_raw, list) or not steps_raw:
         raise ValueError("macro steps must be a non-empty list")
+    if len(steps_raw) > 120:
+        raise ValueError("macro may contain at most 120 steps")
     raw_priority = raw.get("priority", 0)
     try:
         priority = int(raw_priority or 0)
     except (TypeError, ValueError):
         priority = 0
-    return {
+    macro = {
         "id": str(raw.get("id") or new_macro_id("macro")),
         "name": name,
         "priority": priority,
         "steps": [normalize_macro_step(step) for step in steps_raw],
     }
+    failure_diagnostics = normalize_failure_diagnostics(raw.get("failureDiagnostics"))
+    if failure_diagnostics is not None:
+        macro["failureDiagnostics"] = failure_diagnostics
+    return macro
 
 
 def normalize_macro_usage_counts(raw: Any, macro_ids: set[str] | None = None) -> dict[str, int]:
@@ -2313,6 +2631,8 @@ def update_macro(repo_root: Path, macro_id: str, payload: dict[str, Any]) -> dic
             merged["priority"] = raw_update.get("priority")
         if "steps" in raw_update:
             merged["steps"] = raw_update.get("steps")
+        if "failureDiagnostics" in raw_update:
+            merged["failureDiagnostics"] = raw_update.get("failureDiagnostics")
         merged["id"] = macro_id
         updated_item = normalize_macro(merged)
         macros.append(updated_item)
@@ -2331,6 +2651,226 @@ def delete_macro(repo_root: Path, macro_id: str) -> dict[str, Any]:
     usage_counts.pop(macro_id, None)
     next_store = write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
     return {"status": "ok", "deletedId": macro_id, "macros": next_store["macros"], "usageCounts": next_store["usageCounts"]}
+
+
+def macro_runs_root(repo_root: Path) -> Path:
+    return repo_root / ".devota-cache" / "macro-runs"
+
+
+def validate_macro_run_id(value: str) -> str:
+    run_id = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", run_id):
+        raise ValueError("invalid macro run id")
+    return run_id
+
+
+def macro_run_dir(repo_root: Path, run_id: str) -> Path:
+    return macro_runs_root(repo_root) / validate_macro_run_id(run_id)
+
+
+def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    os.chmod(path, 0o600)
+
+
+def _read_macro_run_manifest(directory: Path) -> dict[str, Any]:
+    path = directory / "manifest.json"
+    if not path.is_file():
+        raise FileNotFoundError("macro run not found")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("macro run manifest is invalid")
+    return payload
+
+
+def record_macro_run_step(repo_root: Path, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    directory = macro_run_dir(repo_root, run_id)
+    raw_index = payload.get("stepIndex")
+    if not isinstance(raw_index, int) or raw_index < 1 or raw_index > 10_000:
+        raise ValueError("stepIndex must be an integer from 1 to 10000")
+    frame_index = payload.get("frameIndex")
+    if frame_index is not None and (
+        not isinstance(frame_index, int) or frame_index < 1 or frame_index > 1_000
+    ):
+        raise ValueError("frameIndex must be an integer from 1 to 1000")
+    suffix = f"-frame-{frame_index:04d}" if frame_index is not None else ""
+    screenshot = payload.get("screenshot")
+    screenshot_copy = dict(screenshot) if isinstance(screenshot, dict) else None
+    png_name = None
+    png_bytes = None
+    if screenshot_copy is not None:
+        encoded = screenshot_copy.pop("pngBase64", None)
+        if encoded is not None:
+            if not isinstance(encoded, str):
+                raise ValueError("screenshot pngBase64 must be a string")
+            try:
+                png_bytes = base64.b64decode(encoded, validate=True)
+            except Exception as exc:
+                raise ValueError("screenshot pngBase64 is invalid") from exc
+            if len(png_bytes) > MACRO_RUN_MAX_SCREENSHOT_BYTES:
+                raise ValueError("macro screenshot is too large")
+            if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("macro screenshot is not a PNG")
+            png_name = f"step-{raw_index:04d}{suffix}.png"
+            screenshot_copy["file"] = png_name
+
+    step_payload = dict(payload)
+    step_payload["screenshot"] = screenshot_copy
+    step_payload["recordedAt"] = now_iso()
+    step_name = f"step-{raw_index:04d}{suffix}.json"
+    with MACRO_RUN_LOCK:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(directory, 0o700)
+        if png_bytes is not None and png_name is not None:
+            png_path = directory / png_name
+            png_path.write_bytes(png_bytes)
+            os.chmod(png_path, 0o600)
+        _write_private_json(directory / step_name, step_payload)
+        try:
+            manifest = _read_macro_run_manifest(directory)
+        except FileNotFoundError:
+            manifest = {
+                "format": "devota-device-macro-run",
+                "version": 1,
+                "runId": validate_macro_run_id(run_id),
+                "macroId": str(payload.get("macroId") or ""),
+                "macroName": str(payload.get("macroName") or "Device macro"),
+                "status": "running",
+                "startedAt": str(payload.get("runStartedAt") or payload.get("startedAt") or now_iso()),
+                "steps": [],
+            }
+        summary = {
+            "stepIndex": raw_index,
+            "stepCount": payload.get("stepCount"),
+            "stepId": payload.get("stepId"),
+            "name": payload.get("name"),
+            "action": payload.get("action"),
+            "startedAt": payload.get("startedAt"),
+            "completedAt": payload.get("completedAt"),
+            "actionError": payload.get("actionError"),
+            "screenshot": png_name,
+            "record": step_name,
+        }
+        summaries = list(manifest.get("steps", []))
+        if frame_index is None:
+            summaries = [item for item in summaries if item.get("stepIndex") != raw_index]
+            summaries.append(summary)
+        else:
+            existing = next((item for item in summaries if item.get("stepIndex") == raw_index), None)
+            if existing is None:
+                existing = dict(summary)
+                existing["frames"] = []
+                summaries.append(existing)
+            frames = [item for item in existing.get("frames", []) if item.get("frameIndex") != frame_index]
+            frames.append({
+                "frameIndex": frame_index,
+                "frameCount": payload.get("frameCount"),
+                "capturedAt": payload.get("capturedAt"),
+                "completedAt": payload.get("completedAt"),
+                "screenshot": png_name,
+                "record": step_name,
+            })
+            frames.sort(key=lambda item: int(item.get("frameIndex") or 0))
+            existing["frames"] = frames
+            existing["frameCount"] = payload.get("frameCount")
+            existing["completedAt"] = payload.get("completedAt")
+            if frames:
+                existing["screenshot"] = frames[0].get("screenshot")
+                existing["record"] = frames[0].get("record")
+        summaries.sort(key=lambda item: int(item.get("stepIndex") or 0))
+        manifest["steps"] = summaries
+        manifest["updatedAt"] = now_iso()
+        _write_private_json(directory / "manifest.json", manifest)
+    return {"status": "ok", "runId": run_id, "stepIndex": raw_index, "screenshot": png_name}
+
+
+def _write_macro_run_gallery(directory: Path, manifest: dict[str, Any]) -> None:
+    cards = []
+    for step in manifest.get("steps", []):
+        frames = step.get("frames") if isinstance(step.get("frames"), list) else []
+        items = frames or [step]
+        for frame in items:
+            image_name = frame.get("screenshot")
+            image = f'<img loading="lazy" src="{html.escape(str(image_name))}" alt="step screenshot">' if image_name else ""
+            error = step.get("actionError")
+            error_html = f'<pre class="error">{html.escape(str(error))}</pre>' if error else ""
+            frame_label = f' · frame {int(frame.get("frameIndex") or 0)}' if frames else ""
+            captured = frame.get("capturedAt")
+            captured_html = f'<p>{html.escape(str(captured))}</p>' if captured else ""
+            cards.append(
+                '<article>'
+                f'<h2>{int(step.get("stepIndex") or 0)}. {html.escape(str(step.get("name") or step.get("action") or "step"))}{frame_label}</h2>'
+                f'<p>{html.escape(str(step.get("action") or ""))}</p>{captured_html}{image}{error_html}'
+                '</article>'
+            )
+    document = """<!doctype html><meta charset="utf-8"><title>DevOTA macro evidence</title>
+<style>body{font:16px system-ui;margin:24px;background:#111;color:#eee}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}article{background:#222;padding:12px;border-radius:12px}img{width:100%;height:auto;border-radius:8px}.error{color:#ff9d9d;white-space:pre-wrap}</style>"""
+    document += f"<h1>{html.escape(str(manifest.get('macroName') or 'DevOTA macro'))}</h1><p>Status: {html.escape(str(manifest.get('status') or 'unknown'))}</p><main>{''.join(cards)}</main>"
+    path = directory / "gallery.html"
+    path.write_text(document, encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def complete_macro_run(repo_root: Path, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    directory = macro_run_dir(repo_root, run_id)
+    status = str(payload.get("status") or "passed")
+    if status not in {"passed", "failed", "stopped"}:
+        raise ValueError("invalid macro run status")
+    with MACRO_RUN_LOCK:
+        try:
+            manifest = _read_macro_run_manifest(directory)
+        except FileNotFoundError:
+            manifest = {
+                "format": "devota-device-macro-run",
+                "version": 1,
+                "runId": validate_macro_run_id(run_id),
+                "macroId": str(payload.get("macroId") or ""),
+                "macroName": str(payload.get("macroName") or "Device macro"),
+                "startedAt": str(payload.get("startedAt") or now_iso()),
+                "steps": [],
+            }
+        manifest["status"] = status
+        manifest["completedAt"] = str(payload.get("completedAt") or now_iso())
+        manifest["updatedAt"] = now_iso()
+        if payload.get("error") is not None:
+            manifest["error"] = str(payload.get("error"))
+        _write_private_json(directory / "manifest.json", manifest)
+        _write_macro_run_gallery(directory, manifest)
+    return {"status": "ok", "run": manifest}
+
+
+def get_macro_run(repo_root: Path, run_id: str) -> dict[str, Any]:
+    return _read_macro_run_manifest(macro_run_dir(repo_root, run_id))
+
+
+def list_macro_runs(repo_root: Path) -> dict[str, Any]:
+    root = macro_runs_root(repo_root)
+    runs = []
+    if root.is_dir():
+        for directory in root.iterdir():
+            if not directory.is_dir():
+                continue
+            try:
+                manifest = _read_macro_run_manifest(directory)
+            except Exception:
+                continue
+            runs.append({
+                "runId": manifest.get("runId", directory.name),
+                "macroId": manifest.get("macroId", ""),
+                "macroName": manifest.get("macroName", ""),
+                "status": manifest.get("status", "unknown"),
+                "startedAt": manifest.get("startedAt", ""),
+                "completedAt": manifest.get("completedAt", ""),
+                "updatedAt": manifest.get("updatedAt", ""),
+                "stepCount": len(manifest.get("steps", [])),
+            })
+    runs.sort(key=lambda item: str(item.get("updatedAt") or item.get("startedAt") or ""), reverse=True)
+    return {"status": "ok", "runs": runs}
 
 
 def validate_github_repo(repo: str) -> str:
@@ -2605,11 +3145,61 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                 for app in manifest["apps"]
             ]
 
+        def send_macro_run_archive(self, run_id: str, head_only: bool = False):
+            try:
+                directory = macro_run_dir(repo_root, run_id)
+                _read_macro_run_manifest(directory)
+                archive_path = build_dir_archive(directory, directory.name)
+            except FileNotFoundError as exc:
+                self.send_error(404, str(exc))
+                return
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            except Exception as exc:
+                self.send_error(500, f"Macro run archive failed: {exc}")
+                return
+            try:
+                size = archive_path.stat().st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{directory.name}.zip"',
+                )
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                if head_only:
+                    return
+                with open(archive_path, "rb") as source:
+                    while chunk := source.read(65536):
+                        self.wfile.write(chunk)
+            finally:
+                archive_path.unlink(missing_ok=True)
+
         def do_POST(self):
             path = unquote(urlparse(self.path).path)
-            if path == "/macros" or path == "/macros/sync":
+            match = re.fullmatch(r"/macro-runs/([^/]+)/steps", path)
+            if match:
+                try:
+                    payload = parse_json_request(self, max_bytes=12 * 1024 * 1024)
+                    self.send_json(record_macro_run_step(repo_root, match.group(1), payload))
+                except Exception as exc:
+                    self.send_error(400, f"Macro evidence upload failed: {exc}")
+                return
+
+            match = re.fullmatch(r"/macro-runs/([^/]+)/complete", path)
+            if match:
                 try:
                     payload = parse_json_request(self, max_bytes=512 * 1024)
+                    self.send_json(complete_macro_run(repo_root, match.group(1), payload))
+                except Exception as exc:
+                    self.send_error(400, f"Macro run completion failed: {exc}")
+                return
+
+            if path == "/macros" or path == "/macros/sync":
+                try:
+                    payload = parse_json_request(self, max_bytes=16 * 1024 * 1024)
                     result = sync_macros(repo_root, payload) if path == "/macros/sync" else create_macro(repo_root, payload)
                     self.send_json(result)
                 except Exception as exc:
@@ -2763,7 +3353,7 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
             match = re.fullmatch(r"/macros/([^/]+)", path)
             if match:
                 try:
-                    payload = parse_json_request(self, max_bytes=512 * 1024)
+                    payload = parse_json_request(self, max_bytes=16 * 1024 * 1024)
                     self.send_json(update_macro(repo_root, match.group(1), payload))
                 except FileNotFoundError as exc:
                     self.send_error(404, str(exc))
@@ -2819,7 +3409,11 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
             if path.startswith("/files/download/"):
                 self.send_transfer_download(path[len("/files/download/"):], head_only=True)
                 return
-            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile", "/macros", "/files"):
+            match = re.fullmatch(r"/macro-runs/([^/]+)/archive", path)
+            if match:
+                self.send_macro_run_archive(match.group(1), head_only=True)
+                return
+            if path in ("/health", "/apps", "/builds", "/latest", "/backup/profile", "/macros", "/macro-runs", "/files"):
                 self.do_GET()
                 return
             self.send_error(404, "Not found")
@@ -2847,6 +3441,28 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
                     self.send_json(list_macros(repo_root))
                 except Exception as exc:
                     self.send_error(500, f"Macros read failed: {exc}")
+                return
+
+            if path == "/macro-runs":
+                try:
+                    self.send_json(list_macro_runs(repo_root))
+                except Exception as exc:
+                    self.send_error(500, f"Macro runs read failed: {exc}")
+                return
+
+            match = re.fullmatch(r"/macro-runs/([^/]+)/archive", path)
+            if match:
+                self.send_macro_run_archive(match.group(1))
+                return
+
+            match = re.fullmatch(r"/macro-runs/([^/]+)", path)
+            if match:
+                try:
+                    self.send_json(get_macro_run(repo_root, match.group(1)))
+                except FileNotFoundError as exc:
+                    self.send_error(404, str(exc))
+                except Exception as exc:
+                    self.send_error(400, f"Macro run read failed: {exc}")
                 return
 
             if path == "/builds":

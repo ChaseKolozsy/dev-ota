@@ -15,6 +15,7 @@ import 'package:xterm/xterm.dart';
 
 import 'backup_service.dart';
 import 'background_session_service.dart';
+import 'macro_reorder.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
 import 'terminal_pad_key.dart';
@@ -348,6 +349,7 @@ class SshTerminalTab extends StatefulWidget {
     this.onFullscreenChanged,
     this.onCommandUsed,
     this.onMacroUsed,
+    this.onMacroReorder,
   });
 
   final Dio dio;
@@ -359,6 +361,10 @@ class SshTerminalTab extends StatefulWidget {
   final ValueChanged<bool>? onFullscreenChanged;
   final ValueChanged<String>? onCommandUsed;
   final ValueChanged<TerminalMacro>? onMacroUsed;
+
+  /// Called when a macro button is held and dragged to a new slot in the macro
+  /// bar, with its old and new index in [quickMacros].
+  final void Function(int fromIndex, int toIndex)? onMacroReorder;
 
   @override
   State<SshTerminalTab> createState() => _SshTerminalTabState();
@@ -1300,7 +1306,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (mounted) {
       setState(() {
         _connected = false;
-        _status = _wantConnected ? 'SSH session dropped.' : 'SSH session closed.';
+        _status = _wantConnected
+            ? 'SSH session dropped.'
+            : 'SSH session closed.';
       });
     } else {
       _connected = false;
@@ -1323,7 +1331,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (_reconnectAttempts >= 8) {
       _wantConnected = false;
       if (mounted) {
-        setState(() => _status = '$reason. Auto-reconnect gave up; tap Connect.');
+        setState(
+          () => _status = '$reason. Auto-reconnect gave up; tap Connect.',
+        );
       }
       unawaited(_syncBackgroundSession());
       return;
@@ -1619,6 +1629,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             break;
           case TerminalMacroStepType.wait:
             break;
+          case TerminalMacroStepType.device:
+            throw StateError(
+              'Device actions run from the Macros tab, not the SSH terminal.',
+            );
         }
         if (step.delaySeconds > 0) {
           if (!await _macroDelay(step.delaySeconds)) break;
@@ -2274,10 +2288,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                             ),
                             TextButton(
                               onPressed: () async {
-                                await BackgroundSessionService
-                                    .requestBatteryOptimizationExemption();
-                                final exempt = await BackgroundSessionService
-                                    .isBatteryOptimizationExempt();
+                                await BackgroundSessionService.requestBatteryOptimizationExemption();
+                                final exempt =
+                                    await BackgroundSessionService.isBatteryOptimizationExempt();
                                 if (!mounted) return;
                                 setState(
                                   () => _batteryOptimizationExempt = exempt,
@@ -3390,50 +3403,60 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _buildMacroContent(ThemeData theme) {
-    return ListView(
+    final macros = widget.quickMacros;
+    final onReorder = widget.onMacroReorder;
+    if (onReorder == null) {
+      return ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        children: [for (final macro in macros) _terminalMacroButton(macro)],
+      );
+    }
+    // Hold a macro to pick it up: a slow drag slides it one slot at a time, a
+    // fast flick sends it to the start or the end of the bar.
+    return MacroReorderableList(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      children: [
-        for (final macro in widget.quickMacros) _terminalMacroButton(macro),
-      ],
+      itemCount: macros.length,
+      itemKey: (index) => ValueKey(macros[index].id),
+      onReposition: onReorder,
+      itemBuilder: (context, index) =>
+          _terminalMacroButton(macros[index], reorderable: true),
     );
   }
 
-  Widget _terminalMacroButton(TerminalMacro macro) {
+  Widget _terminalMacroButton(TerminalMacro macro, {bool reorderable = false}) {
     final enabled = _connected && !_macroRunning && _macroBarEnabled;
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: Tooltip(
-        message: macro.name,
-        child: SizedBox(
-          height: 32,
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            icon: _macroRunning
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.play_arrow, size: 16),
-            onPressed: enabled
-                ? () => unawaited(_runMacro(macro).catchError((Object _) {}))
-                : null,
-            label: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 160),
-              child: Text(
-                macro.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
+    final button = SizedBox(
+      height: 32,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: _macroRunning
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.play_arrow, size: 16),
+        onPressed: enabled
+            ? () => unawaited(_runMacro(macro).catchError((Object _) {}))
+            : null,
+        label: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 160),
+          child: Text(macro.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
       ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      // The tooltip's own long press would beat the hold-to-reposition drag to
+      // the gesture arena, so a reorderable bar leans on the button label —
+      // which already carries the macro name — instead.
+      child: reorderable ? button : Tooltip(message: macro.name, child: button),
     );
   }
 

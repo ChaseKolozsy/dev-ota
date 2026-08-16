@@ -1,0 +1,193 @@
+{
+  "id": "macro-cradlespeak-revvl7-en-then-hu-sharded",
+  "name": "CS E2E 14 — REVVL7 clean English then Hungarian sharded install",
+  "priority": 18000,
+  "steps": [
+    {
+      "id": "order-r7-01",
+      "type": "device",
+      "value": "{\"action\":\"assertDeviceProfile\",\"args\":{\"profile\":\"revvl7pro-android36-1080x2436\",\"models\":[\"TMRV07P5G\",\"sdk_gphone64_x86_64\"],\"androidSdk\":36,\"shortSidePx\":1080,\"longSidePx\":2436,\"densityDpi\":480},\"capture\":true,\"label\":\"Require REVVL7 Pro or profile-matched Android 36 emulator\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-02",
+      "type": "device",
+      "value": "{\"action\":\"launchApp\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"First functional launch of clean Cradlespeak\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\"}}",
+      "delaySeconds": 3.0
+    },
+    {
+      "id": "order-r7-03",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/capabilities\",\"expectedStatus\":200,\"jsonPathEquals\":{\"embedded\":true,\"ready\":false,\"reason\":\"language_packs_missing\"},\"jsonPaths\":[\"server_version\",\"default_lang\",\"features\"],\"timeoutSeconds\":15,\"retryUntilSeconds\":180,\"retryIntervalSeconds\":2,\"captureIntervalSeconds\":30},\"capture\":true,\"label\":\"Fail closed unless embedded store is a fresh no-pack baseline\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-04",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/keys/migrations/pending\",\"expectedStatus\":200,\"bodyIncludes\":[\"\\\"pending\\\":[]\"],\"timeoutSeconds\":15,\"retryUntilSeconds\":60,\"retryIntervalSeconds\":2},\"capture\":true,\"label\":\"Require no pending entitlement migration\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-05-en",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/packs/presence?sku=en-v2\",\"expectedStatus\":404,\"timeoutSeconds\":15},\"capture\":true,\"label\":\"Require no existing English pack inventory\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-06-hu",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/packs/presence?sku=hu-v2\",\"expectedStatus\":404,\"timeoutSeconds\":15},\"capture\":true,\"label\":\"Require no existing Hungarian pack inventory\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-07",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"English\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Choose English interface\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\"}}",
+      "delaySeconds": 3.0
+    },
+    {
+      "id": "order-r7-08",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"className\":\"android.widget.Button\",\"centerRegion\":{\"left\":0.8,\"top\":0.0,\"right\":1.0,\"bottom\":0.15}},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Skip optional LAN content source using normalized top-right close control\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\"}}",
+      "delaySeconds": 8.0
+    },
+    {
+      "id": "order-r7-09",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"className\":\"android.widget.Button\",\"centerRegion\":{\"left\":0.88,\"top\":0.0,\"right\":1.0,\"bottom\":0.15}},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Open Settings using normalized top-right gear control\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Settings\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-10",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.82,\"x2Normalized\":0.5,\"y2Normalized\":0.27,\"durationMs\":500,\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Reveal Marketplace on REVVL7\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Marketplace\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-11",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"Marketplace\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Open Marketplace\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Marketplace\",\"HU\"]}}",
+      "delaySeconds": 8.0
+    },
+    {
+      "id": "order-r7-12-en",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"EN\",\"classNameExact\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Filter English\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"English\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-13-en",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.82,\"x2Normalized\":0.5,\"y2Normalized\":0.46,\"durationMs\":400,\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Reveal English Download action on REVVL7\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Download\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-14-en",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"Download\",\"className\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":false,\"label\":\"Start exactly one English download\"}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "order-r7-15-en",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/market-client/install-status?sku=en-v2\",\"expectedStatus\":200,\"jsonPathEquals\":{\"phase\":\"done\"},\"jsonPaths\":[\"phase\",\"bytes_done\",\"bytes_total\",\"updated_at\"],\"timeoutSeconds\":30,\"retryUntilSeconds\":3600,\"retryIntervalSeconds\":5,\"captureIntervalSeconds\":60},\"capture\":true,\"label\":\"Observe English install through and beyond any 10-minute UI timeout\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-16-en",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"Close\",\"className\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Capture and close timeout dialog if still visible\",\"allowError\":true}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "order-r7-17-top",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.3,\"x2Normalized\":0.5,\"y2Normalized\":0.88,\"durationMs\":600,\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Return to Marketplace language filters after English install\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\"}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-18-top",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.3,\"x2Normalized\":0.5,\"y2Normalized\":0.88,\"durationMs\":600,\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Reveal Marketplace language filters\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"HU\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-19-hu",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"HU\",\"classNameExact\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Filter Hungarian\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Hungarian\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-20-hu",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.82,\"x2Normalized\":0.5,\"y2Normalized\":0.46,\"durationMs\":400,\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Reveal Hungarian Download action on REVVL7\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Download\"]}}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "order-r7-21-hu",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"Download\",\"className\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Start exactly one Hungarian download\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\"}}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "order-r7-22-hu",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/market-client/install-status?sku=hu-v2\",\"expectedStatus\":200,\"jsonPathEquals\":{\"phase\":\"done\"},\"jsonPaths\":[\"phase\",\"bytes_done\",\"bytes_total\",\"updated_at\"],\"timeoutSeconds\":30,\"retryUntilSeconds\":3600,\"retryIntervalSeconds\":5,\"captureIntervalSeconds\":60},\"capture\":true,\"label\":\"Observe Hungarian install through and beyond any 10-minute UI timeout\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "order-r7-23-hu",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescription\":\"Close\",\"className\":\"android.widget.Button\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Capture and close timeout dialog if still visible\",\"allowError\":true}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "order-r7-24-en-final",
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"args\":{\"url\":\"http://127.0.0.1:8002/market-client/install-status?sku=en-v2\",\"expectedStatus\":200,\"jsonPathEquals\":{\"phase\":\"done\"},\"jsonPaths\":[\"phase\",\"bytes_done\",\"bytes_total\",\"updated_at\"],\"timeoutSeconds\":30,\"retryUntilSeconds\":3600,\"retryIntervalSeconds\":5,\"captureIntervalSeconds\":60},\"capture\":true,\"label\":\"Observe English install remains durably installed after Hungarian merge\"}",
+      "delaySeconds": 0.0
+    }
+  ],
+  "failureDiagnostics": {
+    "durationSeconds": 300,
+    "intervalSeconds": 30,
+    "captureScreenshot": true,
+    "captureUi": true,
+    "probes": [
+      {
+        "url": "http://127.0.0.1:8002/market-client/install-status?sku=en-v2",
+        "expectedStatus": 200,
+        "timeoutSeconds": 10,
+        "jsonPaths": [
+          "phase",
+          "bytes_done",
+          "bytes_total",
+          "updated_at",
+          "error"
+        ]
+      },
+      {
+        "url": "http://127.0.0.1:8002/market-client/install-status?sku=hu-v2",
+        "expectedStatus": 200,
+        "timeoutSeconds": 10,
+        "jsonPaths": [
+          "phase",
+          "bytes_done",
+          "bytes_total",
+          "updated_at",
+          "error"
+        ]
+      },
+      {
+        "url": "http://127.0.0.1:8002/capabilities",
+        "expectedStatus": 200,
+        "timeoutSeconds": 10,
+        "jsonPaths": [
+          "ready",
+          "reason",
+          "server_version"
+        ]
+      }
+    ]
+  }
+}

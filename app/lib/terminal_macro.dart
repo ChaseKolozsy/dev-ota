@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-enum TerminalMacroStepType { shell, terminalKey, tmux, wait }
+enum TerminalMacroStepType { shell, terminalKey, tmux, wait, device }
 
 class MacroStepOption {
   const MacroStepOption(this.value, this.label);
@@ -65,6 +65,7 @@ String terminalMacroStepTypeLabel(TerminalMacroStepType type) {
     TerminalMacroStepType.terminalKey => 'Key',
     TerminalMacroStepType.tmux => 'tmux',
     TerminalMacroStepType.wait => 'Wait',
+    TerminalMacroStepType.device => 'Device action',
   };
 }
 
@@ -87,6 +88,8 @@ String defaultTerminalMacroStepValue(TerminalMacroStepType type) {
     TerminalMacroStepType.terminalKey => 'enter',
     TerminalMacroStepType.tmux => 'c',
     TerminalMacroStepType.wait => '',
+    TerminalMacroStepType.device =>
+      '{"action":"openSettings","args":{},"capture":true}',
   };
 }
 
@@ -170,24 +173,31 @@ class TerminalMacro {
     required this.name,
     required this.steps,
     this.priority = 0,
+    this.failureDiagnostics,
   });
 
   final String id;
   final String name;
   final List<TerminalMacroStep> steps;
   final int priority;
+  final Map<String, dynamic>? failureDiagnostics;
+
+  bool get isDeviceMacro =>
+      steps.any((step) => step.type == TerminalMacroStepType.device);
 
   TerminalMacro copyWith({
     String? id,
     String? name,
     List<TerminalMacroStep>? steps,
     int? priority,
+    Map<String, dynamic>? failureDiagnostics,
   }) {
     return TerminalMacro(
       id: id ?? this.id,
       name: name ?? this.name,
       steps: steps ?? this.steps,
       priority: priority ?? this.priority,
+      failureDiagnostics: failureDiagnostics ?? this.failureDiagnostics,
     );
   }
 
@@ -197,6 +207,7 @@ class TerminalMacro {
       'name': name,
       'priority': priority,
       'steps': steps.map((step) => step.toJson()).toList(),
+      if (failureDiagnostics != null) 'failureDiagnostics': failureDiagnostics,
     };
   }
 
@@ -218,6 +229,9 @@ class TerminalMacro {
           ? (json['priority'] as num).toInt()
           : int.tryParse(json['priority']?.toString() ?? '') ?? 0,
       steps: steps,
+      failureDiagnostics: json['failureDiagnostics'] is Map
+          ? Map<String, dynamic>.from(json['failureDiagnostics'] as Map)
+          : null,
     );
   }
 }
@@ -232,6 +246,30 @@ List<TerminalMacro> rankTerminalMacros(List<TerminalMacro> macros) {
     return a.key.compareTo(b.key);
   });
   return indexed.map((entry) => entry.value).toList();
+}
+
+/// Applies a drag-reposition: [macroId] moves to [targetRankedIndex] of the
+/// ranked order, and every macro is handed an explicit descending priority.
+///
+/// Priorities are rewritten rather than swapped so the arrangement the user
+/// dragged into place survives the priority sort, a server round trip, and any
+/// later usage-count update. Returns the original list when nothing moves.
+List<TerminalMacro> repositionTerminalMacro(
+  List<TerminalMacro> macros,
+  String macroId,
+  int targetRankedIndex,
+) {
+  final ranked = rankTerminalMacros(macros);
+  if (ranked.isEmpty) return macros;
+  final from = ranked.indexWhere((macro) => macro.id == macroId);
+  if (from < 0) return macros;
+  final to = targetRankedIndex.clamp(0, ranked.length - 1);
+  if (from == to) return macros;
+  ranked.insert(to, ranked.removeAt(from));
+  return [
+    for (var i = 0; i < ranked.length; i++)
+      ranked[i].copyWith(priority: ranked.length - i),
+  ];
 }
 
 String newTerminalMacroId(String prefix) {

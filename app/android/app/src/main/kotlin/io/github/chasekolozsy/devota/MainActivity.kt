@@ -19,6 +19,8 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.net.Inet4Address
 import java.util.zip.ZipEntry
@@ -49,6 +51,38 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getAgentStatus" -> result.success(ControlAgentService.statusMap(this))
+                "runDeviceAction" -> {
+                    val action = call.argument<String>("action")?.trim().orEmpty()
+                    val rawArgs = call.argument<Map<String, Any?>>("args") ?: emptyMap()
+                    if (action.isEmpty()) {
+                        result.error("bad_args", "action is required", null)
+                        return@setMethodCallHandler
+                    }
+                    val allowWholeDevice = ControlAgentService.statusMap(this)["wholeDeviceAllowed"] == true
+                    Thread {
+                        try {
+                            val value = if (action == "hostCommand") {
+                                ControlAgentService.executeHostMacroCommand(JSONObject(rawArgs))
+                            } else {
+                                ControlAgentService.executeLocalCommand(
+                                    this,
+                                    action,
+                                    JSONObject(rawArgs),
+                                    allowWholeDevice,
+                                )
+                            }
+                            runOnUiThread { result.success(jsonObjectToMap(value)) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "device_action_failed",
+                                    error.message ?: error.javaClass.simpleName,
+                                    null,
+                                )
+                            }
+                        }
+                    }.start()
+                }
                 "startSshSession" -> {
                     val label = call.argument<String>("label")?.trim().orEmpty()
                     SshSessionService.start(this, label)
@@ -124,6 +158,23 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun jsonValue(value: Any?): Any? = when (value) {
+        JSONObject.NULL -> null
+        is JSONObject -> jsonObjectToMap(value)
+        is JSONArray -> (0 until value.length()).map { jsonValue(value.opt(it)) }
+        else -> value
+    }
+
+    private fun jsonObjectToMap(value: JSONObject): Map<String, Any?> {
+        val out = linkedMapOf<String, Any?>()
+        val keys = value.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            out[key] = jsonValue(value.opt(key))
+        }
+        return out
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {

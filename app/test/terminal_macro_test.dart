@@ -68,6 +68,26 @@ void main() {
     expect(macro.priority, 0);
   });
 
+  test('device macro steps round trip and identify device macros', () {
+    const macro = TerminalMacro(
+      id: 'device-1',
+      name: 'Visible device proof',
+      priority: 100,
+      steps: [
+        TerminalMacroStep(
+          id: 'device-step-1',
+          type: TerminalMacroStepType.device,
+          value: '{"action":"openSettings"}',
+          delaySeconds: 0.25,
+        ),
+      ],
+    );
+    final restored = TerminalMacro.fromJson(macro.toJson());
+    expect(restored.isDeviceMacro, isTrue);
+    expect(restored.steps.single.type, TerminalMacroStepType.device);
+    expect(restored.steps.single.value, '{"action":"openSettings"}');
+  });
+
   test('terminal macro steps fall back to safe defaults', () {
     final step = TerminalMacroStep.fromJson({
       'id': 'step-1',
@@ -198,5 +218,66 @@ void main() {
 
     controller.detach();
     expect(controller.isAttached, isFalse);
+  });
+
+  group('repositionTerminalMacro', () {
+    TerminalMacro macro(String id, int priority) =>
+        TerminalMacro(id: id, name: id, priority: priority, steps: const []);
+
+    test('dragging a macro to the top outranks everything else', () {
+      final moved = repositionTerminalMacro(
+        [macro('a', 0), macro('b', 0), macro('c', 5)],
+        'b',
+        0,
+      );
+
+      expect(rankTerminalMacros(moved).map((macro) => macro.id), [
+        'b',
+        'c',
+        'a',
+      ]);
+    });
+
+    test('a macro dropped lower keeps the order of the macros it passed', () {
+      final ranked = rankTerminalMacros([
+        macro('a', 0),
+        macro('b', 0),
+        macro('c', 0),
+        macro('d', 0),
+      ]);
+      final moved = repositionTerminalMacro(ranked, 'a', 2);
+
+      expect(rankTerminalMacros(moved).map((macro) => macro.id), [
+        'b',
+        'c',
+        'a',
+        'd',
+      ]);
+    });
+
+    test('the new order survives a save and reload', () {
+      final moved = repositionTerminalMacro(
+        [macro('a', 0), macro('b', 0), macro('c', 0)],
+        'c',
+        0,
+      );
+      final restored = moved
+          .map((macro) => TerminalMacro.fromJson(macro.toJson()))
+          .toList();
+
+      expect(rankTerminalMacros(restored).map((macro) => macro.id), [
+        'c',
+        'a',
+        'b',
+      ]);
+    });
+
+    test('an unknown macro or an unchanged slot leaves the list alone', () {
+      final macros = [macro('a', 0), macro('b', 0)];
+
+      expect(repositionTerminalMacro(macros, 'missing', 0), same(macros));
+      expect(repositionTerminalMacro(macros, 'a', 0), same(macros));
+      expect(repositionTerminalMacro(const [], 'a', 0), isEmpty);
+    });
   });
 }
