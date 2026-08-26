@@ -8,6 +8,10 @@ private network without changing the DevOTA app model.
 This setup kit reduces the amount of manual desktop work needed before the
 phone can SSH into the development machine and discover a DevOTA build server.
 
+For a local Android emulator, use the dedicated
+[emulator terminal bridge](emulator-terminal.md). It avoids configuring a host
+SSH daemon and keeps the test endpoint on loopback.
+
 ## What Gets Installed
 
 - Windows: OpenSSH Client, OpenSSH Server, firewall rule for SSH, and optional
