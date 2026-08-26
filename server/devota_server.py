@@ -2289,10 +2289,52 @@ def sync_macros(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     macros_raw = payload.get("macros")
     if not isinstance(macros_raw, list):
         raise ValueError("macros must be a list")
-    macros = [normalize_macro(item) for item in macros_raw]
-    usage_counts = normalize_macro_usage_counts(payload.get("usageCounts"), {macro["id"] for macro in macros})
-    store = write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
-    return public_macros_store(store)
+    incoming = [normalize_macro(item) for item in macros_raw]
+    current = read_macros_store(repo_root)
+
+    # The build server is authoritative for definitions it already knows.
+    # A phone can be offline with an old local snapshot; running one of those
+    # macros increments its use count and triggers a background sync. Replacing
+    # the whole server list here would silently roll back any macro edited via
+    # PATCH while that phone was offline. Preserve existing definitions, accept
+    # genuinely new IDs, and merge monotonically increasing usage counts.
+    macros = list(current["macros"])
+    known_ids = {macro["id"] for macro in macros}
+    for macro in incoming:
+        if macro["id"] not in known_ids:
+            macros.append(macro)
+            known_ids.add(macro["id"])
+
+    current_counts = normalize_macro_usage_counts(current.get("usageCounts"), known_ids)
+    incoming_counts = normalize_macro_usage_counts(payload.get("usageCounts"), known_ids)
+    usage_counts = {
+        macro_id: max(current_counts.get(macro_id, 0), incoming_counts.get(macro_id, 0))
+        for macro_id in known_ids
+        if current_counts.get(macro_id, 0) > 0 or incoming_counts.get(macro_id, 0) > 0
+    }
+
+    definitions_changed = len(macros) != len(current["macros"])
+    counts_changed = usage_counts != current_counts
+    if not definitions_changed and not counts_changed:
+        store = current
+    elif definitions_changed:
+        store = write_macros_store(repo_root, macro_store_payload(macros, usage_counts))
+    else:
+        # Usage is metadata, not a definition revision. Keep updatedAt stable so
+        # clients can use it to identify the current canonical macro snapshot.
+        store = write_macros_store(
+            repo_root,
+            {
+                "format": MACRO_STORE_FORMAT,
+                "version": current.get("version", MACRO_STORE_VERSION),
+                "updatedAt": current.get("updatedAt", ""),
+                "macros": macros,
+                "usageCounts": usage_counts,
+            },
+        )
+    result = public_macros_store(store)
+    result["syncMode"] = "server_authoritative"
+    return result
 
 
 def update_macro(repo_root: Path, macro_id: str, payload: dict[str, Any]) -> dict[str, Any]:
