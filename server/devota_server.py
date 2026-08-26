@@ -2610,28 +2610,42 @@ def sync_macros(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     incoming = [normalize_macro(item) for item in macros_raw]
     current = read_macros_store(repo_root)
 
-    # The build server is authoritative for definitions it already knows.
-    # A phone can be offline with an old local snapshot; running one of those
-    # macros increments its use count and triggers a background sync. Replacing
-    # the whole server list here would silently roll back any macro edited via
-    # PATCH while that phone was offline. Preserve existing definitions, accept
-    # genuinely new IDs, and merge monotonically increasing usage counts.
-    macros = list(current["macros"])
-    known_ids = {macro["id"] for macro in macros}
-    for macro in incoming:
-        if macro["id"] not in known_ids:
-            macros.append(macro)
-            known_ids.add(macro["id"])
+    # Current DevOTA clients use this same endpoint for two different events:
+    # an intentional edit/save and the background save after running a macro.
+    # The latter increments a use count. If an offline phone runs a stale copy,
+    # accept the newer count but preserve existing server definitions so it
+    # cannot roll back a PATCH. With no existing count advancement, this is an
+    # intentional edit snapshot: accept renames, step edits, reorders, copies,
+    # and deletions exactly as the phone sent them.
+    current_ids = {macro["id"] for macro in current["macros"]}
+    all_ids = current_ids | {macro["id"] for macro in incoming}
+    current_counts = normalize_macro_usage_counts(current.get("usageCounts"), all_ids)
+    incoming_counts = normalize_macro_usage_counts(payload.get("usageCounts"), all_ids)
+    usage_advanced_existing = any(
+        incoming_counts.get(macro_id, 0) > current_counts.get(macro_id, 0)
+        for macro_id in current_ids
+    )
 
-    current_counts = normalize_macro_usage_counts(current.get("usageCounts"), known_ids)
-    incoming_counts = normalize_macro_usage_counts(payload.get("usageCounts"), known_ids)
+    if usage_advanced_existing:
+        macros = list(current["macros"])
+        known_ids = set(current_ids)
+        for macro in incoming:
+            if macro["id"] not in known_ids:
+                macros.append(macro)
+                known_ids.add(macro["id"])
+        sync_mode = "server_authoritative_run"
+    else:
+        macros = incoming
+        known_ids = {macro["id"] for macro in macros}
+        sync_mode = "client_edit"
+
     usage_counts = {
         macro_id: max(current_counts.get(macro_id, 0), incoming_counts.get(macro_id, 0))
         for macro_id in known_ids
         if current_counts.get(macro_id, 0) > 0 or incoming_counts.get(macro_id, 0) > 0
     }
 
-    definitions_changed = len(macros) != len(current["macros"])
+    definitions_changed = macros != current["macros"]
     counts_changed = usage_counts != current_counts
     if not definitions_changed and not counts_changed:
         store = current
@@ -2651,7 +2665,7 @@ def sync_macros(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             },
         )
     result = public_macros_store(store)
-    result["syncMode"] = "server_authoritative"
+    result["syncMode"] = sync_mode
     return result
 
 

@@ -142,7 +142,7 @@ class MacroStoreTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(synced["syncMode"], "server_authoritative")
+            self.assertEqual(synced["syncMode"], "server_authoritative_run")
             self.assertEqual(synced["macros"], created["macros"])
             self.assertEqual(synced["macros"][0]["name"], "Canonical prompt")
             self.assertEqual(synced["macros"][0]["steps"][0]["value"], "new prompt")
@@ -167,8 +167,8 @@ class MacroStoreTests(unittest.TestCase):
                     "macros": [
                         {
                             "id": "macro-managed",
-                            "name": "Stale",
-                            "steps": [{"type": "shell", "value": "stale"}],
+                            "name": "Canonical",
+                            "steps": [{"type": "shell", "value": "canonical"}],
                         },
                         {
                             "id": "macro-from-phone",
@@ -188,6 +188,56 @@ class MacroStoreTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(synced["usageCounts"], {"macro-from-phone": 2})
+
+    def test_phone_edit_can_rename_existing_macro_when_usage_did_not_advance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            devota_server.create_macro(
+                repo,
+                {
+                    "id": "macro-copy",
+                    "name": "Hungarian Creative full pool copy",
+                    "steps": [{"type": "shell", "value": "original prompt"}],
+                },
+            )
+
+            synced = devota_server.sync_macros(
+                repo,
+                {
+                    "macros": [
+                        {
+                            "id": "macro-copy",
+                            "name": "My renamed macro",
+                            "steps": [{"type": "shell", "value": "edited prompt"}],
+                        }
+                    ],
+                    "usageCounts": {},
+                },
+            )
+
+            self.assertEqual(synced["syncMode"], "client_edit")
+            self.assertEqual(synced["macros"][0]["name"], "My renamed macro")
+            self.assertEqual(synced["macros"][0]["steps"][0]["value"], "edited prompt")
+
+    def test_phone_edit_can_delete_macro_when_usage_did_not_advance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            devota_server.create_macro(
+                repo,
+                {
+                    "id": "macro-delete-me",
+                    "name": "Delete me",
+                    "steps": [{"type": "shell", "value": "unused"}],
+                },
+            )
+
+            synced = devota_server.sync_macros(
+                repo,
+                {"macros": [], "usageCounts": {}},
+            )
+
+            self.assertEqual(synced["syncMode"], "client_edit")
+            self.assertEqual(synced["macros"], [])
 
     def test_rejects_unknown_macro_step_type(self):
         with tempfile.TemporaryDirectory() as tmp:
