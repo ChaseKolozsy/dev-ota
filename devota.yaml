@@ -3,6 +3,7 @@ roots:
   cradlespeak: /home/chase/Cradlespeak
   devota: /home/chase/dev-ota
   perfect-drivers-club: /home/chase/perfect-drivers-club
+  whisper-notes: /home/chase/whisper-notes
 apps:
   - id: cradlespeak
     root: cradlespeak
@@ -30,3 +31,10 @@ apps:
     notes: Driving companion relationship feedback app.
     buildDirs:
       - app/build/outputs/apk/debug
+  - id: whisper-notes
+    root: whisper-notes
+    label: Whisper Notes
+    packageName: io.github.chasekolozsy.whispernotes
+    notes: Encrypted voice notes transcribed by a private home Whisper server.
+    buildDirs:
+      - dist/public
