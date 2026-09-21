@@ -12,6 +12,11 @@ apps:
     notes: Cradlespeak Android app.
     buildDirs:
       - app/build/app/outputs/flutter-apk
+    build:
+      workingDir: .
+      commands:
+        debug: scripts/build_android_apk.sh debug
+        release: scripts/build_android_apk.sh release
   - id: devota
     root: devota
     label: DevOTA
