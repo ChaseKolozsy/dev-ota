@@ -170,6 +170,28 @@ The fixture entry point and package ID are not used by that build.
 
 ## Recorded verification — 2026-09-21
 
+### SSH shortcut panel and delivery reconciliation follow-up
+
+- Flutter: **109 tests passed**, analysis: **no issues**. Python build-version
+  tests: **5 passed**; conclusion-review validation tests: **3 passed**.
+- Android 36 emulator, real Windows CMD → WSL, three isolated Vim panes:
+  all three numbered SSH-notification shortcuts ran with DevOTA backgrounded.
+  Deliberately dropping the third macro's last Enter left its file unsaved;
+  that pane's Send Enter recovered it. Exact file contents contained one
+  greeting each; **6 Enters delivered, 1 deliberately dropped**. Disconnect
+  removed action buttons. Evidence: `/tmp/devota-notification-panel-retry-evidence`.
+- The first attempt exposed stale posted notifications: an older card existed
+  but its later updates were absent. Snapshot reconciliation was added and the
+  complete test passed on a fresh fixture. UI automation also needed to find
+  Android's child-title replacement for the group summary and wait for WSL
+  discovery before opening shortcuts.
+- Burst fixture: Android acknowledged **3/3 cards** after 50 publish calls.
+  Production ARM64 **2026094106** built and staged; checksum verified and
+  listed by `/builds`. Physical-phone/OEM behavior remains for user acceptance;
+  the original phone failure's exact cause has not been independently proven.
+
+### Initial controls verification
+
 - Flutter suite: **86 passed**, analysis: **no issues**.
 - Android 36 emulator: three pane-specific notification macros operated while
   the launcher remained the resumed Activity. Each Vim file contained exactly
