@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader", "setup", "wsl-setup"])
+PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "panel", "reader", "setup", "wsl-setup"])
 PARSER.add_argument("label", nargs="?")
 PARSER.add_argument("--serial", default="emulator-5554")
 PARSER.add_argument("--output", default="/tmp/devota-terminal-notification-evidence")
@@ -119,6 +119,10 @@ def reveal(text):
 
 
 def show_action(index, text):
+    try:
+        expand('DevOTA terminal', only_collapse=True)
+    except (StopIteration, AssertionError):
+        pass
     for other in (1, 2, 3):
         if other == index:
             continue
@@ -135,9 +139,31 @@ def show_action(index, text):
         if any(title in label(n) for n in root.iter("node")):
             expand(title)
         else:
-            expand("DevOTA terminal")
+            # Android may replace the summary title with its first two children.
+            group_title = next((label(n) for n in root.iter('node')
+                                if 'notification-test:' in label(n)), None)
+            expand(group_title or 'DevOTA window controls')
         time.sleep(0.5)
     raise AssertionError(f"Action {text} not visible")
+
+
+def run_window(index):
+    if ARGS.mode != 'panel':
+        tap(f'Hello {index}', show_action(index, f'Hello {index}'))
+        return
+    until = time.monotonic() + 30
+    while time.monotonic() < until:
+        root = tree()
+        button = f'{index}: Hello {index}'
+        if any(label(n).lower() == button.lower() for n in root.iter('node')):
+            tap(button, root)
+            return
+        try:
+            expand('DevOTA terminal')
+        except (StopIteration, AssertionError):
+            pass  # Initial SSH/WSL discovery may still be completing.
+        time.sleep(1)
+    raise AssertionError(f'SSH summary macro {index} missing')
 
 
 if ARGS.mode == "inspect":
@@ -235,14 +261,14 @@ else:
         if index < ARGS.start_window:
             assert oracle()["files"][str(index)] == f"fixture\nhello {index}\n"
             continue
-        tap(f"Hello {index}", show_action(index, f"Hello {index}"))
+        run_window(index)
         wait_file(index, f"fixture\nhello {index}\n")
         capture(f"window-{index}-submitted")
         resumed = [line for line in adb("shell", "dumpsys", "activity", "activities").splitlines() if "ResumedActivity" in line]
         assert resumed and all("terminaltest" not in line for line in resumed), resumed
     request = urllib.request.Request("http://127.0.0.1:22223/drop-second-enter", method="POST")
     urllib.request.urlopen(request, timeout=5).close()
-    tap("Hello 3", show_action(3, "Hello 3"))
+    run_window(3)
     until = time.monotonic() + 20
     while time.monotonic() < until and oracle()["counts"]["enterDropped"] != 1:
         time.sleep(0.5)
@@ -272,9 +298,10 @@ else:
     urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:22223/disconnect", method="POST"), timeout=5).close()
     time.sleep(3)
     root = capture("disconnected")
-    assert not any(label(n).lower() in ("hello 1", "hello 2", "hello 3", "send enter") for n in root.iter("node"))
+    assert not any(label(n).lower() in ("hello 1", "hello 2", "hello 3", "1: hello 1", "2: hello 2", "3: hello 3", "send enter") for n in root.iter("node"))
     (OUT / "result.json").write_text(json.dumps({"passed": True, "checks": [
         "Three independent Vim panes", "Notification actions while app backgrounded",
+        "Foreground SSH shortcuts" if ARGS.mode == 'panel' else "Per-window shortcuts",
         "Two normal submissions", "Dropped Enter leaves submission unconfirmed",
         "Pane-specific Enter recovery", "No duplicate submissions", "Disconnected actions removed"],
         "oracle": result}, indent=2))

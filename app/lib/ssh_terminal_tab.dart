@@ -679,6 +679,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             watch: _watch,
             loadPanes: transport.panes,
             hostRouter: router,
+            deliveryStatus: _notificationBridge.deliveryStatus,
             macros: widget.notificationMacros
                 .where((m) => !m.isDeviceMacro)
                 .toList(),
@@ -709,6 +710,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                   'route': _watchRoute.toJson(),
                 }),
               );
+              await _notificationBridge.verifyDelivery();
             },
           ),
         ),

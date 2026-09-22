@@ -54,8 +54,25 @@ CMD and PowerShell routing, Unicode/metacharacters, stdin, and home directory.
 These host-specific smoke checks require this Windows/WSL development machine;
 portable routing/widget tests run in ordinary CI. No coding agents are invoked.
 
-Each pane has a grouped notification with its macro action. Expand a pane to
-see the buttons. The SSH session and Flutter engine must remain alive;
+The existing **DevOTA terminal** notification now shows window statuses and
+up to three numbered macro shortcuts when expanded. The separate **DevOTA
+window controls** group contains each pane's full controls, including Send
+Enter and Listen. Expand the group and then a pane to see those buttons.
+The window group has its own same-channel summary instead of using the SSH
+foreground-service notification as its summary. This provides two control
+surfaces without relying on cross-channel foreground-service grouping.
+
+Saving verifies Android's active notification count. The setup screen reports
+for example **Android reports 3/3 window cards posted**; blocked notifications,
+posting errors, or missing cards leave a visible error instead of silently
+closing setup. This acknowledgment verifies posting, not the OEM shade's
+visual layout. Bursty controller updates are coalesced, unchanged cards are
+not reposted, and disposed controllers cannot schedule further publications.
+Each post includes a content snapshot. Polling compares that snapshot against
+Android's active notification, retrying updates that Android dropped even when
+an older notification with the same ID still exists.
+
+The SSH session and Flutter engine must remain alive;
 backgrounding the app works, but force-stopping it or removing its task stops
 the session. Reopen and reconnect after that. Nothing is replayed on reconnect.
 Mappings are local to the SSH user/host/port; they do not alter shared macros.
@@ -134,6 +151,11 @@ never launches an agent or reads production SSH credentials/macros.
 5. Launch `io.github.chasekolozsy.devota.terminaltest/io.github.chasekolozsy.devota.MainActivity`,
    collapse the notification shade if necessary, and press **Start Vim test**.
 6. Run `python3 scripts/test/terminal-notification-ui.py verify --serial emulator-5554`.
+
+Use mode `panel` instead of `verify` on a fresh fixture to exercise the three
+numbered shortcuts in the existing SSH notification. Enter recovery still
+uses the affected pane's full notification. **Burst refresh** in the fixture
+publishes 50 updates to check coalescing and delivery acknowledgment.
 
 The driver taps actual notification UI nodes, checks the foreground Activity
 stays outside DevOTA, verifies exact file contents, deliberately drops the

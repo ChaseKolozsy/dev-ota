@@ -32,6 +32,19 @@ class SshSessionService : Service() {
         private const val EXTRA_LABEL = "label"
 
         @Volatile private var running = false
+        private var instance: SshSessionService? = null
+
+        fun refreshControls() {
+            instance?.let { service ->
+                if (running) {
+                    val manager = service.getSystemService(NotificationManager::class.java)
+                    val next = service.notification(service.currentLabel)
+                    val current = manager.activeNotifications.firstOrNull { it.id == NOTIFICATION_ID }?.notification
+                    if (current?.extras?.getString(TerminalNotifications.SNAPSHOT) !=
+                        next.extras.getString(TerminalNotifications.SNAPSHOT)) manager.notify(NOTIFICATION_ID, next)
+                }
+            }
+        }
 
         fun isRunning(): Boolean = running
 
@@ -49,12 +62,16 @@ class SshSessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         createNotificationChannel()
     }
+
+    private var currentLabel = "SSH session active"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val label = intent?.getStringExtra(EXTRA_LABEL)?.takeIf { it.isNotBlank() }
             ?: "SSH session active"
+        currentLabel = label
         val notification = notification(label)
         if (running) {
             // Already foreground: just refresh the text (host changed, reconnecting, ...).
@@ -79,8 +96,9 @@ class SshSessionService : Service() {
     }
 
     override fun onDestroy() {
-        TerminalNotifications.clear(this)
         running = false
+        instance = null
+        TerminalNotifications.clear(this)
         super.onDestroy()
     }
 
@@ -138,9 +156,8 @@ class SshSessionService : Service() {
             .setContentTitle("DevOTA terminal")
             .setContentText(text)
             .setOngoing(true)
-            .setGroup(TerminalNotifications.GROUP)
-            .setGroupSummary(true)
             .setOnlyAlertOnce(true)
+            .apply { TerminalNotifications.decorateSession(this@SshSessionService, this) }
             .apply { if (contentIntent != null) setContentIntent(contentIntent) }
             .build()
     }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'terminal_watch.dart';
 import 'terminal_macro.dart';
 import 'terminal_host_route.dart';
@@ -12,12 +13,14 @@ class TerminalWatchScreen extends StatefulWidget {
     required this.macros,
     required this.onSave,
     this.hostRouter,
+    this.deliveryStatus,
   });
   final TerminalWatchController watch;
   final Future<List<WatchedPane>> Function() loadPanes;
   final List<TerminalMacro> macros;
   final Future<void> Function(List<TerminalWatchBinding>, int, bool) onSave;
   final TerminalHostRouter? hostRouter;
+  final ValueListenable<String?>? deliveryStatus;
   @override
   State<TerminalWatchScreen> createState() => _TerminalWatchScreenState();
 }
@@ -158,6 +161,16 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
     appBar: AppBar(title: const Text('Notification macros')),
     body: Column(
       children: [
+        if (widget.deliveryStatus != null)
+          ValueListenableBuilder<String?>(
+            valueListenable: widget.deliveryStatus!,
+            builder: (_, value, _) => value == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(value),
+                  ),
+          ),
         if (widget.hostRouter != null)
           ListTile(
             title: const Text('Execution host'),

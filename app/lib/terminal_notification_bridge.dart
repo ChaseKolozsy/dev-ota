@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'terminal_watch.dart';
 import 'terminal_conclusion.dart';
 
@@ -32,6 +33,10 @@ class TerminalNotificationBridge {
   static const _channel = MethodChannel('devota/terminal_notifications');
   final TerminalWatchController watch;
   bool enabled = true;
+  final deliveryStatus = ValueNotifier<String?>(null);
+  Timer? _publishTimer;
+  bool _disposed = false;
+  int _publishVersion = 0;
   ConclusionReading? _reading;
   String? _readingToken;
   int _historyLines = 120;
@@ -39,6 +44,7 @@ class TerminalNotificationBridge {
   String? _readerError;
   String? _errorPane;
   void publish() {
+    if (_disposed) return;
     final reading = _reading;
     if (reading != null) {
       final bindings = watch.bindings.where((b) => b.pane.id == reading.paneId);
@@ -50,7 +56,11 @@ class TerminalNotificationBridge {
         _stopReading();
       }
     }
-    unawaited(_publish());
+    _publishTimer?.cancel();
+    _publishTimer = Timer(
+      const Duration(milliseconds: 150),
+      () => unawaited(_publish()),
+    );
   }
 
   void _stopReading() {
@@ -144,7 +154,8 @@ class TerminalNotificationBridge {
     }
   }
 
-  Future<void> _publish() async {
+  Future<Map<Object?, Object?>?> _publish() async {
+    final version = ++_publishVersion;
     try {
       await _channel.invokeMethod<void>('update', {
         'cards': enabled
@@ -159,18 +170,60 @@ class TerminalNotificationBridge {
                   .toList()
             : [],
       });
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      final status = await _channel.invokeMapMethod<Object?, Object?>('status');
+      if (!_disposed && version == _publishVersion && status != null) {
+        deliveryStatus.value = status['allowed'] != true
+            ? 'Terminal macro notifications are blocked in Android settings.'
+            : status['error'] != null
+            ? 'Notification error: ${status['error']}'
+            : 'Android reports ${status['posted']}/${status['requested']} window cards posted.';
+      }
+      return status;
     } on MissingPluginException catch (_) {
       // Desktop terminals have no Android notification surface.
-    } on PlatformException catch (_) {
-      // Notification permissions may have been revoked.
+      return null;
+    } on PlatformException catch (error) {
+      if (!_disposed) {
+        deliveryStatus.value =
+            'Notification error: ${error.message ?? error.code}';
+      }
+      return {'error': error.message ?? error.code};
+    }
+  }
+
+  Future<void> verifyDelivery() async {
+    _publishTimer?.cancel();
+    if (watch.bindings.isNotEmpty && !enabled) {
+      throw StateError(
+        'Settings saved, but background SSH notifications are inactive. Reconnect and retry.',
+      );
+    }
+    var status = await _publish();
+    if (status == null || watch.bindings.isEmpty) return;
+    // Allow Android's asynchronous notification posting/rate limit to settle.
+    if (status['allowed'] == true && status['posted'] != status['requested']) {
+      await Future<void>.delayed(const Duration(seconds: 2));
+      status = await _publish();
+    }
+    if (status != null &&
+        (status['allowed'] != true ||
+            status['error'] != null ||
+            status['posted'] != status['requested'])) {
+      throw StateError(
+        'Settings saved, but ${deliveryStatus.value ?? 'Android did not confirm the window notifications.'}',
+      );
     }
   }
 
   void dispose() {
     enabled = false;
+    _disposed = true;
+    _publishTimer?.cancel();
     _stopReading();
     watch.removeListener(publish);
     _channel.setMethodCallHandler(null);
-    publish();
+    unawaited(_publish());
+    deliveryStatus.dispose();
   }
 }

@@ -27,7 +27,8 @@ class _DemoState extends State<Demo> {
   @override
   void initState() {
     super.initState();
-    watch.reviewEnabled = false; // Live model is tested separately on synthetic prose.
+    watch.reviewEnabled =
+        false; // Live model is tested separately on synthetic prose.
     bridge.publish();
     watch.addListener(_update);
   }
@@ -108,6 +109,19 @@ class _DemoState extends State<Demo> {
       children: [
         Text(status),
         FilledButton(onPressed: start, child: const Text('Start Vim test')),
+        ValueListenableBuilder<String?>(
+          valueListenable: bridge.deliveryStatus,
+          builder: (_, value, _) =>
+              Text(value ?? 'Notification delivery not checked'),
+        ),
+        FilledButton(
+          onPressed: () {
+            for (var i = 0; i < 50; i++) {
+              bridge.publish();
+            }
+          },
+          child: const Text('Burst refresh'),
+        ),
         for (final card in watch.cards)
           ListTile(
             title: Text('${card['title']}'),
