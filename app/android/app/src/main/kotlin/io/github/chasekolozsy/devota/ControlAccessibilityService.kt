@@ -135,6 +135,14 @@ class ControlAccessibilityService : AccessibilityService() {
                 !equals("classNameExact", node.className)) {
                 return false
             }
+            if (selector.has("checked") && !selector.isNull("checked") &&
+                node.isChecked != selector.getBoolean("checked")) {
+                return false
+            }
+            if (selector.has("checkable") && !selector.isNull("checkable") &&
+                node.isCheckable != selector.getBoolean("checkable")) {
+                return false
+            }
             val bounds = Rect().also(node::getBoundsInScreen)
             if (selector.optBoolean("visibleOnly", true) && bounds.isEmpty) return false
             val region = selector.optJSONObject("centerRegion") ?: return true
@@ -434,6 +442,8 @@ class ControlAccessibilityService : AccessibilityService() {
             .put("contentDescription", node.contentDescription?.toString())
             .put("resourceId", node.viewIdResourceName)
             .put("clickable", node.isClickable)
+            .put("checkable", node.isCheckable)
+            .put("checked", node.isChecked)
             .put("enabled", node.isEnabled)
             .put("focused", node.isFocused)
             .put("bounds", JSONObject()

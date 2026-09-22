@@ -40,6 +40,8 @@ const uiSelectorSchema = z.object({
   contentDescription: z.string().optional(),
   resourceId: z.string().optional(),
   className: z.string().optional(),
+  checkable: z.boolean().optional(),
+  checked: z.boolean().optional(),
   visibleOnly: z.boolean().default(true),
 });
 
@@ -718,6 +720,8 @@ function validBounds(bounds) {
 
 function matchUiNode(node, selector) {
   if (selector.visibleOnly !== false && !validBounds(node.bounds)) return false;
+  if (selector.checkable !== undefined && node.checkable !== selector.checkable) return false;
+  if (selector.checked !== undefined && node.checked !== selector.checked) return false;
   return (
     fieldMatches(node.text, selector.text) &&
     fieldMatches(node.contentDescription, selector.contentDescription) &&
@@ -832,6 +836,8 @@ function summarizeNode(node) {
     contentDescription: node.contentDescription,
     resourceId: node.resourceId,
     clickable: node.clickable,
+    checkable: node.checkable,
+    checked: node.checked,
     enabled: node.enabled,
     focused: node.focused,
     bounds: node.bounds,

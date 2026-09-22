@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+const zeroTierRecoveryMacroName = 'Restart ZeroTier and reconnect';
+
 enum TerminalMacroStepType { shell, terminalKey, tmux, wait, device }
 
 class MacroStepOption {

@@ -357,6 +357,7 @@ class SshTerminalTab extends StatefulWidget {
     this.onCommandUsed,
     this.onMacroUsed,
     this.onMacroReorder,
+    this.onZeroTierRecovery,
   });
 
   final Dio dio;
@@ -369,6 +370,7 @@ class SshTerminalTab extends StatefulWidget {
   final ValueChanged<bool>? onFullscreenChanged;
   final ValueChanged<String>? onCommandUsed;
   final ValueChanged<TerminalMacro>? onMacroUsed;
+  final Future<bool> Function()? onZeroTierRecovery;
 
   /// Called when a macro button is held and dragged to a new slot in the macro
   /// bar, with its old and new index in [quickMacros].
@@ -408,7 +410,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _macroRunning = false;
   final _watch = TerminalWatchController();
   TerminalHostRoute _watchRoute = const TerminalHostRoute();
-  late final _notificationBridge = TerminalNotificationBridge(_watch);
+  late final _notificationBridge = TerminalNotificationBridge(
+    _watch,
+    onSessionAction: _onNotificationSessionAction,
+  );
   bool get _inputLocked => _macroRunning || _watch.busy;
   String? _macroRunningName;
   int _macroStepIndex = 0;
@@ -445,6 +450,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _batteryOptimizationExempt = true;
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
+  bool _sessionNotificationStarted = false;
+  bool _repairingNetwork = false;
 
   @override
   void initState() {
@@ -477,6 +484,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     widget.macroController?.detach();
     WidgetsBinding.instance.removeObserver(this);
     _reconnectTimer?.cancel();
+    _sessionNotificationStarted = false;
     _disconnect();
     _hostController.dispose();
     _portController.dispose();
@@ -1031,14 +1039,65 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _keepAliveInBackground && (_connected || _wantConnected);
     _notificationBridge.publish();
     if (!Platform.isAndroid) return;
-    if (!_keepAliveInBackground || !(_connected || _wantConnected)) {
+    if (!_keepAliveInBackground || !_sessionNotificationStarted) {
       await BackgroundSessionService.stop();
       return;
     }
     final target = '$_username@$_host';
+    final disconnected = !_connected && !_repairingNetwork;
     await BackgroundSessionService.start(
-      _connected ? 'Connected to $target' : 'Reconnecting to $target',
+      _connected
+          ? 'Connected to $target'
+          : _repairingNetwork
+          ? 'Restarting ZeroTier before reconnecting to $target'
+          : _wantConnected
+          ? 'Reconnecting to $target'
+          : 'Disconnected from $target',
+      action: _connected || _busy ? 'disconnect' : 'connect',
+      actionLabel: _connected
+          ? 'Disconnect'
+          : _busy
+          ? 'Stop'
+          : _wantConnected
+          ? 'Reconnect now'
+          : 'Reconnect',
+      zeroTierRecovery: disconnected && widget.onZeroTierRecovery != null,
     );
+  }
+
+  Future<void> _onNotificationSessionAction(String action) async {
+    if (_repairingNetwork) return;
+    if (action == 'disconnect') {
+      await _disconnect();
+    } else if (action == 'connect') {
+      if (!_connected && !_busy) await _connect();
+    } else if (action == 'restartZeroTier') {
+      await _restartZeroTierAndReconnect();
+    }
+  }
+
+  Future<void> _restartZeroTierAndReconnect() async {
+    final recover = widget.onZeroTierRecovery;
+    if (recover == null || _repairingNetwork) return;
+    _repairingNetwork = true;
+    await _disconnect();
+    if (mounted) setState(() => _status = 'Restarting ZeroTier...');
+    await _syncBackgroundSession();
+    var repaired = false;
+    try {
+      repaired = await recover();
+    } catch (error) {
+      if (mounted) setState(() => _status = 'ZeroTier restart failed: $error');
+    } finally {
+      _repairingNetwork = false;
+    }
+    if (!mounted) return;
+    if (repaired) {
+      await _connect();
+    } else {
+      setState(() => _status ??= 'ZeroTier restart failed; tap Reconnect.');
+      await _syncBackgroundSession();
+    }
   }
 
   /// A foreground service keeps the process off the freezer, but Doze can still
@@ -1359,6 +1418,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     }
     if (_busy || _connected) return;
     _reconnectTimer?.cancel();
+    _sessionNotificationStarted = true;
     _wantConnected = true;
     if (!auto) _reconnectAttempts = 0;
     await _saveProfile();
@@ -1367,6 +1427,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       _busy = true;
       _status = auto ? 'Reconnecting...' : 'Connecting...';
     });
+    unawaited(_syncBackgroundSession());
     _terminal.write(
       '\r\n${auto ? 'Reconnecting' : 'Connecting'} to $_username@$_host:$_port...\r\n',
     );
@@ -1409,6 +1470,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           height: _terminal.viewHeight,
         ),
       );
+      if (!_wantConnected) {
+        session.close();
+        client.close();
+        return;
+      }
       _client = client;
       _session = session;
       _terminal.buffer.clear();
@@ -1443,6 +1509,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       _scheduleReconnect('Connection failed');
     } finally {
       if (mounted) setState(() => _busy = false);
+      unawaited(_syncBackgroundSession());
       _notifyMacroController();
     }
   }

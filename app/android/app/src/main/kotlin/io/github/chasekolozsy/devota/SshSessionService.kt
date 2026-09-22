@@ -30,6 +30,9 @@ class SshSessionService : Service() {
         private const val CHANNEL_ID = "ssh_session"
         private const val NOTIFICATION_ID = 24082
         private const val EXTRA_LABEL = "label"
+        private const val EXTRA_ACTION = "action"
+        private const val EXTRA_ACTION_LABEL = "actionLabel"
+        private const val EXTRA_ZEROTIER_RECOVERY = "zeroTierRecovery"
 
         @Volatile private var running = false
         private var instance: SshSessionService? = null
@@ -48,10 +51,20 @@ class SshSessionService : Service() {
 
         fun isRunning(): Boolean = running
 
-        fun start(context: Context, label: String) {
+        fun start(
+            context: Context,
+            label: String,
+            action: String,
+            actionLabel: String,
+            zeroTierRecovery: Boolean,
+        ) {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, SshSessionService::class.java).putExtra(EXTRA_LABEL, label),
+                Intent(context, SshSessionService::class.java)
+                    .putExtra(EXTRA_LABEL, label)
+                    .putExtra(EXTRA_ACTION, action)
+                    .putExtra(EXTRA_ACTION_LABEL, actionLabel)
+                    .putExtra(EXTRA_ZEROTIER_RECOVERY, zeroTierRecovery),
             )
         }
 
@@ -67,11 +80,20 @@ class SshSessionService : Service() {
     }
 
     private var currentLabel = "SSH session active"
+    private var currentAction = "disconnect"
+    private var currentActionLabel = "Disconnect"
+    private var zeroTierRecovery = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val label = intent?.getStringExtra(EXTRA_LABEL)?.takeIf { it.isNotBlank() }
             ?: "SSH session active"
         currentLabel = label
+        currentAction = intent?.getStringExtra(EXTRA_ACTION)?.takeIf {
+            it in setOf("connect", "disconnect")
+        } ?: currentAction
+        currentActionLabel = intent?.getStringExtra(EXTRA_ACTION_LABEL)?.takeIf { it.isNotBlank() }
+            ?: currentActionLabel
+        zeroTierRecovery = intent?.getBooleanExtra(EXTRA_ZEROTIER_RECOVERY, false) == true
         val notification = notification(label)
         if (running) {
             // Already foreground: just refresh the text (host changed, reconnecting, ...).
@@ -151,14 +173,22 @@ class SshSessionService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder
+        builder
             .setSmallIcon(applicationInfo.icon)
             .setContentTitle("DevOTA terminal")
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .apply { TerminalNotifications.decorateSession(this@SshSessionService, this) }
             .apply { if (contentIntent != null) setContentIntent(contentIntent) }
-            .build()
+            .addAction(TerminalNotifications.buildSessionAction(
+                this, currentAction, currentActionLabel,
+            ))
+        if (zeroTierRecovery) {
+            builder.addAction(TerminalNotifications.buildSessionAction(
+                this, "restartZeroTier", "Restart ZeroTier",
+            ))
+        }
+        TerminalNotifications.decorateSession(this, builder)
+        return builder.build()
     }
 }

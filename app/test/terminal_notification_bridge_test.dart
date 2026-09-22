@@ -5,6 +5,29 @@ import 'package:devota/terminal_watch.dart';
 
 void main() {
   const channel = MethodChannel('devota/terminal_notifications');
+  testWidgets('session notification actions are forwarded to the terminal', (
+    tester,
+  ) async {
+    String? received;
+    final watch = TerminalWatchController();
+    final bridge = TerminalNotificationBridge(
+      watch,
+      onSessionAction: (action) async => received = action,
+    );
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('sessionAction', {'action': 'restartZeroTier'}),
+      ),
+      (_) {},
+    );
+    await tester.pump();
+    expect(received, 'restartZeroTier');
+    bridge.dispose();
+    watch.dispose();
+    await tester.pump(const Duration(milliseconds: 350));
+  });
+
   testWidgets('publication bursts coalesce and delivery is acknowledged', (
     tester,
   ) async {

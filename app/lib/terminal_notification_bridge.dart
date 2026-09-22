@@ -5,8 +5,14 @@ import 'terminal_watch.dart';
 import 'terminal_conclusion.dart';
 
 class TerminalNotificationBridge {
-  TerminalNotificationBridge(this.watch) {
+  TerminalNotificationBridge(this.watch, {this.onSessionAction}) {
     _channel.setMethodCallHandler((call) async {
+      if (call.method == 'sessionAction') {
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        final action = args['action']?.toString();
+        if (action != null) unawaited(onSessionAction?.call(action));
+        return;
+      }
       if (call.method == 'actionRejected') {
         final args = Map<String, dynamic>.from(call.arguments as Map);
         watch.rejectAction(
@@ -40,6 +46,7 @@ class TerminalNotificationBridge {
   }
   static const _channel = MethodChannel('devota/terminal_notifications');
   final TerminalWatchController watch;
+  final Future<void> Function(String action)? onSessionAction;
   bool enabled = true;
   final deliveryStatus = ValueNotifier<String?>(null);
   Timer? _publishTimer;

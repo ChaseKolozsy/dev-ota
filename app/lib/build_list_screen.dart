@@ -766,7 +766,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     return _downloadAndInstall(build, throwOnError: true);
   }
 
-  Future<void> _runDeviceMacro(TerminalMacro macro) async {
+  Future<bool> _runDeviceMacro(TerminalMacro macro) async {
     final runId = _newDeviceMacroRunId(macro);
     final startedAt = DateTime.now();
     Object? failure;
@@ -815,7 +815,8 @@ class _BuildListScreenState extends State<BuildListScreen>
       failure ??= error;
       status = 'failed';
     }
-    if (!mounted) return;
+    final succeeded = failure == null && status == 'passed';
+    if (!mounted) return succeeded;
     setState(() {
       _deviceMacroRunning = false;
       _deviceMacroStopRequested = false;
@@ -833,6 +834,27 @@ class _BuildListScreenState extends State<BuildListScreen>
         ),
       ),
     );
+    return succeeded;
+  }
+
+  Future<bool> _runZeroTierRecoveryMacro() async {
+    if (_anyMacroRunning) return false;
+    await _syncMacrosFromServerSilently();
+    if (!mounted || _anyMacroRunning) return false;
+    TerminalMacro? recovery;
+    for (final macro in _macros) {
+      if (macro.name == zeroTierRecoveryMacroName && macro.isDeviceMacro) {
+        recovery = macro;
+        break;
+      }
+    }
+    if (recovery == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ZeroTier recovery macro is unavailable')),
+      );
+      return false;
+    }
+    return _runDeviceMacro(recovery);
   }
 
   String _issuesAsText() {
@@ -1705,6 +1727,14 @@ class _BuildListScreenState extends State<BuildListScreen>
           onCommandUsed: _recordCommandUse,
           onMacroUsed: _recordMacroUse,
           onMacroReorder: _repositionQuickMacro,
+          onZeroTierRecovery:
+              _macros.any(
+                (macro) =>
+                    macro.name == zeroTierRecoveryMacroName &&
+                    macro.isDeviceMacro,
+              )
+              ? _runZeroTierRecoveryMacro
+              : null,
         ),
         _buildCommandsTab(),
         _buildMacrosTab(),

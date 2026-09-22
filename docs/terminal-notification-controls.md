@@ -77,6 +77,21 @@ backgrounding the app works, but force-stopping it or removing its task stops
 the session. Reopen and reconnect after that. Nothing is replayed on reconnect.
 Mappings are local to the SSH user/host/port; they do not alter shared macros.
 
+The **DevOTA terminal** notification also exposes the SSH connection itself.
+While connected it offers **Disconnect**. After a manual disconnect or dropped
+session it remains visible and says **Disconnected** or **Reconnecting**, with
+**Reconnect** / **Reconnect now** available directly in the notification shade.
+The notification disappears when background keep-alive is disabled or DevOTA's
+task is removed.
+
+If the synced device macro named **Restart ZeroTier and reconnect** is present,
+a disconnected notification also offers **Restart ZeroTier**. That action runs
+the device macro locally, waits for its verified result, and only then asks SSH
+to reconnect. The current macro uses ZeroTier's stable network-switch resource
+ID, deliberately verifies OFFLINE and ONLINE, and is restricted by a physical
+device profile. A failed or stopped macro leaves SSH disconnected and retains
+the ordinary Reconnect action; it is never reported as repaired.
+
 ## Status and actions
 
 - **Working · output changing:** sampled terminal content is changing; the
@@ -188,7 +203,41 @@ Ctrl-C; it kills only its own temporary tmux server and preserves its evidence.
 Build the real phone APK afterward with `scripts/build/devota-public-debug.sh`.
 The fixture entry point and package ID are not used by that build.
 
-## Recorded verification — 2026-09-21
+## Recorded verification
+
+### Notification reconnect and ZeroTier recovery — 2026-09-22
+
+- Flutter: **126 tests passed**, analysis: **no issues**. DevOTA MCP relay:
+  **14 tests passed**. Production ARM64 **2026094201** built, staged, listed by
+  `/builds`, and checksum-verified.
+- A high-priority **Restart ZeroTier and reconnect** device macro synced onto a
+  physical REVVL V+ 5G (Android 12 / SDK 31). Its exploratory 3-step run passed
+  and identified the unique ZeroTier switch resource ID.
+- The resulting 7-step physical recovery run passed: ZeroTier reported ONLINE,
+  the local macro switched it off and verified OFFLINE, switched it on and
+  verified ONLINE, then returned to DevOTA. All seven screenshots and UI
+  records are in
+  `/home/chase/dev-ota/mcp/artifacts/macro-runs/run-20260922070637801098-macro-1790060508099855-de5d08ae.zip`.
+- The phone then installed **2026094201** and reported that exact version over
+  the relay. A separate high-priority four-step post-update visible proof passed
+  and was collected at
+  `/home/chase/dev-ota/mcp/artifacts/macro-runs/run-20260922074958815738-macro-1790063334737331-970746a5.zip`.
+- Physical notification acceptance passed. **Disconnect** changed the retained
+  terminal notification to **Reconnect** plus **Restart ZeroTier**; **Reconnect**
+  restored the SSH session and the **Disconnect** action.
+- The first notification-launched ZeroTier run failed after two steps because
+  Android's notification shade remained the foreground package. The macro was
+  re-authored with an explicit shade-close step; its next eight-step run passed.
+  A final ninth step now reopens the shade after verifying OFFLINE then ONLINE,
+  so the user lands on the terminal status. The final nine-step physical run
+  passed, the control agent rejoined, SSH reported connected, and the shade
+  again exposed **Disconnect**. Its complete evidence archive is
+  `/home/chase/dev-ota/mcp/artifacts/macro-runs/run-20260922080106974181-macro-1790060508099855-de5d08ae.zip`.
+- During acceptance, the temporary Windows-to-WSL test proxy on port 8083
+  crashed on the deliberate socket reset. This was distinct from ZeroTier: the
+  phone's local macro still passed and queued its evidence. Adding socket error
+  handling to the test proxy restored 8083, after which DevOTA's running agent
+  retried and reconnected without a manual restart.
 
 ### Working-status wording follow-up
 

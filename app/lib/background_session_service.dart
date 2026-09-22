@@ -19,7 +19,12 @@ class BackgroundSessionService {
   static bool _notificationPermissionAsked = false;
 
   /// Starts (or relabels) the foreground service that pins the process.
-  static Future<void> start(String label) async {
+  static Future<void> start(
+    String label, {
+    String action = 'disconnect',
+    String actionLabel = 'Disconnect',
+    bool zeroTierRecovery = false,
+  }) async {
     // The service runs whether or not the notification is visible, but a
     // silently hidden ongoing notification is worse than asking once.
     if (!_notificationPermissionAsked) {
@@ -33,7 +38,12 @@ class BackgroundSessionService {
       }
     }
     try {
-      await _channel.invokeMethod<bool>('startSshSession', {'label': label});
+      await _channel.invokeMethod<bool>('startSshSession', {
+        'label': label,
+        'action': action,
+        'actionLabel': actionLabel,
+        'zeroTierRecovery': zeroTierRecovery,
+      });
     } on PlatformException catch (_) {
     } on MissingPluginException catch (_) {}
   }

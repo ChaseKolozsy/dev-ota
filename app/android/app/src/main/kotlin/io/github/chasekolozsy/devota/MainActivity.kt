@@ -87,7 +87,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "startSshSession" -> {
                     val label = call.argument<String>("label")?.trim().orEmpty()
-                    SshSessionService.start(this, label)
+                    val action = call.argument<String>("action")?.trim().orEmpty()
+                    val actionLabel = call.argument<String>("actionLabel")?.trim().orEmpty()
+                    val zeroTierRecovery = call.argument<Boolean>("zeroTierRecovery") == true
+                    SshSessionService.start(this, label, action, actionLabel, zeroTierRecovery)
                     result.success(true)
                 }
                 "stopSshSession" -> {

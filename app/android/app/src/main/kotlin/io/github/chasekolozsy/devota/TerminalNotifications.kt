@@ -165,6 +165,25 @@ internal object TerminalNotifications {
         return Notification.Action.Builder(null, label, pending).build()
     }
 
+    fun buildSessionAction(context: Context, action: String, label: String): Notification.Action {
+        val intent = Intent(context, TerminalActionReceiver::class.java)
+            .setData(Uri.parse("devota-terminal://session/$action"))
+            .putExtra("sessionAction", action)
+        val pending = PendingIntent.getBroadcast(
+            context,
+            24083 + if (action == "restartZeroTier") 1 else 0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Action.Builder(null, label, pending).build()
+    }
+
+    fun dispatchSession(intent: Intent) {
+        val action = intent.getStringExtra("sessionAction") ?: return
+        if (action !in setOf("connect", "disconnect", "restartZeroTier")) return
+        channel?.invokeMethod("sessionAction", mapOf("action" to action))
+    }
+
     private fun render(context: Context, row: Map<String, Any?>) {
         val id = row["id"] as String
         val builder = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, CHANNEL)
@@ -208,6 +227,7 @@ internal object TerminalNotifications {
 class TerminalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
+        else if (intent.hasExtra("sessionAction")) TerminalNotifications.dispatchSession(intent)
         else TerminalNotifications.dispatch(intent)
     }
 }
