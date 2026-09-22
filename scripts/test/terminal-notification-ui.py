@@ -310,7 +310,7 @@ else:
     while node in parents:
         matches = [n for n in node.iter("node") if label(n).lower() == "send enter"]
         if matches:
-            assert any("submission unconfirmed" in label(n) for n in node.iter("node"))
+            assert any("Quiet · outcome unknown" in label(n) for n in node.iter("node"))
             tap_node(matches[0])
             break
         node = parents[node]
@@ -328,7 +328,7 @@ else:
     (OUT / "result.json").write_text(json.dumps({"passed": True, "checks": [
         "Three independent Vim panes", "Notification actions while app backgrounded",
         "Foreground SSH shortcuts" if ARGS.mode == 'panel' else "Per-window shortcuts",
-        "Two normal submissions", "Dropped Enter leaves submission unconfirmed",
+        "Two normal submissions", "Dropped Enter leaves outcome unknown with recovery available",
         "Pane-specific Enter recovery", "No duplicate submissions", "Disconnected actions removed"],
         "oracle": result}, indent=2))
     print(f"PASS: notification macros and Enter recovery; evidence: {OUT}")

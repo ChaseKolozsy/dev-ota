@@ -328,9 +328,7 @@ class TerminalWatchController extends ChangeNotifier {
                   ? (state.submissionUnconfirmed
                         ? 'Settled · submission unconfirmed'
                         : 'Settled · no content changes')
-                  : state.submissionUnconfirmed
-                  ? 'Changing · submission unconfirmed'
-                  : 'Changing');
+                  : 'Working · output changing');
     if (reviewEnabled &&
         settled &&
         state?.runError == null &&
@@ -345,8 +343,14 @@ class TerminalWatchController extends ChangeNotifier {
     } else if (runningPane != binding.pane.id &&
         state?.macroSent == true &&
         state?.runError == null &&
-        state?.error == null) {
-      status = 'Macro sent · $status';
+        state?.error == null &&
+        state?.observedAt != null &&
+        now().difference(state!.observedAt!) <= freshness) {
+      status = state.awaitingOutput
+          ? 'Macro sent · waiting for output'
+          : settled
+          ? 'Quiet · outcome unknown'
+          : 'Working · output changing';
     }
     if (reviewEnabled &&
         settled &&

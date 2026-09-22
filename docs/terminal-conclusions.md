@@ -36,8 +36,12 @@ Each pane independently shows one of:
 
 **Macro sent** only means all macro steps were delivered without a transport
 error; it does not establish application acceptance or successful work.
-**Changing** means sampled terminal output is changing, not proof of agent
-progress. **Checking outcome** means a review request is in flight. Only
+**Working · output changing** is the active-output status. It replaces the
+confusing submission-unconfirmed warning while output is changing; Enter
+recovery still remains available after the pane settles. **Macro sent · waiting
+for output** is used if nothing has changed since submission. **Quiet · outcome
+unknown** means activity stopped without a completion verdict. **Checking
+outcome** means a review request is in flight. Only
 **✓ Reported success** is a positive assessment of the agent's final report.
 
 The label includes a short reason. These are assessments of an agent's *report*,

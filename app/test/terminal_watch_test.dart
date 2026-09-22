@@ -14,6 +14,47 @@ TerminalMacroStep step(TerminalMacroStepType type, String value) =>
     TerminalMacroStep(id: value, type: type, value: value, delaySeconds: 0);
 
 void main() {
+  test('activity shows Working, no output waits, quiet is not completed', () {
+    var time = DateTime(2026);
+    final watch = TerminalWatchController(now: () => time);
+    addTearDown(watch.dispose);
+    watch.configure(
+      [TerminalWatchBinding(pane: pane, macroId: 'm')],
+      [const TerminalMacro(id: 'm', name: 'Hello', steps: [])],
+    );
+    final state = PaneObservation()
+      ..observe('Old conclusion', time, watch.freshness)
+      ..submittedScreen = 'Old conclusion'
+      ..awaitingOutput = true
+      ..macroSent = true
+      ..submissionUnconfirmed = true;
+    watch.observations[pane.id] = state;
+    expect(watch.cards.single['status'], 'Macro sent · waiting for output');
+    time = time.add(const Duration(seconds: 1));
+    state.observe('Agent started new work', time, watch.freshness);
+    expect(watch.cards.single['status'], 'Working · output changing');
+    expect(watch.cards.single['status'], isNot(contains('unconfirmed')));
+    // Keep Enter recovery available once quiet; a changing screen alone must
+    // not erase that safety state or manufacture a completion verdict.
+    expect(state.submissionUnconfirmed, isTrue);
+    expect(state.verdict, isNull);
+    for (var i = 0; i < 2; i++) {
+      time = time.add(const Duration(seconds: 6));
+      state.observe('Agent started new work', time, watch.freshness);
+    }
+    expect(watch.cards.single['status'], 'Quiet · outcome unknown');
+    state.verdict = const ConclusionVerdict(
+      'reported_success',
+      'Reports completion.',
+      'Done',
+    );
+    expect(watch.cards.single['status'], contains('Reported success'));
+    time = time.add(const Duration(seconds: 9));
+    expect(watch.cards.single['status'], 'Disconnected / unknown');
+    state.error = 'Disconnected / pane unavailable';
+    expect(watch.cards.single['status'], contains('Disconnected'));
+  });
+
   test(
     'slow identical preflight runs despite observation freshness gap and unavailable reviewer',
     () async {

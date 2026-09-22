@@ -79,11 +79,17 @@ Mappings are local to the SSH user/host/port; they do not alter shared macros.
 
 ## Status and actions
 
-- **Changing:** sampled terminal content is changing.
+- **Working · output changing:** sampled terminal content is changing; the
+  normal active state no longer shows a submission-unconfirmed warning.
 - **Settled:** content is unchanged for the configured quiet period, with fresh
   observations. This is not evidence that an agent completed its work.
 - **Submission unconfirmed:** input/Enter was sent without application-level
   acknowledgment. This remains conservative even if a command actually worked.
+  This is retained internally for Enter recovery, not shown over Working.
+- **Macro sent · waiting for output:** the macro finished sending but no change
+  from its initial snapshot has been observed yet.
+- **Quiet · outcome unknown:** output changed after the macro and has now
+  settled; no completion verdict is available yet. Quiet alone is not success.
 - **Disconnected / unavailable:** no valid observation or the original pane no
   longer exists. Run/Enter actions are removed.
 
@@ -183,6 +189,19 @@ Build the real phone APK afterward with `scripts/build/devota-public-debug.sh`.
 The fixture entry point and package ID are not used by that build.
 
 ## Recorded verification — 2026-09-21
+
+### Working-status wording follow-up
+
+- Flutter: **125 tests passed**, analysis: **no issues**. Conclusion-review
+  validation: **9 tests passed**. Regression coverage separates active output,
+  waiting for output, quiet/unknown, reported completion, and disconnection.
+- Android 36 emulator, isolated Vim panes through Windows CMD → WSL: all three
+  notification macros and deliberately dropped-Enter recovery passed. The quiet
+  recovery card shows **Quiet · outcome unknown**, with Send Enter available.
+  Evidence: `/tmp/devota-working-status-evidence`.
+- Production ARM64 **2026094111** built and staged; checksum verified and listed
+  by `/builds`. No live agents were invoked. Physical-phone acceptance remains
+  for the user.
 
 ### Saved macro window-selection override
 
