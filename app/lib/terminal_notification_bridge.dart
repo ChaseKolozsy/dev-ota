@@ -7,6 +7,14 @@ import 'terminal_conclusion.dart';
 class TerminalNotificationBridge {
   TerminalNotificationBridge(this.watch) {
     _channel.setMethodCallHandler((call) async {
+      if (call.method == 'actionRejected') {
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        watch.rejectAction(
+          args['id'] as String,
+          'Not sent: button expired or terminal changed. Use the current button once settled.',
+        );
+        return;
+      }
       if (call.method == 'readerAction') {
         final args = Map<String, dynamic>.from(call.arguments as Map);
         unawaited(_readerAction(args['action'] as String));

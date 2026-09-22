@@ -78,10 +78,22 @@ host helper with the app: its optional `retryable` field distinguishes service
 or validation failures from a valid uncertain assessment, without exposing
 exception details or transcripts.
 
-Model inputs are at most 10,000 characters of cleaned recent text. The prompt
-treats terminal content as untrusted data. Responses must be small structured
-JSON; positive/negative verdicts require an exact supporting quote present in
-the input. Invalid replies never become success and receive bounded retries.
+The helper accepts at most 10,000 characters of cleaned recent text and sends
+at most its last 4,000 characters to the small shared model, removing an initial
+partial line when possible. It numbers literal source lines, splitting long
+lines into substrings of at most 240 characters. The model selects an integer
+`evidence_line` instead of copying prose; the helper resolves that line into an
+exact source quote for the phone. This avoids rejecting a valid assessment
+because the model paraphrased or copied an oversized quote. No fuzzy matching
+or fabricated evidence is accepted. Missing/out-of-range references fail closed.
+The prompt treats terminal content as untrusted data. Responses must be small
+structured JSON. The helper also accepts the observed exact two-line form
+`status: reason` followed by `evidence_line: integer`, with a full-string match
+and the same schema, bounds, and source-evidence validation. Extra surrounding
+prose is rejected. Invalid replies never become success and receive bounded retries.
+Busy, timeout, incomplete-output, authentication and context-limit failures get
+specific safe messages; authentication/context-limit failures are not retried
+unchanged. No credentials or raw exception details appear in those messages.
 Quote validation cannot establish
 that the model interpreted context correctly. No transcripts, model replies,
 or exception details are logged by this helper, and no durable review cache is
@@ -141,3 +153,28 @@ fixture; it proves controller/native notification behavior, not model accuracy.
 - The existing home model remains an external dependency: this fixture does
   not prove continuous availability or accuracy on every real transcript.
   No live terminal macro or coding agent was run during this verification.
+
+### Real completion parsing and slow preflight — 2026-09-21
+
+- Read-only checks reproduced two evidence failures on finished terminal work:
+  a nonmatching copied quote, and an exact quote of **1,064 characters** rejected
+  by the 300-character limit. A later model response used two-line fields instead
+  of JSON. Numbered literal source lines and strict two-line parsing address
+  those observed format failures without relaxing source-evidence validation.
+- The updated helper returned **reported_success** for the finished window
+  corresponding to the user's screenshot (authoring window 1 / notification
+  window 2), with exact source evidence, in **1.9 seconds**. The finished reverse
+  batch window also returned reported_success with exact source evidence.
+- **124 Flutter tests passed**, analysis: **no issues**; **9 reviewer unit tests
+  passed**. A regression verifies that an identical preflight capture delayed
+  20 seconds can execute a manually requested macro despite an unavailable
+  reviewer. Changed preflight content still blocks input and reports Not sent.
+- Android 36, real Windows CMD → WSL: three isolated Vim notification macros,
+  intentionally dropped Enter and pane-specific recovery, no duplicate input,
+  and disconnect action removal all passed. Evidence:
+  `/tmp/devota-checker-preflight-evidence`.
+- Production ARM64 **2026094110** staged. The screenshot establishes finished
+  work, but the exact cause of the user's missed tap is not independently proven;
+  future stale/preflight rejections now report a visible reason. No live macro
+  was run during debugging. Reconnect SSH after updating to reset exhausted
+  reviews; running the macro again is not required to reassess existing output.

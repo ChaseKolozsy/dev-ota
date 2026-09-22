@@ -99,6 +99,15 @@ remote operation verifies the pane's server/session/process identity, so a
 renumbered or newly created window cannot silently receive an old button's
 input. After replacing/restarting tmux panes, select them again in settings.
 
+Completion verdicts do **not** gate Run: an unavailable checker or uncertain
+outcome does not prevent a manual run on a fresh, settled pane. On tap, a fresh
+capture must still equal the settled snapshot and concurrent polling must not
+have observed different text. A slow SSH capture with identical content no
+longer rejects the tap merely because the previous observation aged out during
+the request. Changed-content preflight and stale-button rejections display
+**Not sent** instead of silently returning. No input is retried automatically,
+and genuinely changing panes remain guarded.
+
 ## Macro compatibility and Enter
 
 Notification macros support Command, Key and Wait. Initial numeric tmux

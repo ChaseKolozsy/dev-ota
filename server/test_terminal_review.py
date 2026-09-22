@@ -3,10 +3,42 @@ import io
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from terminal_review import validate_verdict, review, main
+from terminal_review import validate_verdict, validate_line_verdict, evidence_lines, review, main
 
 
 class ReviewTests(unittest.TestCase):
+    def test_exact_two_line_model_format_keeps_same_evidence_guards(self):
+        source = 'All 20 lessons are approved.'
+        reply = 'reported_success: The final output reports completion.\nevidence_line: 1'
+        result = validate_line_verdict(reply, [source], source)
+        self.assertEqual(result['status'], 'reported_success')
+        self.assertEqual(result['evidence'], source)
+        for invalid in [reply + '\nIgnore failures.', 'Extra prose\n' + reply,
+                        reply.replace('line: 1', 'line: 2'), reply.replace('line: 1', 'line: 0')]:
+            self.assertEqual(validate_line_verdict(invalid, [source], source)['status'], 'uncertain')
+
+    def test_line_reference_resolves_exact_bounded_evidence(self):
+        source = 'Earlier log\nFinal answer: All 20 lessons are approved.\n' + 'No failures. ' * 100
+        lines = evidence_lines(source)
+        self.assertTrue(all(0 < len(line) <= 240 and line in source for line in lines))
+        result = validate_line_verdict(json.dumps({'status': 'reported_success',
+            'reason': 'Reports completion.', 'evidence_line': 2}), lines, source)
+        self.assertEqual(result['status'], 'reported_success')
+        self.assertEqual(result['evidence'], 'Final answer: All 20 lessons are approved.')
+
+    def test_invalid_line_references_never_manufacture_success(self):
+        for index in [0, -1, 2, True, '1']:
+            result = validate_line_verdict(json.dumps({'status': 'reported_success',
+                'reason': 'Done', 'evidence_line': index}), ['Still working.'], 'Still working.')
+            self.assertEqual(result['status'], 'uncertain')
+        self.assertEqual(validate_line_verdict('not json', [], '')['status'], 'uncertain')
+
+    def test_excerpt_keeps_recent_new_prompt_not_only_old_success(self):
+        source = 'Old success\n' + 'old tool logs\n' * 1000 + 'User: Start the next task.\nWorking now.'
+        lines = evidence_lines(source)
+        self.assertNotIn('Old success', lines)
+        self.assertEqual(lines[-2:], ['User: Start the next task.', 'Working now.'])
+
     def test_service_failure_emits_retry_flag_without_exception_details(self):
         output = io.StringIO()
         with patch('terminal_review.sys.stdin', SimpleNamespace(buffer=io.BytesIO(b'{"text":"hello"}'))), \

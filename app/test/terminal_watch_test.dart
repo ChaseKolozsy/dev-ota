@@ -1,4 +1,5 @@
 import 'package:devota/terminal_macro.dart';
+import 'package:devota/terminal_conclusion.dart';
 import 'package:devota/terminal_submission.dart';
 import 'package:devota/terminal_watch.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,51 @@ TerminalMacroStep step(TerminalMacroStepType type, String value) =>
     TerminalMacroStep(id: value, type: type, value: value, delaySeconds: 0);
 
 void main() {
+  test(
+    'slow identical preflight runs despite observation freshness gap and unavailable reviewer',
+    () async {
+      var time = DateTime(2026);
+      var slow = false;
+      final commands = <String>[];
+      final binding = TerminalWatchBinding(pane: pane, macroId: 'm');
+      final watch = TerminalWatchController(now: () => time);
+      addTearDown(watch.dispose);
+      watch.configure(
+        [binding],
+        [
+          TerminalMacro(
+            id: 'm',
+            name: 'Hello',
+            steps: [step(TerminalMacroStepType.shell, 'hello')],
+          ),
+        ],
+      );
+      watch.connect(
+        TmuxWatchTransport((command) async {
+          commands.add(command);
+          if (slow && command.contains('capture-pane')) {
+            time = time.add(const Duration(seconds: 20));
+          }
+          return 'Finished work.';
+        }),
+      );
+      await watch.poll();
+      for (var i = 0; i < 2; i++) {
+        time = time.add(const Duration(seconds: 6));
+        await watch.poll();
+      }
+      watch.observations[pane.id]!.verdict = ConclusionVerdict.unavailable;
+      watch.observations[pane.id]!.reviewAttempts = 3;
+      watch.rejectAction(pane.id, 'Not sent: expired button');
+      expect(watch.cards.single['status'], startsWith('Not sent:'));
+      slow = true;
+      await watch.act(pane.id, 'run', watch.token(binding));
+      expect(commands.where((c) => c.contains('paste-buffer')), hasLength(1));
+      expect(commands.where((c) => c.contains('send-keys')), hasLength(1));
+      expect(watch.observations[pane.id]!.runError, isNull);
+      expect(watch.observations[pane.id]!.macroSent, isTrue);
+    },
+  );
   for (final oldWindow in ['1', '2', '3']) {
     test(
       'bound pane overrides initial window $oldWindow without switching',
@@ -344,6 +390,10 @@ void main() {
     screen = 'working again';
     await watch.act('%1', 'run', watch.token(binding));
     expect(commands.any((c) => c.contains('paste-buffer')), isFalse);
+    expect(
+      watch.cards.single['status'],
+      contains('Not sent: terminal text changed'),
+    );
     failed = true;
     await watch.poll();
     expect(watch.canAct(binding), isFalse);

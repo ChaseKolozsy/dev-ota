@@ -333,6 +333,7 @@ class TerminalWatchController extends ChangeNotifier {
                   : 'Changing');
     if (reviewEnabled &&
         settled &&
+        state?.runError == null &&
         state?.verdict != null &&
         runningPane != binding.pane.id) {
       status = '${state!.verdict!.label} · ${state.verdict!.reason}';
@@ -343,11 +344,13 @@ class TerminalWatchController extends ChangeNotifier {
       }
     } else if (runningPane != binding.pane.id &&
         state?.macroSent == true &&
+        state?.runError == null &&
         state?.error == null) {
       status = 'Macro sent · $status';
     }
     if (reviewEnabled &&
         settled &&
+        state?.runError == null &&
         !busy &&
         !externalBusy &&
         state?.reviewingRevision == state?.revision &&
@@ -481,7 +484,13 @@ class TerminalWatchController extends ChangeNotifier {
     final matching = bindings.where((b) => b.pane.id == paneId);
     if (matching.isEmpty) return;
     final binding = matching.first;
-    if (token(binding) != expectedToken || !canAct(binding)) return;
+    if (token(binding) != expectedToken || !canAct(binding)) {
+      rejectAction(
+        paneId,
+        'Not sent: button expired or terminal changed. Use the current button once settled.',
+      );
+      return;
+    }
     if (action != 'run' && action != 'enter') return;
     final state = observations[paneId]!;
     if (action == 'enter' && !state.submissionUnconfirmed) return;
@@ -502,10 +511,19 @@ class TerminalWatchController extends ChangeNotifier {
         final compatibilityError = notificationMacroError(macro);
         if (compatibilityError != null) throw StateError(compatibilityError);
       }
+      final tappedContent = state.content;
       final before = await transport.capture(binding.pane);
       _checkRun(generation);
+      // The user tapped a fresh, settled snapshot. A slow read must not turn
+      // an identical confirmation into a false "still changing" rejection.
+      // Still reject if either the fresh read or concurrent polling saw change.
+      final changed = before != tappedContent || state.content != tappedContent;
       state.observe(before, now(), freshness);
-      if (!state.settled(now(), quietPeriod, freshness)) return;
+      if (changed) {
+        throw StateError(
+          'Not sent: terminal text changed during the check. Wait for it to settle, then tap again.',
+        );
+      }
       state.revision++;
       state.submittedScreen = before;
       state.awaitingOutput = true;
@@ -570,6 +588,14 @@ class TerminalWatchController extends ChangeNotifier {
     if (_disposed || _stop || generation != _generation || _transport == null) {
       throw StateError('Stopped · input may have been sent');
     }
+  }
+
+  void rejectAction(String paneId, String message) {
+    if (_disposed || busy || externalBusy) return;
+    final state = observations[paneId];
+    if (state == null) return;
+    state.runError = message;
+    _notify();
   }
 
   Future<void> _delay(Duration duration, int generation) async {

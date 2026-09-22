@@ -196,7 +196,11 @@ internal object TerminalNotifications {
         val action = intent.getStringExtra("action") ?: return
         val token = intent.getStringExtra("token") ?: return
         val row = cards.firstOrNull { it["id"] == id } ?: return
-        if (row["token"] != token || row[action] != true || action !in setOf("run", "enter", "stop", "listen")) return
+        if (action !in setOf("run", "enter", "stop", "listen")) return
+        if (row["token"] != token || row[action] != true) {
+            if (action == "run" || action == "enter") channel?.invokeMethod("actionRejected", mapOf("id" to id))
+            return
+        }
         channel?.invokeMethod("action", mapOf("id" to id, "action" to action, "token" to token))
     }
 }
