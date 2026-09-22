@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader", "setup"])
+PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader", "setup", "wsl-setup"])
 PARSER.add_argument("label", nargs="?")
 PARSER.add_argument("--serial", default="emulator-5554")
 PARSER.add_argument("--output", default="/tmp/devota-terminal-notification-evidence")
@@ -148,22 +148,26 @@ elif ARGS.mode == "tap":
     tap(ARGS.label)
 elif ARGS.mode == "expand":
     expand(ARGS.label)
-elif ARGS.mode == 'setup':
+elif ARGS.mode in ('setup', 'wsl-setup'):
     # terminal_setup_demo.dart hosts the actual SshTerminalTab, not pre-bound
     # notification cards. Exercise precisely the settings path used on phones.
     tap('SSH settings')
     tap('Connect')
     tap('Trust', wait_label('Trust SSH host?'))
     adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
-    urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/fail-discovery', method='POST')).close()
+    if ARGS.mode == 'setup':
+        urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/fail-discovery', method='POST')).close()
     tap('SSH settings')
     wait_label('Disconnect')
     tap_node(reveal('Notification macros'))
-    wait_label('Could not load terminal windows')
-    root = capture('setup-error')
-    assert any('injected setup failure' in label(n) for n in root.iter('node'))
-    urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/restore-discovery', method='POST')).close()
-    tap('Retry')
+    if ARGS.mode == 'setup':
+        wait_label('Could not load terminal windows')
+        root = capture('setup-error')
+        assert any('injected setup failure' in label(n) for n in root.iter('node'))
+        urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/restore-discovery', method='POST')).close()
+        tap('Retry')
+    else:
+        wait_label('WSL · Ubuntu-24.04 · chase')
     wait_label('Check conclusions with the home model')
     tap_node(reveal('Check conclusions with the home model'))
     tap_node(reveal('Window notification-test:1.0'))
@@ -171,14 +175,26 @@ elif ARGS.mode == 'setup':
     capture('setup-window-selected')
     tap_node(reveal('Save notification controls'))
     wait_label('SSH settings')
+    if ARGS.mode == 'wsl-setup':
+        preferences = ET.fromstring(adb('shell', 'run-as',
+            'io.github.chasekolozsy.devota.terminalsetuptest', 'cat',
+            'shared_prefs/FlutterSharedPreferences.xml'))
+        saved = next(n.text for n in preferences if n.get('name') == 'flutter.terminal_watch:fixture@127.0.0.1:22222')
+        assert json.loads(saved)['route'] == {'mode': 'wsl', 'distribution': 'Ubuntu-24.04', 'user': 'chase'}
     adb('shell', 'input', 'keyevent', 'KEYCODE_HOME')
     adb('shell', 'cmd', 'statusbar', 'expand-notifications')
     show_action(1, 'Hello fixture')
     capture('setup-notification-ready')
     assert oracle()['counts']['enterSent'] == 0
-    (OUT / 'setup-result.json').write_text(json.dumps({'passed': True, 'checks': [
-        'Real SSH settings -> notification setup', 'Visible SSH error and Retry',
-        'Window selection and Save', 'Macro button appears without running a macro']}, indent=2))
+    if ARGS.mode == 'wsl-setup':
+        tap('Hello fixture')
+        wait_file(1, 'fixture\nhello\n', timeout=30)
+        capture('wsl-macro-complete')
+    checks = ['Real SSH settings -> notification setup', 'Window selection and Save',
+        'Macro button appears without running a macro']
+    checks += ['Windows CMD -> real WSL auto-detection', 'Pinned distribution/user persisted',
+        'Background macro edits and saves isolated Vim buffer'] if ARGS.mode == 'wsl-setup' else ['Visible SSH error and Retry']
+    (OUT / 'setup-result.json').write_text(json.dumps({'passed': True, 'checks': checks}, indent=2))
     print(f'PASS: real notification setup flow; evidence: {OUT}')
 elif ARGS.mode == "reader":
     urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:22223/reading-fixture", method="POST"), timeout=5).close()

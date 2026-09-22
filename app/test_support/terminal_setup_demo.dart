@@ -14,6 +14,8 @@ Future<void> main() async {
   await prefs.setString('ssh_username', 'fixture');
   await prefs.setBool('ssh_use_private_key', false);
   await prefs.setBool('terminal_background_battery_ask', true);
+  // Each setup fixture starts unbound so auto-detection and Save are exercised.
+  await prefs.remove('terminal_watch:fixture@127.0.0.1:22222');
   const storage = FlutterSecureStorage();
   await storage.write(
     key: 'ssh_profile:127.0.0.1:22222:password',
@@ -38,6 +40,12 @@ Future<void> main() async {
                     type: TerminalMacroStepType.shell,
                     value: ":call append('\$', 'hello')",
                     delaySeconds: 0,
+                  ),
+                  TerminalMacroStep(
+                    id: 'write',
+                    type: TerminalMacroStepType.shell,
+                    value: ':w',
+                    delaySeconds: 0.3,
                   ),
                 ],
               ),

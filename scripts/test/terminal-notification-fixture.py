@@ -13,6 +13,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import paramiko
@@ -24,6 +25,7 @@ COUNTS = {"commands": 0, "enterSent": 0, "enterDropped": 0}
 DROP_COUNTDOWN = 0
 FAIL_DISCOVERY = False
 CHANNELS = []
+WINDOWS_WSL = '--windows-wsl' in sys.argv
 
 
 def tmux(*args):
@@ -33,6 +35,15 @@ def tmux(*args):
 def execute(channel, raw):
     global DROP_COUNTDOWN
     command = raw.decode()
+    script = None
+    if WINDOWS_WSL and command.startswith('wsl.exe '):
+        chunks = []
+        while True:
+            chunk = channel.recv(32768)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        script = b''.join(chunks).decode()
     if FAIL_DISCOVERY and command.startswith('tmux list-panes'):
         channel.sendall_stderr(b'tmux: command not found (injected setup failure)\n')
         channel.send_exit_status(127)
@@ -40,9 +51,13 @@ def execute(channel, raw):
         return
     # Only the test controller's tmux and paste-buffer command grammar is used.
     # SSH listener is loopback-only and accepts fixture credentials exclusively.
+    import shlex
+    counted = command
+    if script and '\nexec /bin/sh -c ' in script:
+        counted = shlex.split(script.split('\n', 1)[1])[3]
     with LOCK:
         COUNTS["commands"] += 1
-        if re.search(r"send-keys -H -t '%\d+' d$", command):
+        if re.search(r"send-keys -H -t '%\d+' d$", counted):
             if DROP_COUNTDOWN:
                 DROP_COUNTDOWN -= 1
                 if DROP_COUNTDOWN == 0:
@@ -51,10 +66,16 @@ def execute(channel, raw):
                     channel.close()
                     return
             COUNTS["enterSent"] += 1
-    import shlex
-    command = re.sub(r"\btmux(?= )", shlex.join(TMUX), command)
+    if script:
+        script = re.sub(r"\btmux(?= )", shlex.join(TMUX), script)
+    if not WINDOWS_WSL:
+        command = re.sub(r"\btmux(?= )", shlex.join(TMUX), command)
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, timeout=8)
+        if WINDOWS_WSL:
+            result = subprocess.run(['cmd.exe', '/d', '/s', '/c', command], cwd='/mnt/c',
+                input=script.encode() if script else b'', capture_output=True, timeout=20)
+        else:
+            result = subprocess.run(command, shell=True, capture_output=True, timeout=8)
         if result.returncode:
             print(json.dumps({"failure": result.returncode, "stderr": result.stderr.decode(), "command": command}), flush=True)
         if result.stdout:

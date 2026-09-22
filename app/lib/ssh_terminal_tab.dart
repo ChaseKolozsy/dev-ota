@@ -22,6 +22,7 @@ import 'terminal_submission.dart';
 import 'terminal_watch.dart';
 import 'ssh_watch_transport.dart';
 import 'terminal_watch_screen.dart';
+import 'terminal_host_route.dart';
 import 'terminal_notification_bridge.dart';
 import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
@@ -406,6 +407,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _nativeKeyboardLocked = false;
   bool _macroRunning = false;
   final _watch = TerminalWatchController();
+  TerminalHostRoute _watchRoute = const TerminalHostRoute();
   late final _notificationBridge = TerminalNotificationBridge(_watch);
   bool get _inputLocked => _macroRunning || _watch.busy;
   String? _macroRunningName;
@@ -615,6 +617,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final raw = prefs.getString(_watchPreferencesKey);
     var bindings = <TerminalWatchBinding>[];
     var quiet = 10;
+    _watchRoute = const TerminalHostRoute();
     if (raw != null) {
       try {
         final saved = jsonDecode(raw) as Map;
@@ -628,8 +631,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             .toList();
         quiet = (saved['quiet'] as int).clamp(5, 30);
         _watch.reviewEnabled = saved['review'] != false;
+        if (saved['route'] is Map) {
+          _watchRoute = TerminalHostRoute.fromJson(
+            Map<String, dynamic>.from(saved['route'] as Map),
+          );
+          _watchRoute.validate();
+        }
       } catch (_) {
         bindings = [];
+        _watchRoute = const TerminalHostRoute();
       }
     }
     // A disconnected run must unwind before replacing its binding set.
@@ -643,28 +653,52 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       sshWatchTransport(
         client,
         isCurrent: () => identical(_client, client) && _connected,
+        router: sshHostRouter(
+          client,
+          isCurrent: () => identical(_client, client) && _connected,
+          route: _watchRoute,
+        ),
       ),
     );
   }
 
   Future<void> _showNotificationControls() async {
     if (!_connected || _inputLocked) return;
+    final client = _client!;
+    // Discover draft routes without moving any already-bound notification.
+    final router = sshHostRouter(
+      client,
+      isCurrent: () => identical(_client, client) && _connected,
+      route: _watchRoute,
+    );
+    final transport = sshWatchTransport(client, router: router);
     try {
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => TerminalWatchScreen(
             watch: _watch,
-            loadPanes: _watch.availablePanes,
+            loadPanes: transport.panes,
+            hostRouter: router,
             macros: widget.notificationMacros
                 .where((m) => !m.isDeviceMacro)
                 .toList(),
             onSave: (bindings, quiet, review) async {
+              if (!identical(_client, client) || !_connected) {
+                throw StateError(
+                  'SSH disconnected; reconnect and reopen setup',
+                );
+              }
               if (!_keepAliveInBackground) {
                 await _setKeepAliveInBackground(true);
               }
               _watch.quietPeriod = Duration(seconds: quiet);
+              if (_inputLocked) {
+                throw StateError('Wait for the running macro before saving');
+              }
               _watch.reviewEnabled = review;
+              _watchRoute = router.route;
               _watch.configure(bindings, widget.notificationMacros);
+              _watch.connect(transport);
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString(
                 _watchPreferencesKey,
@@ -672,6 +706,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                   'bindings': bindings.map((b) => b.toJson()).toList(),
                   'quiet': quiet,
                   'review': review,
+                  'route': _watchRoute.toJson(),
                 }),
               );
             },

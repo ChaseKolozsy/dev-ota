@@ -12,8 +12,27 @@ notification permission so Android can display the controls.
 The setup screen opens immediately and displays progress while discovering
 windows. Discovery failures stay on that screen with the SSH diagnostic and a
 Retry button. No macro needs to run before selecting windows. Notification
-commands use separate SSH exec channels: they do not inherit a nested SSH/WSL
-session, custom tmux socket, or interactive-shell environment.
+commands use separate SSH exec channels. Automatic routing detects Windows's
+"tmux not recognized" error and enters WSL. Discovery shows **Execution host →
+WSL · distribution · user**; Save pins that exact distribution/user to this SSH
+profile. All later discovery, monitoring, history, macro/Enter actions, and
+model checks use the same route. Failed writes are never retried on another host.
+
+If your terminal uses a non-default distribution/user, tap **Execution host**,
+choose **Windows / WSL**, enter those names and tap **Find windows**. Blank names
+use Windows/WSL defaults for discovery, then resolve to explicit names on Save.
+Changes clear draft window selections but leave existing notifications alone
+until Save. **Direct Linux SSH** and **Automatic** remain available. A nested
+SSH hop, custom tmux socket, or interactive-shell environment is not inherited.
+Distribution/user names accept letters, numbers, dots, dashes and underscores;
+names containing spaces or shell metacharacters are rejected. WSL must already
+be installed for the Windows SSH account; DevOTA does not install or reconfigure it.
+
+Linux commands travel on SSH stdin to `wsl.exe --exec /bin/sh -s`, not through
+Windows shell parsing, and start in the selected Linux user's home directory.
+Model JSON gets a separate decoded stdin stream. WSL UTF-16 error output is
+decoded for the setup screen. The routing follows Microsoft's
+[WSL distribution/user command options](https://learn.microsoft.com/en-us/windows/wsl/basic-commands).
 
 Setup regression fixture (separate app, no production settings or agents):
 build `test_support/terminal_setup_demo.dart` with
@@ -25,6 +44,15 @@ This uses the real SSH settings screen, injects a discovery failure, retries,
 selects a window/macro, saves, and checks that its notification button appears
 without executing a macro. Widget tests also cover pending discovery, timeout,
 retry, and leaving the screen before discovery completes.
+
+For the Windows bridge test, launch the fixture with `--windows-wsl` and use UI
+mode `wsl-setup`. This forwards the SSH commands through real Windows CMD and
+WSL, preserving isolated Vim targets, checks the persisted route, then runs a
+tiny notification macro that appends `hello` and saves the fixture buffer.
+`cd app && dart run test_support/wsl_route_smoke.dart` additionally checks real
+CMD and PowerShell routing, Unicode/metacharacters, stdin, and home directory.
+These host-specific smoke checks require this Windows/WSL development machine;
+portable routing/widget tests run in ordinary CI. No coding agents are invoked.
 
 Each pane has a grouped notification with its macro action. Expand a pane to
 see the buttons. The SSH session and Flutter engine must remain alive;

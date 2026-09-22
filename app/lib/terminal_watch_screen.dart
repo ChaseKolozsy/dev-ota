@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'terminal_watch.dart';
 import 'terminal_macro.dart';
+import 'terminal_host_route.dart';
 
 class TerminalWatchScreen extends StatefulWidget {
   const TerminalWatchScreen({
@@ -10,11 +11,13 @@ class TerminalWatchScreen extends StatefulWidget {
     required this.loadPanes,
     required this.macros,
     required this.onSave,
+    this.hostRouter,
   });
   final TerminalWatchController watch;
   final Future<List<WatchedPane>> Function() loadPanes;
   final List<TerminalMacro> macros;
   final Future<void> Function(List<TerminalWatchBinding>, int, bool) onSave;
+  final TerminalHostRouter? hostRouter;
   @override
   State<TerminalWatchScreen> createState() => _TerminalWatchScreenState();
 }
@@ -44,7 +47,7 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
     });
     try {
       final result = await widget.loadPanes().timeout(
-        const Duration(seconds: 20),
+        const Duration(seconds: 60),
       );
       if (!mounted) return;
       setState(() => panes = result);
@@ -60,38 +63,143 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
     }
   }
 
+  Future<void> _chooseHost() async {
+    final current = widget.hostRouter!.route;
+    var mode = current.mode;
+    final distribution = TextEditingController(text: current.distribution);
+    final user = TextEditingController(text: current.user);
+    String? validation;
+    final result = await showDialog<TerminalHostRoute>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, change) => AlertDialog(
+          title: const Text('Execution host'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: mode,
+                  isExpanded: true,
+                  items: const [
+                    DropdownMenuItem(value: 'auto', child: Text('Automatic')),
+                    DropdownMenuItem(
+                      value: 'direct',
+                      child: Text('Direct Linux SSH'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'wsl',
+                      child: Text('Windows / WSL'),
+                    ),
+                  ],
+                  onChanged: (value) => change(() => mode = value!),
+                ),
+                if (mode == 'wsl') ...[
+                  TextField(
+                    controller: distribution,
+                    decoration: const InputDecoration(
+                      labelText: 'WSL distribution',
+                      hintText: 'Blank = Windows default',
+                    ),
+                  ),
+                  TextField(
+                    controller: user,
+                    decoration: const InputDecoration(
+                      labelText: 'Linux user',
+                      hintText: 'Blank = distribution default',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                const Text(
+                  'Use the same distribution and user as your terminal. Changing this clears the draft window selections; existing notifications change only when you Save.',
+                ),
+                if (validation != null) Text(validation!),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final route = TerminalHostRoute(
+                  mode: mode,
+                  distribution: distribution.text.trim(),
+                  user: user.text.trim(),
+                );
+                try {
+                  route.validate();
+                  Navigator.pop(ctx, route);
+                } catch (e) {
+                  change(() => validation = '$e');
+                }
+              },
+              child: const Text('Find windows'),
+            ),
+          ],
+        ),
+      ),
+    );
+    // Dialog TextFields finish their reverse transition before disposal.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    distribution.dispose();
+    user.dispose();
+    if (!mounted || result == null) return;
+    widget.hostRouter!.configure(result);
+    selections.clear();
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Notification macros')),
-    body: loading || loadError != null
-        ? ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              if (loading) ...[
-                const LinearProgressIndicator(),
-                const SizedBox(height: 16),
-                const Text('Finding tmux windows over SSH…'),
-              ] else ...[
-                Text(
-                  'Could not load terminal windows',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 12),
-                SelectableText(loadError!),
-                const SizedBox(height: 12),
-                const Text(
-                  'The interactive terminal and notification controls use separate SSH channels. '
-                  'Notification controls need tmux on the SSH host, under the '
-                  'same user and tmux server as your terminal windows. '
-                  'A Windows shell, another SSH hop, or a custom tmux socket '
-                  'can make those windows unavailable to this connection.',
-                ),
-                const SizedBox(height: 16),
-                FilledButton(onPressed: _load, child: const Text('Retry')),
-              ],
-            ],
-          )
-        : _controls(context),
+    body: Column(
+      children: [
+        if (widget.hostRouter != null)
+          ListTile(
+            title: const Text('Execution host'),
+            subtitle: Text(widget.hostRouter!.route.label),
+            trailing: const Icon(Icons.settings),
+            onTap: loading || saving ? null : _chooseHost,
+          ),
+        Expanded(
+          child: loading || loadError != null
+              ? ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (loading) ...[
+                      const LinearProgressIndicator(),
+                      const SizedBox(height: 16),
+                      const Text('Finding tmux windows over SSH…'),
+                    ] else ...[
+                      Text(
+                        'Could not load terminal windows',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 12),
+                      SelectableText(loadError!),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'The interactive terminal and notification controls use separate SSH channels. '
+                        'Choose Windows / WSL in Execution host if SSH lands in Windows. '
+                        'Use the same WSL distribution, Linux user and tmux server as your terminal. '
+                        'A nested SSH hop or custom tmux socket is not inherited.',
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _load,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ],
+                )
+              : _controls(context),
+        ),
+      ],
+    ),
   );
 
   Widget _controls(BuildContext context) => ListView(

@@ -1,20 +1,37 @@
 import 'dart:convert';
 import 'package:dartssh2/dartssh2.dart';
 import 'terminal_watch.dart';
+import 'terminal_host_route.dart';
+
+TerminalHostRouter sshHostRouter(
+  SSHClient client, {
+  bool Function()? isCurrent,
+  TerminalHostRoute route = const TerminalHostRoute(),
+}) => TerminalHostRouter(
+  (command, {input}) => _execute(
+    client,
+    command,
+    isCurrent: isCurrent,
+    input: input,
+    timeout: const Duration(seconds: 45),
+  ),
+  route: route,
+);
 
 TmuxWatchTransport sshWatchTransport(
   SSHClient client, {
   bool Function()? isCurrent,
-}) => TmuxWatchTransport(
-  (command) => _execute(client, command, isCurrent: isCurrent),
-  reviewer: (text) => _execute(
-    client,
-    'python3 dev-ota/server/terminal_review.py',
-    isCurrent: isCurrent,
-    input: jsonEncode({'text': text}),
-    timeout: const Duration(seconds: 45),
-  ),
-);
+  TerminalHostRouter? router,
+}) {
+  final host = router ?? sshHostRouter(client, isCurrent: isCurrent);
+  return TmuxWatchTransport(
+    (command) => host.execute(command),
+    reviewer: (text) => host.execute(
+      'python3 dev-ota/server/terminal_review.py',
+      input: jsonEncode({'text': text}),
+    ),
+  );
+}
 
 Future<String> _execute(
   SSHClient client,
@@ -53,13 +70,15 @@ Future<String> _execute(
       final bytes = await output;
       final errorBytes = await errors;
       if (session.exitCode != 0) {
-        final detail = utf8.decode(errorBytes, allowMalformed: true).trim();
+        final detail = decodeHostOutput(
+          errorBytes.isEmpty ? bytes.take(2048).toList() : errorBytes,
+        ).trim();
         throw StateError(
           'SSH command failed (exit ${session.exitCode ?? 'unknown'}).'
           '${detail.isEmpty ? ' Pane unavailable or tmux command failed.' : '\n$detail'}',
         );
       }
-      return utf8.decode(bytes, allowMalformed: true);
+      return decodeHostOutput(bytes);
     })().timeout(timeout);
   } finally {
     finished = true;

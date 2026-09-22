@@ -61,7 +61,7 @@ void main() {
   testWidgets('discovery timeout stays on setup with Retry', (tester) async {
     final pending = Completer<List<WatchedPane>>();
     await tester.pumpWidget(screen(() => pending.future));
-    await tester.pump(const Duration(seconds: 21));
+    await tester.pump(const Duration(seconds: 61));
     await tester.pumpAndSettle();
     expect(find.textContaining('timed out'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
