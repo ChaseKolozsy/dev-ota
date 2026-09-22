@@ -1,13 +1,21 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'terminal_watch.dart';
+import 'terminal_conclusion.dart';
 
 class TerminalNotificationBridge {
   TerminalNotificationBridge(this.watch) {
     _channel.setMethodCallHandler((call) async {
+      if (call.method == 'readerAction') {
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        unawaited(_readerAction(args['action'] as String));
+        return;
+      }
       if (call.method != 'action') return;
       final args = Map<String, dynamic>.from(call.arguments as Map);
-      if (args['action'] == 'stop') {
+      if (args['action'] == 'listen') {
+        unawaited(_listen(args['id'] as String, args['token'] as String));
+      } else if (args['action'] == 'stop') {
         if (watch.runningPane == args['id']) watch.stop();
       } else {
         unawaited(
@@ -24,14 +32,132 @@ class TerminalNotificationBridge {
   static const _channel = MethodChannel('devota/terminal_notifications');
   final TerminalWatchController watch;
   bool enabled = true;
+  ConclusionReading? _reading;
+  String? _readingToken;
+  int _historyLines = 120;
+  int _request = 0;
+  String? _readerError;
+  String? _errorPane;
   void publish() {
+    final reading = _reading;
+    if (reading != null) {
+      final bindings = watch.bindings.where((b) => b.pane.id == reading.paneId);
+      if (!enabled ||
+          bindings.isEmpty ||
+          watch.token(bindings.first) != _readingToken ||
+          watch.observations[reading.paneId]?.error != null ||
+          watch.runningPane == reading.paneId) {
+        _stopReading();
+      }
+    }
     unawaited(_publish());
+  }
+
+  void _stopReading() {
+    _request++;
+    _reading = null;
+    _readingToken = null;
+    unawaited(
+      _channel.invokeMethod<void>('stopReading').catchError((Object _) {}),
+    );
+  }
+
+  Future<void> _listen(String paneId, String token) async {
+    _stopReading();
+    final request = _request;
+    _readerError = null;
+    _errorPane = paneId;
+    try {
+      final source = await watch.conclusion(paneId, token);
+      if (request != _request || !enabled) return;
+      final binding = watch.bindings.firstWhere((b) => b.pane.id == paneId);
+      _reading = ConclusionReading(paneId, binding.pane.label, source);
+      _readingToken = token;
+      _historyLines = 120;
+      await _speak();
+    } catch (_) {
+      if (request == _request) {
+        _readerError =
+            'Reading unavailable: terminal changed or offline voice missing.';
+        publish();
+      }
+    }
+  }
+
+  Future<void> _speak() async {
+    final reading = _reading;
+    if (reading == null) return;
+    await _channel.invokeMethod<void>('speak', {
+      'text': reading.text,
+      'title': reading.title,
+      'earlier': reading.hasEarlier || _historyLines < 800,
+    });
+  }
+
+  Future<void> _readerAction(String action) async {
+    if (action == 'stopReading' || action == 'interrupted') {
+      _stopReading();
+      return;
+    }
+    final reading = _reading;
+    final token = _readingToken;
+    if (reading == null || token == null) return;
+    final request = _request;
+    try {
+      if (action == 'earlier') {
+        if (reading.hasEarlier) {
+          reading.earlier();
+        } else if (_historyLines < 800) {
+          final nextLines = (_historyLines + 120).clamp(120, 800);
+          final source = await watch.conclusion(
+            reading.paneId,
+            token,
+            lines: nextLines,
+          );
+          if (request != _request) return;
+          if (!source.endsWith(reading.source)) {
+            throw StateError('Terminal history changed');
+          }
+          _historyLines = source == reading.source ? 800 : nextLines;
+          final expanded = ConclusionReading(
+            reading.paneId,
+            reading.title,
+            source,
+          );
+          while (expanded.hasEarlier &&
+              expanded.text.length <= reading.text.length) {
+            expanded.earlier();
+          }
+          _reading = expanded;
+        }
+      } else if (action != 'replay') {
+        return;
+      }
+      await _speak();
+    } catch (_) {
+      if (request == _request) {
+        _readerError = 'Could not read earlier text or play the offline voice.';
+        _errorPane = reading.paneId;
+        _stopReading();
+        publish();
+      }
+    }
   }
 
   Future<void> _publish() async {
     try {
       await _channel.invokeMethod<void>('update', {
-        'cards': enabled ? watch.cards : [],
+        'cards': enabled
+            ? watch.cards
+                  .map(
+                    (card) => {
+                      ...card,
+                      if (_readerError != null && card['id'] == _errorPane)
+                        'status': '${card['status']} · $_readerError',
+                    },
+                  )
+                  .toList()
+            : [],
       });
     } on MissingPluginException catch (_) {
       // Desktop terminals have no Android notification surface.
@@ -42,6 +168,7 @@ class TerminalNotificationBridge {
 
   void dispose() {
     enabled = false;
+    _stopReading();
     watch.removeListener(publish);
     _channel.setMethodCallHandler(null);
     publish();

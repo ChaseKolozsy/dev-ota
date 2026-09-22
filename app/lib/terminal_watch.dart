@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'terminal_macro.dart';
 import 'terminal_submission.dart';
+import 'terminal_conclusion.dart';
 
 typedef TerminalCommand = Future<String> Function(String command);
 String shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
@@ -50,8 +51,9 @@ class TerminalWatchBinding {
 /// No screen/widget dependency: captures and keystrokes use separate SSH exec
 /// channels, never the currently selected interactive terminal window.
 class TmuxWatchTransport {
-  TmuxWatchTransport(this.command);
+  TmuxWatchTransport(this.command, {this.reviewer});
   final TerminalCommand command;
+  final Future<String> Function(String text)? reviewer;
   static const identityFormat = '#{pid}:#{session_created}:#{pane_pid}';
 
   Future<List<WatchedPane>> panes() async {
@@ -82,6 +84,10 @@ class TmuxWatchTransport {
   Future<String> capture(WatchedPane pane) => command(
     '${_guard(pane)}'
     'tmux capture-pane -p -e -N -t ${shellQuote(pane.id)}',
+  );
+
+  Future<String> history(WatchedPane pane, {int lines = 120}) => command(
+    '${_guard(pane)}tmux capture-pane -p -J -S -${lines.clamp(20, 800)} -t ${shellQuote(pane.id)}',
   );
 
   Future<void> paste(WatchedPane pane, String text) async {
@@ -119,6 +125,8 @@ class PaneObservation {
   String? runError;
   bool submissionUnconfirmed = false;
   int revision = 0;
+  ConclusionVerdict? verdict;
+  int? reviewedRevision;
 
   void observe(String value, DateTime now, Duration freshness) {
     if (content != value ||
@@ -127,6 +135,7 @@ class PaneObservation {
         now.difference(observedAt!) > freshness) {
       changedAt = now;
       revision++;
+      verdict = null;
     }
     content = value;
     observedAt = now;
@@ -162,6 +171,8 @@ class TerminalWatchController extends ChangeNotifier {
   bool _busy = false;
   bool get busy => _busy;
   bool externalBusy = false;
+  bool reviewEnabled = true;
+  bool _reviewing = false;
   String? runningPane;
   String? progress;
   bool _stop = false;
@@ -255,6 +266,7 @@ class TerminalWatchController extends ChangeNotifier {
       }),
     );
     _notify();
+    unawaited(_reviewNext());
   }
 
   bool canAct(TerminalWatchBinding binding) =>
@@ -269,7 +281,7 @@ class TerminalWatchController extends ChangeNotifier {
     final state = observations[binding.pane.id];
     final settled = state?.settled(now(), quietPeriod, freshness) ?? false;
     final macro = macroFor(binding);
-    final status = runningPane == binding.pane.id
+    var status = runningPane == binding.pane.id
         ? progress ?? 'Running macro'
         : macro == null
         ? 'Macro unavailable'
@@ -285,6 +297,12 @@ class TerminalWatchController extends ChangeNotifier {
                   : state.submissionUnconfirmed
                   ? 'Changing · submission unconfirmed'
                   : 'Changing');
+    if (reviewEnabled &&
+        settled &&
+        state?.verdict != null &&
+        runningPane != binding.pane.id) {
+      status = '${state!.verdict!.label} · ${state.verdict!.reason}';
+    }
     return <String, Object>{
       'id': binding.pane.id,
       'title': binding.pane.label,
@@ -294,8 +312,96 @@ class TerminalWatchController extends ChangeNotifier {
       'run': canAct(binding),
       'enter': canAct(binding) && (state?.submissionUnconfirmed ?? false),
       'stop': runningPane == binding.pane.id && busy,
+      'listen': canAct(binding),
     };
   }).toList();
+
+  Future<String> conclusion(
+    String paneId,
+    String expectedToken, {
+    int lines = 120,
+  }) async {
+    final binding = bindings.firstWhere((b) => b.pane.id == paneId);
+    if (token(binding) != expectedToken || !canAct(binding)) {
+      throw StateError('Terminal changed');
+    }
+    final generation = _generation;
+    final transport = _transport!;
+    final before = await transport.capture(binding.pane);
+    final state = observations[paneId]!;
+    if (before != state.content) throw StateError('Terminal changed');
+    final raw = await transport.history(binding.pane, lines: lines);
+    final after = await transport.capture(binding.pane);
+    if (_disposed ||
+        _generation != generation ||
+        token(binding) != expectedToken ||
+        after != before) {
+      throw StateError('Terminal changed');
+    }
+    final clean = cleanTerminalConclusion(raw);
+    if (clean.length <= 24000) return clean;
+    final tail = clean.substring(clean.length - 24000);
+    final boundary = tail.indexOf('\n');
+    return boundary >= 0 ? tail.substring(boundary + 1) : tail;
+  }
+
+  Future<void> _reviewNext() async {
+    final transport = _transport;
+    if (_disposed ||
+        _reviewing ||
+        !reviewEnabled ||
+        busy ||
+        externalBusy ||
+        transport == null ||
+        transport.reviewer == null) {
+      return;
+    }
+    for (final binding in bindings) {
+      final state = observations[binding.pane.id];
+      if (state == null ||
+          !canAct(binding) ||
+          state.reviewedRevision == state.revision) {
+        continue;
+      }
+      final generation = _generation;
+      final revision = state.revision;
+      state.reviewedRevision = revision;
+      _reviewing = true;
+      try {
+        var source = await conclusion(binding.pane.id, token(binding));
+        if (source.length > 10000) {
+          source = source.substring(source.length - 10000);
+          final boundary = source.indexOf('\n');
+          if (boundary >= 0) source = source.substring(boundary + 1);
+        }
+        final result = ConclusionVerdict.parse(
+          await transport.reviewer!(source),
+          source,
+        );
+        if (!_disposed &&
+            generation == _generation &&
+            state.revision == revision &&
+            reviewEnabled) {
+          state.verdict = result;
+        }
+      } catch (_) {
+        if (!_disposed &&
+            generation == _generation &&
+            state.revision == revision &&
+            reviewEnabled) {
+          state.verdict = const ConclusionVerdict(
+            'uncertain',
+            'Home model unavailable or terminal changed.',
+            '',
+          );
+        }
+      } finally {
+        _reviewing = false;
+        _notify();
+      }
+      return; // One bounded job at a time; the next poll considers other panes.
+    }
+  }
 
   void stop() {
     _stop = true;
@@ -316,6 +422,7 @@ class TerminalWatchController extends ChangeNotifier {
     _busy = true; // Lock synchronously, before preflight network operations.
     _stop = false;
     state.runError = null;
+    state.verdict = null;
     runningPane = paneId;
     progress = 'Checking terminal';
     _notify();

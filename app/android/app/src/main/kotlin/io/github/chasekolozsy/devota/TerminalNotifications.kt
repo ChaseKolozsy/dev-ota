@@ -27,8 +27,12 @@ internal object TerminalNotifications {
     fun attach(context: Context, methodChannel: MethodChannel) {
         appContext = context.applicationContext
         channel = methodChannel
+        TerminalSpeech.attach(context, methodChannel)
         methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "speak" -> TerminalSpeech.speak(call.argument<String>("text") ?: "",
+                    call.argument<String>("title") ?: "Terminal", call.argument<Boolean>("earlier") == true, result)
+                "stopReading" -> { TerminalSpeech.stop(); result.success(null) }
                 "update" -> {
                     val rows = call.argument<List<Map<String, Any?>>>("cards") ?: emptyList()
                     update(context.applicationContext, rows.take(3))
@@ -40,6 +44,7 @@ internal object TerminalNotifications {
     }
 
     fun detach() {
+        TerminalSpeech.detach()
         appContext?.let { clear(it) }
         channel?.setMethodCallHandler(null)
         channel = null
@@ -48,6 +53,7 @@ internal object TerminalNotifications {
     private fun notificationId(id: String) = 30000 + id.removePrefix("%").toInt()
 
     fun clear(context: Context) {
+        TerminalSpeech.stop()
         expiry?.let { handler.removeCallbacks(it) }
         expiry = null
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -69,7 +75,8 @@ internal object TerminalNotifications {
         expiry?.let { handler.removeCallbacks(it) }
         expiry = Runnable {
             cards = cards.map { it + mapOf("status" to "Disconnected / status expired",
-                "run" to false, "enter" to false, "stop" to false) }
+                "run" to false, "enter" to false, "stop" to false, "listen" to false) }
+            TerminalSpeech.stop()
             cards.forEach { render(context, it) }
         }.also { handler.postDelayed(it, 12000) }
     }
@@ -91,7 +98,7 @@ internal object TerminalNotifications {
         if (launch != null) builder.setContentIntent(PendingIntent.getActivity(context,
             notificationId(id), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
         for ((action, label) in listOf("run" to (row["macro"] as? String ?: "Run macro"),
-                "enter" to "Send Enter", "stop" to "Stop")) {
+                "enter" to "Send Enter", "stop" to "Stop", "listen" to "Listen")) {
             if (row[action] != true) continue
             val intent = Intent(context, TerminalActionReceiver::class.java)
                 .setData(Uri.parse("devota-terminal://action/${id.removePrefix("%")}/$action?token=${Uri.encode(row["token"] as? String)}"))
@@ -110,13 +117,14 @@ internal object TerminalNotifications {
         val action = intent.getStringExtra("action") ?: return
         val token = intent.getStringExtra("token") ?: return
         val row = cards.firstOrNull { it["id"] == id } ?: return
-        if (row["token"] != token || row[action] != true || action !in setOf("run", "enter", "stop")) return
+        if (row["token"] != token || row[action] != true || action !in setOf("run", "enter", "stop", "listen")) return
         channel?.invokeMethod("action", mapOf("id" to id, "action" to action, "token" to token))
     }
 }
 
 class TerminalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        TerminalNotifications.dispatch(intent)
+        if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
+        else TerminalNotifications.dispatch(intent)
     }
 }

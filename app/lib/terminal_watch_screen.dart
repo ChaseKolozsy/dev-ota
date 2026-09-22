@@ -13,7 +13,7 @@ class TerminalWatchScreen extends StatefulWidget {
   final TerminalWatchController watch;
   final List<WatchedPane> panes;
   final List<TerminalMacro> macros;
-  final Future<void> Function(List<TerminalWatchBinding>, int) onSave;
+  final Future<void> Function(List<TerminalWatchBinding>, int, bool) onSave;
   @override
   State<TerminalWatchScreen> createState() => _TerminalWatchScreenState();
 }
@@ -23,6 +23,7 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
     for (final b in widget.watch.bindings) b.pane.id: b.macroId,
   };
   late int quiet = widget.watch.quietPeriod.inSeconds;
+  late bool review = widget.watch.reviewEnabled;
   String? error;
   bool saving = false;
   @override
@@ -45,6 +46,17 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
         const Text(
           'Use Command, Key and Wait steps. A tmux step selecting the '
           'same window is supported; other window-switching steps and Ctrl-B are not.',
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Check conclusions with the home model'),
+          subtitle: const Text(
+            'Reported success, needs attention, or uncertain. '
+            'Checks the final message, not the underlying work. Listen uses Android speech.',
+          ),
+          value: review,
+          onChanged: (value) => setState(() => review = value),
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<int>(
@@ -123,6 +135,7 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
                           )
                           .toList(),
                       quiet,
+                      review,
                     );
                     if (context.mounted) Navigator.pop(context);
                   } catch (e) {

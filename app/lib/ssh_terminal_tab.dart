@@ -627,6 +627,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             )
             .toList();
         quiet = (saved['quiet'] as int).clamp(5, 30);
+        _watch.reviewEnabled = saved['review'] != false;
       } catch (_) {
         bindings = [];
       }
@@ -659,11 +660,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
             macros: widget.notificationMacros
                 .where((m) => !m.isDeviceMacro)
                 .toList(),
-            onSave: (bindings, quiet) async {
+            onSave: (bindings, quiet, review) async {
               if (!_keepAliveInBackground) {
                 await _setKeepAliveInBackground(true);
               }
               _watch.quietPeriod = Duration(seconds: quiet);
+              _watch.reviewEnabled = review;
               _watch.configure(bindings, widget.notificationMacros);
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString(
@@ -671,6 +673,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 jsonEncode({
                   'bindings': bindings.map((b) => b.toJson()).toList(),
                   'quiet': quiet,
+                  'review': review,
                 }),
               );
             },

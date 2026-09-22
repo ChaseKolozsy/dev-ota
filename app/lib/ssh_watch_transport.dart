@@ -5,7 +5,24 @@ import 'terminal_watch.dart';
 TmuxWatchTransport sshWatchTransport(
   SSHClient client, {
   bool Function()? isCurrent,
-}) => TmuxWatchTransport((command) async {
+}) => TmuxWatchTransport(
+  (command) => _execute(client, command, isCurrent: isCurrent),
+  reviewer: (text) => _execute(
+    client,
+    'python3 dev-ota/server/terminal_review.py',
+    isCurrent: isCurrent,
+    input: jsonEncode({'text': text}),
+    timeout: const Duration(seconds: 45),
+  ),
+);
+
+Future<String> _execute(
+  SSHClient client,
+  String command, {
+  bool Function()? isCurrent,
+  String? input,
+  Duration timeout = const Duration(seconds: 6),
+}) async {
   if (isCurrent != null && !isCurrent()) throw StateError('SSH disconnected');
   SSHSession? operation;
   var finished = false;
@@ -16,6 +33,10 @@ TmuxWatchTransport sshWatchTransport(
       if (finished) {
         session.close();
         throw StateError('SSH operation expired');
+      }
+      if (input != null) {
+        session.write(utf8.encode(input));
+        session.stdin.close();
       }
       final output = session.stdout.fold<List<int>>(
         [],
@@ -29,9 +50,9 @@ TmuxWatchTransport sshWatchTransport(
         throw StateError('Pane unavailable or tmux command failed');
       }
       return utf8.decode(bytes, allowMalformed: true);
-    })().timeout(const Duration(seconds: 6));
+    })().timeout(timeout);
   } finally {
     finished = true;
     operation?.close();
   }
-});
+}
