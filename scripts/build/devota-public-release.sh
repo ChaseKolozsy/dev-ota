@@ -13,7 +13,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST_DIR="$ROOT_DIR/app/dist/public"
 APK_UNIVERSAL="$ROOT_DIR/app/build/app/outputs/flutter-apk/app-release.apk"
-ARM64_VERSION_OFFSET=2000
+# Universal APKs use Flutter's build number unchanged. Only --split-per-abi
+# ARM64 APKs receive the +2000 offset; applying it here broke every CI release.
+UNIVERSAL_VERSION_OFFSET=0
 MIN_SAFE_ARM64_VERSION_CODE=2026064402
 
 read_existing_arm64_version_code() {
@@ -25,13 +27,13 @@ read_existing_arm64_version_code() {
 # Also check legacy debug badging so versionCode keeps moving forward even if
 # only debug was built before.
 read_existing_any_version_code() {
-  if badging="$(read_existing_arm64_version_code 2>/dev/null)"; then
-    printf '%s\n' "$badging"
-    return 0
-  fi
-  local legacy="$DIST_DIR/devota-arm64-debug.badging.txt"
-  [[ -f "$legacy" ]] || return 1
-  sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$legacy" | head -1
+  local badging code highest=0
+  for badging in "$DIST_DIR/devota-universal-release.badging.txt" "$DIST_DIR/devota-arm64-debug.badging.txt"; do
+    [[ -f "$badging" ]] || continue
+    code="$(sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$badging" | head -1)"
+    if [[ "$code" =~ ^[0-9]+$ ]] && (( code > highest )); then highest="$code"; fi
+  done
+  printf '%s\n' "$highest"
 }
 
 required_min_arm64_version_code() {
@@ -48,8 +50,8 @@ default_build_number() {
   local min_version_code="$1"
   local candidate
   candidate="$(date +%Y%m%d)01"
-  if (( candidate + ARM64_VERSION_OFFSET <= min_version_code )); then
-    candidate=$((min_version_code - ARM64_VERSION_OFFSET + 1))
+  if (( candidate + UNIVERSAL_VERSION_OFFSET <= min_version_code )); then
+    candidate=$((min_version_code - UNIVERSAL_VERSION_OFFSET + 1))
   fi
   printf '%s\n' "$candidate"
 }
@@ -66,7 +68,7 @@ if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-EXPECTED_ARM64_VERSION_CODE=$((BUILD_NUMBER + ARM64_VERSION_OFFSET))
+EXPECTED_ARM64_VERSION_CODE=$((BUILD_NUMBER + UNIVERSAL_VERSION_OFFSET))
 if (( EXPECTED_ARM64_VERSION_CODE <= MIN_ARM64_VERSION_CODE )) && [[ "${DEVOTA_ALLOW_LOWER_BUILD_NUMBER:-}" != "1" ]]; then
   cat >&2 <<EOF
 Refusing to stage DevOTA build-number $BUILD_NUMBER.

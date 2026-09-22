@@ -16,10 +16,14 @@ read_existing_arm64_version_code() {
 required_min_arm64_version_code() {
   local min_version_code="$MIN_SAFE_ARM64_VERSION_CODE"
   local existing_version_code
-  existing_version_code="$(read_existing_arm64_version_code || true)"
-  if [[ "$existing_version_code" =~ ^[0-9]+$ ]] && (( existing_version_code > min_version_code )); then
-    min_version_code="$existing_version_code"
-  fi
+  local badging
+  for badging in "$DIST_DIR/devota-arm64-debug.badging.txt" "$DIST_DIR/devota-universal-release.badging.txt"; do
+    [[ -f "$badging" ]] || continue
+    existing_version_code="$(sed -n "s/.*versionCode='\([0-9][0-9]*\)'.*/\1/p" "$badging" | head -1)"
+    if [[ "$existing_version_code" =~ ^[0-9]+$ ]] && (( existing_version_code > min_version_code )); then
+      min_version_code="$existing_version_code"
+    fi
+  done
   printf '%s\n' "$min_version_code"
 }
 
@@ -56,7 +60,8 @@ EOF
 fi
 
 mkdir -p "$DIST_DIR"
-rm -f "$DIST_DIR"/*.apk "$DIST_DIR"/*.sha256 "$DIST_DIR"/*.badging.txt
+# Preserve the other build type, including its downgrade-protection metadata.
+rm -f "$DIST_DIR/devota-arm64-debug.apk" "$DIST_DIR/devota-arm64-debug.apk.sha256" "$DIST_DIR/devota-arm64-debug.badging.txt"
 
 echo "Using DevOTA build-number $BUILD_NUMBER (expected ARM64 versionCode $EXPECTED_ARM64_VERSION_CODE)."
 

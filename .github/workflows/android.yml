@@ -40,6 +40,12 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Test build version progression
+        run: python3 ../scripts/test/test_build_versions.py
+
+      - name: Test terminal review validation
+        run: python3 -m unittest discover -s ../server -p test_terminal_review.py
+
       - name: Build public ARM64 DevOTA APK (debug)
         run: ../scripts/build/devota-public-debug.sh
 
