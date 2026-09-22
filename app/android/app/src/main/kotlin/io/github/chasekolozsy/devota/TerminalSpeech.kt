@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -17,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import io.flutter.plugin.common.MethodChannel
 import java.util.Locale
+import androidx.core.content.ContextCompat
 
 /** Phone TTS only. Terminal text stays in memory and is never logged. */
 internal object TerminalSpeech {
@@ -26,6 +29,7 @@ internal object TerminalSpeech {
     private var engine: TextToSpeech? = null
     private var ready = false
     private var initializing = false
+    private var engineGeneration = 0
     private var pending: (() -> Unit)? = null
     private var pendingResult: MethodChannel.Result? = null
     private var focus: AudioFocusRequest? = null
@@ -33,6 +37,7 @@ internal object TerminalSpeech {
     private var title = "Terminal conclusion"
     private var earlier = false
     private var active = false
+    private var routeReceiver: BroadcastReceiver? = null
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
@@ -45,10 +50,20 @@ internal object TerminalSpeech {
     fun attach(ctx: Context, bridge: MethodChannel) {
         context = ctx.applicationContext
         channel = bridge
+        if (routeReceiver == null) {
+            routeReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    stop()
+                    channel?.invokeMethod("readerAction", mapOf("action" to "interrupted"))
+                }
+            }
+            ContextCompat.registerReceiver(ctx.applicationContext, routeReceiver,
+                IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), ContextCompat.RECEIVER_NOT_EXPORTED)
+        }
     }
 
     fun speak(text: String, label: String, hasEarlier: Boolean, result: MethodChannel.Result) {
-        if (text.isBlank() || text.length > 24000) {
+        if (text.isBlank() || text.length > 26000) {
             result.error("speech", "No readable text or excerpt too long", null); return
         }
         val ctx = context ?: run { result.error("speech", "Speech unavailable", null); return }
@@ -74,7 +89,9 @@ internal object TerminalSpeech {
                     val chunks = splitText(text)
                     active = true
                     tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(id: String?) {}
+                        override fun onStart(id: String?) {
+                            handler.post { if (current == epoch) show("Speaking conclusion") }
+                        }
                         override fun onDone(id: String?) {
                             if (id != "$current:${chunks.lastIndex}") return
                             handler.post { if (current == epoch) {
@@ -102,7 +119,10 @@ internal object TerminalSpeech {
         pending = play
         if (!initializing) {
             initializing = true
+            engine?.shutdown()
+            val generation = ++engineGeneration
             engine = TextToSpeech(ctx) { status -> handler.post {
+                if (generation != engineGeneration) return@post
                 initializing = false
                 ready = status == TextToSpeech.SUCCESS
                 val callback = pending
@@ -165,6 +185,10 @@ internal object TerminalSpeech {
     }
 
     fun detach() {
+        engineGeneration++
+        initializing = false
+        routeReceiver?.let { context?.unregisterReceiver(it) }
+        routeReceiver = null
         stop(); engine?.shutdown(); engine = null; ready = false; channel = null; context = null
     }
 

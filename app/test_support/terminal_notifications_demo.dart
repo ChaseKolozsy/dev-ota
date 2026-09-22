@@ -27,6 +27,7 @@ class _DemoState extends State<Demo> {
   @override
   void initState() {
     super.initState();
+    watch.reviewEnabled = false; // Live model is tested separately on synthetic prose.
     bridge.publish();
     watch.addListener(_update);
   }

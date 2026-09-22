@@ -113,6 +113,14 @@ class Oracle(BaseHTTPRequestHandler):
         elif self.path == "/disconnect":
             for channel in list(CHANNELS):
                 channel.close()
+        elif self.path == "/reading-fixture":
+            pane = tmux('list-panes', '-a', '-F', '#{pane_id}').splitlines()[0]
+            tmux('send-keys', '-t', pane, '-l', ':set nomore')
+            tmux('send-keys', '-t', pane, 'Enter')
+            # Real terminal history, not an agent invocation. Enough paragraphs
+            # to exercise starting near the end and moving the reading cursor.
+            tmux('send-keys', '-t', pane, '-l', ':for i in range(1, 40) | echo "Paragraph " . i . ". The synthetic check is complete. All sample checks passed. This is a read aloud fixture." | endfor')
+            tmux('send-keys', '-t', pane, 'Enter')
         else:
             self.send_response(404)
             self.end_headers()

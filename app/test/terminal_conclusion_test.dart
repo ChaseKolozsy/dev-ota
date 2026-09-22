@@ -5,6 +5,17 @@ import 'package:devota/terminal_macro.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('a new submission cannot reuse an unchanged old conclusion', () {
+    final state = PaneObservation();
+    final time = DateTime(2026);
+    state.observe('Previous job complete.', time, const Duration(seconds: 8));
+    state.submittedScreen = state.content;
+    state.awaitingOutput = true;
+    state.observe('Previous job complete.', time, const Duration(seconds: 8));
+    expect(state.awaitingOutput, isTrue);
+    state.observe('New job is working.', time, const Duration(seconds: 8));
+    expect(state.awaitingOutput, isFalse);
+  });
   test(
     'cleanup removes terminal debris without losing failed checks or negation',
     () {

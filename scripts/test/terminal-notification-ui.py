@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify"])
+PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader"])
 PARSER.add_argument("label", nargs="?")
 PARSER.add_argument("--serial", default="emulator-5554")
 PARSER.add_argument("--output", default="/tmp/devota-terminal-notification-evidence")
@@ -124,6 +124,36 @@ elif ARGS.mode == "tap":
     tap(ARGS.label)
 elif ARGS.mode == "expand":
     expand(ARGS.label)
+elif ARGS.mode == "reader":
+    urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:22223/reading-fixture", method="POST"), timeout=5).close()
+    adb("shell", "input", "keyevent", "KEYCODE_HOME")
+    adb("shell", "cmd", "statusbar", "expand-notifications")
+    tap("Listen", show_action(1, "Listen"))
+    def speaking():
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            root = tree()
+            if any(label(n) == 'Speaking conclusion' for n in root.iter('node')):
+                return root
+            time.sleep(0.5)
+        raise AssertionError('Android TTS did not report starting playback')
+    speaking()
+    capture('reader-speaking')
+    tap('Earlier')
+    speaking()
+    capture('reader-earlier')
+    tap('Replay')
+    speaking()
+    tap('Stop')
+    root = capture('reader-stopped')
+    assert not any(label(n).startswith('Listen ·') for n in root.iter('node'))
+    resumed = [line for line in adb('shell', 'dumpsys', 'activity', 'activities').splitlines() if 'ResumedActivity' in line]
+    assert resumed and all('terminaltest' not in line for line in resumed), resumed
+    (OUT / 'reader-result.json').write_text(json.dumps({'passed': True, 'checks': [
+        'Offline Android TTS onStart callback', 'Earlier action restarts playback',
+        'Replay action', 'Stop removes playback controls', 'App remains backgrounded'],
+        'limits': 'Engine callbacks and UI verified; no subjective listening or physical phone test.'}, indent=2))
+    print(f'PASS: reader notification controls; evidence: {OUT}')
 else:
     assert adb("shell", "getprop", "ro.build.version.sdk").strip() == "36"
     assert "1080x2436" in adb("shell", "wm", "size")

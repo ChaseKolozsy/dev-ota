@@ -1,5 +1,9 @@
 # Terminal notification controls
 
+Read-aloud and home-model conclusion assessment are also available; see
+[terminal conclusions](terminal-conclusions.md) for Listen/Earlier controls,
+per-window verdicts, setup, and limits.
+
 Connect SSH, open **Terminal → SSH settings → Notification macros**, and bind
 up to three tmux panes to saved terminal macros. Set a quiet period of 5, 10,
 15, or 30 seconds. Saving enables the existing background SSH service. Grant

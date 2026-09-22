@@ -127,8 +127,11 @@ class PaneObservation {
   int revision = 0;
   ConclusionVerdict? verdict;
   int? reviewedRevision;
+  String? submittedScreen;
+  bool awaitingOutput = false;
 
   void observe(String value, DateTime now, Duration freshness) {
+    if (awaitingOutput && value != submittedScreen) awaitingOutput = false;
     if (content != value ||
         observedAt == null ||
         error != null ||
@@ -360,6 +363,7 @@ class TerminalWatchController extends ChangeNotifier {
       final state = observations[binding.pane.id];
       if (state == null ||
           !canAct(binding) ||
+          state.awaitingOutput ||
           state.reviewedRevision == state.revision) {
         continue;
       }
@@ -381,6 +385,8 @@ class TerminalWatchController extends ChangeNotifier {
         if (!_disposed &&
             generation == _generation &&
             state.revision == revision &&
+            !busy &&
+            !externalBusy &&
             reviewEnabled) {
           state.verdict = result;
         }
@@ -432,6 +438,8 @@ class TerminalWatchController extends ChangeNotifier {
       state.observe(before, now(), freshness);
       if (!state.settled(now(), quietPeriod, freshness)) return;
       state.revision++;
+      state.submittedScreen = before;
+      state.awaitingOutput = true;
       if (action == 'enter') {
         await transport.key(binding.pane, 'enter');
         _checkRun(generation);
@@ -490,6 +498,7 @@ class TerminalWatchController extends ChangeNotifier {
     } finally {
       state.changedAt = now();
       state.revision++;
+      state.verdict = null;
       _busy = false;
       runningPane = null;
       progress = null;
