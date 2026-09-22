@@ -35,20 +35,34 @@ String speakableConclusion(String text) => text
     .trim();
 
 class ConclusionVerdict {
-  const ConclusionVerdict(this.status, this.reason, this.evidence);
+  const ConclusionVerdict(
+    this.status,
+    this.reason,
+    this.evidence, {
+    this.retryable = false,
+  });
   final String status;
   final String reason;
   final String evidence;
+  final bool retryable;
+  static const unavailable = ConclusionVerdict(
+    'uncertain',
+    'Completion checker unavailable or busy.',
+    '',
+    retryable: true,
+  );
   static const unknown = ConclusionVerdict(
     'uncertain',
     'Could not establish completion.',
     '',
   );
-  String get label => switch (status) {
-    'reported_success' => '✓ Reported success',
-    'needs_attention' => '⚠ Needs attention',
-    _ => '? Uncertain',
-  };
+  String get label => retryable
+      ? '⚠ Check unavailable'
+      : switch (status) {
+          'reported_success' => '✓ Reported success',
+          'needs_attention' => '⚠ Needs attention',
+          _ => '? Outcome unknown',
+        };
   static ConclusionVerdict parse(String raw, String source) {
     try {
       final map = jsonDecode(raw) as Map;
@@ -65,15 +79,19 @@ class ConclusionVerdict {
           reason.length > 180 ||
           evidence is! String ||
           evidence.length > 300) {
-        return unknown;
+        return unavailable;
       }
       if (status != 'uncertain' &&
           (evidence.trim().isEmpty || !source.contains(evidence))) {
-        return unknown;
+        return unavailable;
+      }
+      // A retry flag can never manufacture a positive or negative verdict.
+      if (map['retryable'] == true) {
+        return ConclusionVerdict('uncertain', reason, '', retryable: true);
       }
       return ConclusionVerdict(status as String, reason, evidence);
     } catch (_) {
-      return unknown;
+      return unavailable;
     }
   }
 }

@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "panel", "reader", "setup", "wsl-setup"])
+PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "panel", "review", "reader", "setup", "wsl-setup"])
 PARSER.add_argument("label", nargs="?")
 PARSER.add_argument("--serial", default="emulator-5554")
 PARSER.add_argument("--output", default="/tmp/devota-terminal-notification-evidence")
@@ -55,13 +55,15 @@ def tap(text, root=None):
     tap_node(matches[0])
 
 
-def expand(text, only_collapse=False):
+def expand(text, only_collapse=False, only_expand=False):
     root = tree()
     parents = {child: parent for parent in root.iter() for child in parent}
     node = next(n for n in root.iter("node") if text in label(n))
     while node in parents:
         buttons = [n for n in node.iter("node") if n.get("resource-id") == "android:id/expand_button"]
         if buttons:
+            if only_expand and label(buttons[0]) == 'Collapse':
+                return
             if not only_collapse or label(buttons[0]) == "Collapse":
                 tap_node(buttons[0])
             return
@@ -78,7 +80,8 @@ def capture(name):
     ET.ElementTree(root).write(OUT / f"{name}.xml", encoding="utf-8")
     adb("shell", "screencap", "-p", "/sdcard/devota-terminal-test.png")
     adb("pull", "/sdcard/devota-terminal-test.png", str(OUT / f"{name}.png"))
-    (OUT / f"{name}.json").write_text(json.dumps(oracle(), indent=2))
+    if ARGS.mode != 'review':
+        (OUT / f"{name}.json").write_text(json.dumps(oracle(), indent=2))
     activity = adb("shell", "dumpsys", "activity", "activities")
     resumed = [line.strip() for line in activity.splitlines() if "ResumedActivity" in line]
     (OUT / f"{name}-activity.txt").write_text("\n".join(resumed))
@@ -174,6 +177,29 @@ elif ARGS.mode == "tap":
     tap(ARGS.label)
 elif ARGS.mode == "expand":
     expand(ARGS.label)
+elif ARGS.mode == 'review':
+    tap('Start outcome test', wait_label('Start outcome test'))
+    wait_label('retry 2/3')
+    adb('shell', 'input', 'keyevent', 'KEYCODE_HOME')
+    adb('shell', 'cmd', 'statusbar', 'expand-notifications')
+    expand('DevOTA terminal', only_expand=True)
+    root = capture('review-retry-pending')
+    assert any('retry 2/3' in label(n) for n in root.iter('node'))
+    wait_label('Reported success', timeout=60)
+    root = capture('review-recovered')
+    for text in ('Reported success', 'Needs attention', 'Outcome unknown'):
+        assert any(text in label(n) for n in root.iter('node')), text
+    resumed = [line for line in adb('shell', 'dumpsys', 'activity', 'activities').splitlines() if 'ResumedActivity' in line]
+    assert resumed and all('terminaltest' not in line for line in resumed), resumed
+    adb('shell', 'cmd', 'statusbar', 'collapse')
+    adb('shell', 'am', 'start', '-n', 'io.github.chasekolozsy.devota.terminaltest/io.github.chasekolozsy.devota.MainActivity')
+    wait_label('Review calls: 2, 1, 1')
+    (OUT / 'result.json').write_text(json.dumps({'passed': True, 'checks': [
+        'Unavailable checker visibly schedules retry', 'Retry recovers in background',
+        'Three independent outcome labels', 'Exact reviewer calls: 2, 1, 1',
+        'Synthetic source and reviewer; no agents, model calls or terminal input',
+    ]}, indent=2))
+    print(f'PASS: outcome notifications and bounded retry; evidence: {OUT}')
 elif ARGS.mode in ('setup', 'wsl-setup'):
     # terminal_setup_demo.dart hosts the actual SshTerminalTab, not pre-bound
     # notification cards. Exercise precisely the settings path used on phones.

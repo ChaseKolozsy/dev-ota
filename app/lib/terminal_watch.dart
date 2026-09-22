@@ -154,6 +154,10 @@ class PaneObservation {
   int revision = 0;
   ConclusionVerdict? verdict;
   int? reviewedRevision;
+  int reviewAttempts = 0;
+  DateTime? nextReviewAt;
+  int? reviewingRevision;
+  bool macroSent = false;
   String? submittedScreen;
   bool awaitingOutput = false;
 
@@ -332,6 +336,23 @@ class TerminalWatchController extends ChangeNotifier {
         state?.verdict != null &&
         runningPane != binding.pane.id) {
       status = '${state!.verdict!.label} · ${state.verdict!.reason}';
+      if (state.verdict!.retryable) {
+        status = state.nextReviewAt != null
+            ? '↻ Check retry ${state.reviewAttempts + 1}/3 pending · ${state.verdict!.reason}'
+            : '⚠ Check unavailable after 3 attempts · outcome unknown';
+      }
+    } else if (runningPane != binding.pane.id &&
+        state?.macroSent == true &&
+        state?.error == null) {
+      status = 'Macro sent · $status';
+    }
+    if (reviewEnabled &&
+        settled &&
+        !busy &&
+        !externalBusy &&
+        state?.reviewingRevision == state?.revision &&
+        state?.reviewingRevision != null) {
+      status = 'Checking outcome · attempt ${state!.reviewAttempts}/3';
     }
     return <String, Object>{
       'id': binding.pane.id,
@@ -388,16 +409,24 @@ class TerminalWatchController extends ChangeNotifier {
     }
     for (final binding in bindings) {
       final state = observations[binding.pane.id];
-      if (state == null ||
-          !canAct(binding) ||
-          state.awaitingOutput ||
-          state.reviewedRevision == state.revision) {
+      if (state == null || !canAct(binding) || state.awaitingOutput) {
         continue;
+      }
+      if (state.reviewedRevision == state.revision) {
+        if (state.nextReviewAt == null || now().isBefore(state.nextReviewAt!)) {
+          continue;
+        }
+      } else {
+        state.reviewAttempts = 0;
       }
       final generation = _generation;
       final revision = state.revision;
       state.reviewedRevision = revision;
+      state.reviewAttempts++;
+      state.nextReviewAt = null;
+      state.reviewingRevision = revision;
       _reviewing = true;
+      _notify();
       try {
         var source = await conclusion(binding.pane.id, token(binding));
         if (source.length > 10000) {
@@ -415,25 +444,32 @@ class TerminalWatchController extends ChangeNotifier {
             !busy &&
             !externalBusy &&
             reviewEnabled) {
-          state.verdict = result;
+          _storeReview(state, result);
         }
       } catch (_) {
         if (!_disposed &&
             generation == _generation &&
             state.revision == revision &&
-            reviewEnabled) {
-          state.verdict = const ConclusionVerdict(
-            'uncertain',
-            'Home model unavailable or terminal changed.',
-            '',
-          );
+            reviewEnabled &&
+            !busy &&
+            !externalBusy) {
+          _storeReview(state, ConclusionVerdict.unavailable);
         }
       } finally {
         _reviewing = false;
+        state.reviewingRevision = null;
         _notify();
       }
       return; // One bounded job at a time; the next poll considers other panes.
     }
+  }
+
+  void _storeReview(PaneObservation state, ConclusionVerdict result) {
+    state.verdict = result;
+    // At most three read-only checks per unchanged revision; never retry input.
+    state.nextReviewAt = result.retryable && state.reviewAttempts < 3
+        ? now().add(Duration(seconds: state.reviewAttempts == 1 ? 30 : 90))
+        : null;
   }
 
   void stop() {
@@ -456,6 +492,7 @@ class TerminalWatchController extends ChangeNotifier {
     _stop = false;
     state.runError = null;
     state.verdict = null;
+    if (action == 'run') state.macroSent = false;
     runningPane = paneId;
     progress = 'Checking terminal';
     _notify();
@@ -510,6 +547,7 @@ class TerminalWatchController extends ChangeNotifier {
         }
       }
       state.error = null;
+      if (action == 'run') state.macroSent = true;
     } catch (error) {
       // Input may have reached the remote process even when its ACK was lost.
       // Never replay it on reconnect or claim success from socket writes.

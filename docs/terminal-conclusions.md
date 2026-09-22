@@ -28,8 +28,17 @@ Each pane independently shows one of:
   complete with successful checks.
 - **⚠ Needs attention** — it reports failed, blocked, unverified, or unfinished
   required work, or needs user action.
-- **? Uncertain** — the conclusion/context is ambiguous, still working, or the
-  local model is unavailable/busy.
+- **? Outcome unknown** — the conclusion/context is ambiguous or still working.
+- **↻ Check retry 2/3 (or 3/3) pending** — the checker failed, timed out, or
+  returned an invalid assessment. This is not a failure verdict about the work.
+- **⚠ Check unavailable after 3 attempts** — the retry budget is exhausted;
+  the outcome remains unknown. Listen or inspect the conclusion when convenient.
+
+**Macro sent** only means all macro steps were delivered without a transport
+error; it does not establish application acceptance or successful work.
+**Changing** means sampled terminal output is changing, not proof of agent
+progress. **Checking outcome** means a review request is in flight. Only
+**✓ Reported success** is a positive assessment of the agent's final report.
 
 The label includes a short reason. These are assessments of an agent's *report*,
 not independent verification of its work. They do not automatically run macros,
@@ -38,8 +47,13 @@ still chooses which macro to run. No agent-specific logs/hooks or account
 credentials are required; excerpts from Claude Code, Codex and other terminal
 programs use the same classification path.
 
-The reviewer makes one bounded request per stable content revision, serializes
-requests across windows, and does not retry every polling tick. Any new output
+The reviewer serializes requests across windows. A temporary checker/transport
+failure or invalid response gets at most three attempts per stable revision,
+with 30 seconds before the second attempt and 90 before the third (measured
+from the preceding failure). Waiting panes do not block checks for other panes.
+A valid but ambiguous assessment is not retried repeatedly. These retries only
+read/review text: they never resend macros or Enter. New output starts a fresh
+review budget, and late results for older output are discarded. Any new output
 invalidates an old verdict. A newly submitted macro cannot reuse an unchanged
 old conclusion. Busy/disconnected states continue to disable macro controls.
 There is no guarantee of identifying the last complete message from an
@@ -59,12 +73,16 @@ The host needs Python `cryptography`, the running Whisper Notes service, and
 read access to its existing token at `~/whisper-notes/.secrets/api-token` (or
 `DEVOTA_REVIEW_TOKEN_FILE`). The token never goes to the phone or into the
 model prompt. No new public model endpoint is added. Hosts without this setup
-show Uncertain; Listen continues to work independently.
+show Check unavailable; Listen continues to work independently. Update this
+host helper with the app: its optional `retryable` field distinguishes service
+or validation failures from a valid uncertain assessment, without exposing
+exception details or transcripts.
 
 Model inputs are at most 10,000 characters of cleaned recent text. The prompt
 treats terminal content as untrusted data. Responses must be small structured
 JSON; positive/negative verdicts require an exact supporting quote present in
-the input. Invalid replies become Uncertain. Quote validation cannot establish
+the input. Invalid replies never become success and receive bounded retries.
+Quote validation cannot establish
 that the model interpreted context correctly. No transcripts, model replies,
 or exception details are logged by this helper, and no durable review cache is
 written. Plaintext necessarily exists in process/model memory during use.
@@ -95,3 +113,31 @@ service availability is not guaranteed, and that path remains Uncertain.
 An emulator callback proves the speech engine began playback; it does not
 establish subjective voice quality or Bluetooth/call behavior on a physical
 phone. Physical-phone installation and those audio-route checks remain separate.
+
+The deterministic outcome-notification fixture uses
+`test_support/terminal_review_demo.dart` with package override
+`DEVOTA_APPLICATION_ID=io.github.chasekolozsy.devota.terminaltest`. Build/install
+on the same emulator profile and grant notification permission, then launch
+it and run `python3 scripts/test/terminal-notification-ui.py review`. It injects
+one checker failure and then a valid success, alongside needs-attention and
+ambiguous windows, and verifies all three labels and exactly 2/1/1 review calls.
+No SSH, coding agents, terminal input, or real model calls are used in this
+fixture; it proves controller/native notification behavior, not model accuracy.
+
+### Retry/status follow-up — 2026-09-21
+
+- Flutter: **123 tests passed**, analysis: **no issues**. Reviewer Python tests:
+  **5 passed**; build-version tests: **5 passed**. Coverage includes retry
+  backoff/exhaustion, late retry rejection after new output, valid ambiguity
+  without repeated checks, and independent progress across windows.
+- Android 36 notification fixture passed: the first pane displayed a pending
+  retry, recovered to Reported success while backgrounded, and the other panes
+  independently displayed Needs attention and Outcome unknown. Exact checker
+  calls were **2, 1, 1**. Evidence: `/tmp/devota-outcome-retry-verified`.
+  The initial UI-driver attempt collapsed an already-expanded summary and hid
+  its third row; the corrected driver preserves expansion and the rerun passed.
+- Production ARM64 **2026094108** staged; package/version and checksum verified,
+  and the served `/builds` listing checked. The host helper is updated too.
+- The existing home model remains an external dependency: this fixture does
+  not prove continuous availability or accuracy on every real transcript.
+  No live terminal macro or coding agent was run during this verification.
