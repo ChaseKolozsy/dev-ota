@@ -18,6 +18,7 @@ import 'background_session_service.dart';
 import 'macro_reorder.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
+import 'terminal_submission.dart';
 import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
 
@@ -1610,8 +1611,16 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         _notifyMacroController();
         switch (step.type) {
           case TerminalMacroStepType.shell:
-            final command = step.value.trimRight();
-            if (command.isNotEmpty) _writeToSession('$command\n');
+            final command = step.value;
+            if (command.trim().isNotEmpty) {
+              _terminal.paste(command);
+              if (!await _macroDelay(
+                terminalPasteSettleTime.inMilliseconds / 1000,
+              )) {
+                break;
+              }
+              if (commandNeedsEnter(macro.steps, i)) _writeToSession('\r');
+            }
             break;
           case TerminalMacroStepType.terminalKey:
             final sequence = _macroTerminalKeySequence(step.value);
@@ -1642,7 +1651,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         setState(
           () => _status = _macroStopRequested
               ? 'Macro stopped at step $_macroStepIndex: ${macro.name}'
-              : 'Macro complete: ${macro.name}',
+              : 'Input sent (submission unconfirmed): ${macro.name}',
         );
       }
     } catch (e) {
