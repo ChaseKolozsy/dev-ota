@@ -42,12 +42,22 @@ Future<String> _execute(
         [],
         (bytes, chunk) => bytes..addAll(chunk),
       );
-      final errors = session.stderr.drain<void>();
+      // Keep a bounded diagnostic for the setup screen instead of silently
+      // discarding "tmux not found", socket, or SSH shell errors. Never log it.
+      final errors = session.stderr.fold<List<int>>([], (bytes, chunk) {
+        final remaining = 2048 - bytes.length;
+        if (remaining > 0) bytes.addAll(chunk.take(remaining));
+        return bytes;
+      });
       await session.done;
       final bytes = await output;
-      await errors;
+      final errorBytes = await errors;
       if (session.exitCode != 0) {
-        throw StateError('Pane unavailable or tmux command failed');
+        final detail = utf8.decode(errorBytes, allowMalformed: true).trim();
+        throw StateError(
+          'SSH command failed (exit ${session.exitCode ?? 'unknown'}).'
+          '${detail.isEmpty ? ' Pane unavailable or tmux command failed.' : '\n$detail'}',
+        );
       }
       return utf8.decode(bytes, allowMalformed: true);
     })().timeout(timeout);

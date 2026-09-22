@@ -9,6 +9,23 @@ up to three tmux panes to saved terminal macros. Set a quiet period of 5, 10,
 15, or 30 seconds. Saving enables the existing background SSH service. Grant
 notification permission so Android can display the controls.
 
+The setup screen opens immediately and displays progress while discovering
+windows. Discovery failures stay on that screen with the SSH diagnostic and a
+Retry button. No macro needs to run before selecting windows. Notification
+commands use separate SSH exec channels: they do not inherit a nested SSH/WSL
+session, custom tmux socket, or interactive-shell environment.
+
+Setup regression fixture (separate app, no production settings or agents):
+build `test_support/terminal_setup_demo.dart` with
+`DEVOTA_APPLICATION_ID=io.github.chasekolozsy.devota.terminalsetuptest`, install
+on the emulator, reverse port 22222 to the existing Vim fixture, grant notification
+permission, and launch it. Then run
+`python3 scripts/test/terminal-notification-ui.py setup --output /tmp/devota-terminal-setup-evidence`.
+This uses the real SSH settings screen, injects a discovery failure, retries,
+selects a window/macro, saves, and checks that its notification button appears
+without executing a macro. Widget tests also cover pending discovery, timeout,
+retry, and leaving the screen before discovery completes.
+
 Each pane has a grouped notification with its macro action. Expand a pane to
 see the buttons. The SSH session and Flutter engine must remain alive;
 backgrounding the app works, but force-stopping it or removing its task stops

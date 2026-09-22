@@ -22,6 +22,7 @@ TMUX = ["tmux", "-S", str(ROOT / "tmux.sock"), "-f", "/dev/null"]
 LOCK = threading.Lock()
 COUNTS = {"commands": 0, "enterSent": 0, "enterDropped": 0}
 DROP_COUNTDOWN = 0
+FAIL_DISCOVERY = False
 CHANNELS = []
 
 
@@ -32,6 +33,11 @@ def tmux(*args):
 def execute(channel, raw):
     global DROP_COUNTDOWN
     command = raw.decode()
+    if FAIL_DISCOVERY and command.startswith('tmux list-panes'):
+        channel.sendall_stderr(b'tmux: command not found (injected setup failure)\n')
+        channel.send_exit_status(127)
+        channel.close()
+        return
     # Only the test controller's tmux and paste-buffer command grammar is used.
     # SSH listener is loopback-only and accepts fixture credentials exclusively.
     with LOCK:
@@ -64,6 +70,16 @@ def execute(channel, raw):
 
 
 class Server(paramiko.ServerInterface):
+    def check_channel_pty_request(self, channel, *args):
+        return True
+
+    def check_channel_window_change_request(self, channel, *args):
+        return True
+
+    def check_channel_shell_request(self, channel):
+        threading.Timer(0.05, channel.sendall, args=(b'Isolated SSH setup fixture. No agent is running.\r\n',)).start()
+        return True
+
     def check_auth_password(self, username, password):
         return paramiko.AUTH_SUCCESSFUL if (username, password) == ("fixture", "fixture-only") else paramiko.AUTH_FAILED
 
@@ -107,9 +123,13 @@ class Oracle(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        global DROP_COUNTDOWN
+        global DROP_COUNTDOWN, FAIL_DISCOVERY
         if self.path == "/drop-second-enter":
             DROP_COUNTDOWN = 2
+        elif self.path == '/fail-discovery':
+            FAIL_DISCOVERY = True
+        elif self.path == '/restore-discovery':
+            FAIL_DISCOVERY = False
         elif self.path == "/disconnect":
             for channel in list(CHANNELS):
                 channel.close()

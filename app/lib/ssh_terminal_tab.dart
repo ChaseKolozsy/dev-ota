@@ -650,13 +650,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   Future<void> _showNotificationControls() async {
     if (!_connected || _inputLocked) return;
     try {
-      final panes = await _watch.availablePanes();
-      if (!mounted) return;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => TerminalWatchScreen(
             watch: _watch,
-            panes: panes,
+            loadPanes: _watch.availablePanes,
             macros: widget.notificationMacros
                 .where((m) => !m.isDeviceMacro)
                 .toList(),
@@ -2246,7 +2244,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Future<void> _showConnectionSheet() async {
     final theme = Theme.of(context);
-    await showModalBottomSheet<void>(
+    final openNotificationControls = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -2392,8 +2390,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                       onTap: !_connected || _inputLocked
                           ? null
                           : () {
-                              Navigator.pop(ctx);
-                              unawaited(_showNotificationControls());
+                              Navigator.pop(ctx, true);
                             },
                     ),
                     SwitchListTile(
@@ -2463,7 +2460,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         );
       },
     );
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      if (openNotificationControls == true) await _showNotificationControls();
+    }
   }
 
   Widget _buildTerminalToolsHeader(ThemeData theme) {

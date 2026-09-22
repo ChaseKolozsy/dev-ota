@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader"])
+PARSER.add_argument("mode", choices=["inspect", "tap", "expand", "verify", "reader", "setup"])
 PARSER.add_argument("label", nargs="?")
 PARSER.add_argument("--serial", default="emulator-5554")
 PARSER.add_argument("--output", default="/tmp/devota-terminal-notification-evidence")
@@ -94,6 +94,30 @@ def wait_file(index, expected, timeout=20):
     raise AssertionError(f"Window {index} contents: {oracle()['files']}")
 
 
+def wait_label(text, timeout=20):
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        root = tree()
+        if any(text in label(n) for n in root.iter('node')):
+            return root
+        time.sleep(0.5)
+    raise AssertionError(f'UI did not show {text!r}')
+
+
+def reveal(text):
+    for _ in range(5):
+        root = tree()
+        matches = [n for n in root.iter('node') if text in label(n)]
+        if matches:
+            assert len(matches) == 1, [label(n) for n in matches]
+            return matches[0]
+        scroll = next(n for n in root.iter('node') if n.get('scrollable') == 'true')
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', scroll.get('bounds')))
+        adb('shell', 'input', 'swipe', str((x1+x2)//2), str(y1+(y2-y1)*3//4),
+            str((x1+x2)//2), str(y1+(y2-y1)//4), '400')
+    raise AssertionError(f'Could not reveal {text!r}')
+
+
 def show_action(index, text):
     for other in (1, 2, 3):
         if other == index:
@@ -124,6 +148,38 @@ elif ARGS.mode == "tap":
     tap(ARGS.label)
 elif ARGS.mode == "expand":
     expand(ARGS.label)
+elif ARGS.mode == 'setup':
+    # terminal_setup_demo.dart hosts the actual SshTerminalTab, not pre-bound
+    # notification cards. Exercise precisely the settings path used on phones.
+    tap('SSH settings')
+    tap('Connect')
+    tap('Trust', wait_label('Trust SSH host?'))
+    adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
+    urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/fail-discovery', method='POST')).close()
+    tap('SSH settings')
+    wait_label('Disconnect')
+    tap_node(reveal('Notification macros'))
+    wait_label('Could not load terminal windows')
+    root = capture('setup-error')
+    assert any('injected setup failure' in label(n) for n in root.iter('node'))
+    urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:22223/restore-discovery', method='POST')).close()
+    tap('Retry')
+    wait_label('Check conclusions with the home model')
+    tap_node(reveal('Check conclusions with the home model'))
+    tap_node(reveal('Window notification-test:1.0'))
+    tap('Hello fixture')
+    capture('setup-window-selected')
+    tap_node(reveal('Save notification controls'))
+    wait_label('SSH settings')
+    adb('shell', 'input', 'keyevent', 'KEYCODE_HOME')
+    adb('shell', 'cmd', 'statusbar', 'expand-notifications')
+    show_action(1, 'Hello fixture')
+    capture('setup-notification-ready')
+    assert oracle()['counts']['enterSent'] == 0
+    (OUT / 'setup-result.json').write_text(json.dumps({'passed': True, 'checks': [
+        'Real SSH settings -> notification setup', 'Visible SSH error and Retry',
+        'Window selection and Save', 'Macro button appears without running a macro']}, indent=2))
+    print(f'PASS: real notification setup flow; evidence: {OUT}')
 elif ARGS.mode == "reader":
     urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:22223/reading-fixture", method="POST"), timeout=5).close()
     adb("shell", "input", "keyevent", "KEYCODE_HOME")
