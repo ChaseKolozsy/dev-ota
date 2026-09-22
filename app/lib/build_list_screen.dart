@@ -1697,6 +1697,9 @@ class _BuildListScreenState extends State<BuildListScreen>
           fullscreen: _terminalFullscreen,
           quickCommands: _quickCommands,
           quickMacros: _quickMacros,
+          notificationMacros: _rankedMacros
+              .where((m) => !m.isDeviceMacro)
+              .toList(),
           macroController: _macroController,
           onFullscreenChanged: _setTerminalFullscreen,
           onCommandUsed: _recordCommandUse,

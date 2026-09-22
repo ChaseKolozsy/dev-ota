@@ -29,6 +29,8 @@ import java.util.zip.ZipFile
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        TerminalNotifications.attach(this, MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_notifications"))
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.github.chasekolozsy.devota/control_agent"
@@ -158,6 +160,11 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        TerminalNotifications.detach()
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun jsonValue(value: Any?): Any? = when (value) {

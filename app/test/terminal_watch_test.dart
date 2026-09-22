@@ -13,6 +13,117 @@ TerminalMacroStep step(TerminalMacroStepType type, String value) =>
     TerminalMacroStep(id: value, type: type, value: value, delaySeconds: 0);
 
 void main() {
+  test(
+    'shell quoting preserves apostrophes and command substitution literally',
+    () {
+      expect(shellQuote("a'b\$(whoami)"), "'a'\\''b\$(whoami)'");
+    },
+  );
+
+  test(
+    'disconnect after paste cancels Enter and never replays the run',
+    () async {
+      var time = DateTime(2026);
+      final commands = <String>[];
+      final binding = TerminalWatchBinding(pane: pane, macroId: 'hello');
+      final watch = TerminalWatchController(now: () => time);
+      addTearDown(watch.dispose);
+      watch.configure(
+        [binding],
+        [
+          TerminalMacro(
+            id: 'hello',
+            name: 'Hello',
+            steps: [step(TerminalMacroStepType.shell, 'hello')],
+          ),
+        ],
+      );
+      final transport = TmuxWatchTransport((command) async {
+        commands.add(command);
+        if (command.contains('paste-buffer')) watch.connect(null);
+        return 'unchanged';
+      });
+      watch.connect(transport);
+      await watch.poll();
+      for (var i = 0; i < 2; i++) {
+        time = time.add(const Duration(seconds: 6));
+        await watch.poll();
+      }
+      await watch.act('%1', 'run', watch.token(binding));
+      expect(commands.where((c) => c.contains('paste-buffer')), hasLength(1));
+      expect(commands.where((c) => c.contains('send-keys')), isEmpty);
+      expect(watch.observations['%1']!.submissionUnconfirmed, isTrue);
+      watch.connect(transport);
+      await watch.poll();
+      expect(commands.where((c) => c.contains('paste-buffer')), hasLength(1));
+      expect(watch.canAct(binding), isFalse);
+    },
+  );
+
+  test(
+    'editing macro or creating a controller invalidates old action tokens',
+    () {
+      final binding = TerminalWatchBinding(pane: pane, macroId: 'hello');
+      final watch = TerminalWatchController();
+      final other = TerminalWatchController();
+      addTearDown(watch.dispose);
+      addTearDown(other.dispose);
+      final oldToken = watch.token(binding);
+      expect(other.token(binding), isNot(oldToken));
+      watch.updateMacros([
+        TerminalMacro(
+          id: 'hello',
+          name: 'Updated',
+          steps: [step(TerminalMacroStepType.shell, 'hello')],
+        ),
+      ]);
+      expect(watch.token(binding), isNot(oldToken));
+    },
+  );
+
+  test('stop interrupts a wait before any later keystrokes', () async {
+    var time = DateTime(2026);
+    final commands = <String>[];
+    final binding = TerminalWatchBinding(pane: pane, macroId: 'hello');
+    final watch = TerminalWatchController(now: () => time);
+    addTearDown(watch.dispose);
+    watch.configure(
+      [binding],
+      [
+        TerminalMacro(
+          id: 'hello',
+          name: 'Hello',
+          steps: [
+            const TerminalMacroStep(
+              id: 'wait',
+              type: TerminalMacroStepType.wait,
+              value: '',
+              delaySeconds: 1,
+            ),
+            step(TerminalMacroStepType.shell, 'hello'),
+          ],
+        ),
+      ],
+    );
+    watch.connect(
+      TmuxWatchTransport((command) async {
+        commands.add(command);
+        return 'unchanged';
+      }),
+    );
+    await watch.poll();
+    for (var i = 0; i < 2; i++) {
+      time = time.add(const Duration(seconds: 6));
+      await watch.poll();
+    }
+    watch.addListener(() {
+      if (watch.progress?.contains('step 1') ?? false) watch.stop();
+    });
+    await watch.act('%1', 'run', watch.token(binding));
+    expect(commands.any((c) => c.contains('paste-buffer')), isFalse);
+    expect(watch.observations['%1']!.runError, contains('Stopped'));
+  });
+
   test('explicit Enter across Wait replaces implicit submission', () {
     final steps = [
       step(TerminalMacroStepType.shell, 'hello'),

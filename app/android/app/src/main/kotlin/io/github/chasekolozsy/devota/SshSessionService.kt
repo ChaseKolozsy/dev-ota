@@ -79,6 +79,7 @@ class SshSessionService : Service() {
     }
 
     override fun onDestroy() {
+        TerminalNotifications.clear(this)
         running = false
         super.onDestroy()
     }
@@ -137,6 +138,9 @@ class SshSessionService : Service() {
             .setContentTitle("DevOTA terminal")
             .setContentText(text)
             .setOngoing(true)
+            .setGroup(TerminalNotifications.GROUP)
+            .setGroupSummary(true)
+            .setOnlyAlertOnce(true)
             .apply { if (contentIntent != null) setContentIntent(contentIntent) }
             .build()
     }

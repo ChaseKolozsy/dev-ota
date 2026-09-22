@@ -19,6 +19,10 @@ import 'macro_reorder.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
 import 'terminal_submission.dart';
+import 'terminal_watch.dart';
+import 'ssh_watch_transport.dart';
+import 'terminal_watch_screen.dart';
+import 'terminal_notification_bridge.dart';
 import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
 
@@ -345,6 +349,7 @@ class SshTerminalTab extends StatefulWidget {
     required this.serverUrl,
     this.quickCommands = const [],
     this.quickMacros = const [],
+    this.notificationMacros = const [],
     this.macroController,
     this.fullscreen = false,
     this.onFullscreenChanged,
@@ -357,6 +362,7 @@ class SshTerminalTab extends StatefulWidget {
   final String serverUrl;
   final List<String> quickCommands;
   final List<TerminalMacro> quickMacros;
+  final List<TerminalMacro> notificationMacros;
   final TerminalMacroController? macroController;
   final bool fullscreen;
   final ValueChanged<bool>? onFullscreenChanged;
@@ -399,6 +405,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _terminalToolsVisible = true;
   bool _nativeKeyboardLocked = false;
   bool _macroRunning = false;
+  final _watch = TerminalWatchController();
+  late final _notificationBridge = TerminalNotificationBridge(_watch);
+  bool get _inputLocked => _macroRunning || _watch.busy;
   String? _macroRunningName;
   int _macroStepIndex = 0;
   int _macroStepCount = 0;
@@ -440,8 +449,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _terminal.write('DevOTA SSH terminal\r\n');
-    _terminal.onOutput = (data) =>
-        _session?.write(Uint8List.fromList(utf8.encode(data)));
+    _terminal.onOutput = (data) {
+      if (!_watch.busy) _session?.write(Uint8List.fromList(utf8.encode(data)));
+    };
     _terminal.onResize = (width, height, pixelWidth, pixelHeight) {
       _session?.resizeTerminal(width, height, pixelWidth, pixelHeight);
     };
@@ -453,10 +463,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadTerminalPadConfig();
     _loadBackgroundKeepAlive();
     _attachMacroController();
+    _watch.addListener(_onWatchChanged);
+    _notificationBridge.publish();
   }
 
   @override
   void dispose() {
+    _watch.removeListener(_onWatchChanged);
+    _notificationBridge.dispose();
+    _watch.dispose();
     widget.macroController?.detach();
     WidgetsBinding.instance.removeObserver(this);
     _reconnectTimer?.cancel();
@@ -484,6 +499,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       oldWidget.macroController?.detach();
       _attachMacroController();
     }
+    _watch.updateMacros(widget.notificationMacros);
+    _notificationBridge.publish();
   }
 
   @override
@@ -534,14 +551,22 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _attachMacroController() {
     widget.macroController?.attach(
       runner: _runMacro,
-      canRun: () => _connected && !_macroRunning,
-      isRunning: () => _macroRunning,
+      canRun: () => _connected && !_inputLocked,
+      isRunning: () => _inputLocked,
       progress: _macroProgress,
       stop: _requestMacroStop,
     );
   }
 
   MacroRunProgress? _macroProgress() {
+    if (_watch.busy) {
+      return MacroRunProgress(
+        macroName: _watch.progress ?? 'Notification macro',
+        stepIndex: 0,
+        stepCount: 1,
+        stopping: false,
+      );
+    }
     if (!_macroRunning) return null;
     return MacroRunProgress(
       macroName: _macroRunningName ?? 'Macro',
@@ -554,6 +579,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   /// The escape hatch that makes locking the controls fair: instead of mashing
   /// buttons when a macro looks stuck, the user gets one deliberate Stop.
   void _requestMacroStop() {
+    if (_watch.busy) {
+      _watch.stop();
+      return;
+    }
     if (!_macroRunning || _macroStopRequested) return;
     if (mounted) {
       setState(() {
@@ -567,7 +596,90 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   void _notifyMacroController() {
+    _watch.externalBusy = _macroRunning;
+    _notificationBridge.publish();
     widget.macroController?.notifyStateChanged();
+  }
+
+  void _onWatchChanged() {
+    if (!mounted) return;
+    setState(() {});
+    widget.macroController?.notifyStateChanged();
+  }
+
+  String get _watchPreferencesKey => 'terminal_watch:$_username@$_host:$_port';
+
+  Future<void> _connectWatch(SSHClient client) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted || !identical(_client, client)) return;
+    final raw = prefs.getString(_watchPreferencesKey);
+    var bindings = <TerminalWatchBinding>[];
+    var quiet = 10;
+    if (raw != null) {
+      try {
+        final saved = jsonDecode(raw) as Map;
+        bindings = (saved['bindings'] as List)
+            .take(3)
+            .map(
+              (b) => TerminalWatchBinding.fromJson(
+                Map<String, dynamic>.from(b as Map),
+              ),
+            )
+            .toList();
+        quiet = (saved['quiet'] as int).clamp(5, 30);
+      } catch (_) {
+        bindings = [];
+      }
+    }
+    // A disconnected run must unwind before replacing its binding set.
+    while (_watch.busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (!mounted || !identical(_client, client)) return;
+    }
+    _watch.quietPeriod = Duration(seconds: quiet);
+    _watch.configure(bindings, widget.notificationMacros);
+    _watch.connect(
+      sshWatchTransport(
+        client,
+        isCurrent: () => identical(_client, client) && _connected,
+      ),
+    );
+  }
+
+  Future<void> _showNotificationControls() async {
+    if (!_connected || _inputLocked) return;
+    try {
+      final panes = await _watch.availablePanes();
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => TerminalWatchScreen(
+            watch: _watch,
+            panes: panes,
+            macros: widget.notificationMacros
+                .where((m) => !m.isDeviceMacro)
+                .toList(),
+            onSave: (bindings, quiet) async {
+              if (!_keepAliveInBackground) {
+                await _setKeepAliveInBackground(true);
+              }
+              _watch.quietPeriod = Duration(seconds: quiet);
+              _watch.configure(bindings, widget.notificationMacros);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString(
+                _watchPreferencesKey,
+                jsonEncode({
+                  'bindings': bindings.map((b) => b.toJson()).toList(),
+                  'quiet': quiet,
+                }),
+              );
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Notification controls: $e');
+    }
   }
 
   Future<void> _loadTerminalToolVisibility() async {
@@ -877,6 +989,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   /// Mirrors the foreground service to the session state: running whenever a
   /// session is up or being recovered, gone the moment the user disconnects.
   Future<void> _syncBackgroundSession() async {
+    _notificationBridge.enabled =
+        _keepAliveInBackground && (_connected || _wantConnected);
+    _notificationBridge.publish();
     if (!Platform.isAndroid) return;
     if (!_keepAliveInBackground || !(_connected || _wantConnected)) {
       await BackgroundSessionService.stop();
@@ -1280,6 +1395,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         });
       }
       unawaited(_syncBackgroundSession());
+      await _connectWatch(client);
       if (!auto) unawaited(_maybePromptBatteryExemption());
       _notifyMacroController();
     } catch (e) {
@@ -1298,6 +1414,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   /// the peer gave up.
   void _handleSessionClosed(SSHClient client) {
     if (!identical(_client, client)) return; // A stale connection winding down.
+    _watch.connect(null);
     _client = null;
     _session = null;
     unawaited(_stdoutSub?.cancel());
@@ -1352,6 +1469,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _disconnect({bool userInitiated = true}) async {
+    if (mounted) _watch.connect(null);
     if (userInitiated) {
       _wantConnected = false;
       _reconnectAttempts = 0;
@@ -1434,7 +1552,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _sendTerminalKey(String sequence, {String? fallbackText}) {
     // Last line of defence: the macro writes through _writeToSession, so any
     // other keystroke path stays shut until the sequence finishes.
-    if (_macroRunning) return;
+    if (_inputLocked) return;
     if (_connected) {
       _writeToSession(sequence);
       return;
@@ -1528,7 +1646,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _submitTextToTerminal(String text) {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || !_connected || _macroRunning) return;
+    if (trimmed.isEmpty || !_connected || _inputLocked) return;
     _writeToSession('$trimmed\n');
     _composerController.clear();
     _focusTerminalInput();
@@ -1536,7 +1654,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _runSavedCommand(String command) {
     final trimmed = command.trim();
-    if (trimmed.isEmpty || _macroRunning) return;
+    if (trimmed.isEmpty || _inputLocked) return;
     widget.onCommandUsed?.call(trimmed);
     if (_composerController.text.trim().isNotEmpty) {
       _prefixComposerText(trimmed);
@@ -1588,7 +1706,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       setState(() => _status = 'Connect SSH before running macros.');
       throw StateError('Connect SSH before running macros.');
     }
-    if (_macroRunning) {
+    if (_inputLocked) {
       throw StateError('A macro is already running.');
     }
     widget.onMacroUsed?.call(macro);
@@ -1827,14 +1945,14 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     // Keystrokes (soft or hardware) would interleave with the
                     // macro's own input, so the terminal is read-only until the
                     // sequence finishes.
-                    readOnly: _tmuxScrollMode || _macroRunning,
+                    readOnly: _tmuxScrollMode || _inputLocked,
                     hardwareKeyboardOnly: _nativeKeyboardLocked,
                   ),
                 ),
               ),
             ),
           ),
-          if (_macroRunning) _buildMacroRunBanner(theme),
+          if (_inputLocked) _buildMacroRunBanner(theme),
           _buildTerminalToolsHeader(theme),
           if (_terminalToolsVisible) ...[
             _macroLock(_buildTerminalControlPad(theme)),
@@ -1850,7 +1968,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   /// render themselves disabled; this additionally swallows taps that land in
   /// the gaps between them, so nothing reaches the session mid-sequence.
   Widget _macroLock(Widget child) {
-    if (!_macroRunning) return child;
+    if (!_inputLocked) return child;
     return AbsorbPointer(child: Opacity(opacity: 0.55, child: child));
   }
 
@@ -1904,7 +2022,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         ),
                       ),
                       Text(
-                        '${_macroRunningName ?? 'Macro'}  •  '
+                        '${_watch.progress ?? _macroRunningName ?? 'Macro'}  •  '
                         '${progress?.stepLabel ?? ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -2261,6 +2379,20 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                       ],
                     ),
                     const Divider(height: 20),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.notifications_active_outlined),
+                      title: const Text('Notification macros'),
+                      subtitle: const Text(
+                        'Window status, Run macro and Send Enter',
+                      ),
+                      onTap: !_connected || _inputLocked
+                          ? null
+                          : () {
+                              Navigator.pop(ctx);
+                              unawaited(_showNotificationControls());
+                            },
+                    ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
@@ -2609,7 +2741,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Widget _buildPadKeyPill(TerminalPadKey key) {
     final enabled =
-        (_connected || key.enabledWhenDisconnected) && !_macroRunning;
+        (_connected || key.enabledWhenDisconnected) && !_inputLocked;
     final icon = _padKeyIcon(key.iconName);
     final button = SizedBox(
       height: 30,
@@ -2631,7 +2763,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Widget _buildPadFixedRightButton(TerminalPadKey key) {
     final enabled =
-        (_connected || key.enabledWhenDisconnected) && !_macroRunning;
+        (_connected || key.enabledWhenDisconnected) && !_inputLocked;
     final icon = _padKeyIcon(key.iconName);
     return Tooltip(
       message: key.name,
@@ -2721,7 +2853,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
         icon: Icon(icon, size: 20),
-        onPressed: _connected && !_macroRunning
+        onPressed: _connected && !_inputLocked
             ? () => _activateTerminalKeyButton(
                 usageId,
                 () => _sendTerminalKey(sequence),
@@ -3435,7 +3567,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _terminalMacroButton(TerminalMacro macro, {bool reorderable = false}) {
-    final enabled = _connected && !_macroRunning && _macroBarEnabled;
+    final enabled = _connected && !_inputLocked && _macroBarEnabled;
     final button = SizedBox(
       height: 32,
       child: OutlinedButton.icon(
@@ -3444,7 +3576,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: const EdgeInsets.symmetric(horizontal: 10),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        icon: _macroRunning
+        icon: _inputLocked
             ? const SizedBox(
                 width: 16,
                 height: 16,
@@ -3482,10 +3614,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               padding: const EdgeInsets.symmetric(horizontal: 10),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            icon: _macroRunning
+            icon: _inputLocked
                 ? _macroBusySpinner(size: 16)
                 : const Icon(Icons.keyboard_return, size: 16),
-            onPressed: _commandBarEnabled && !_macroRunning
+            onPressed: _commandBarEnabled && !_inputLocked
                 ? () => _runSavedCommand(command)
                 : null,
             label: ConstrainedBox(
@@ -3513,7 +3645,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final enabled =
         (_connected || enabledWhenDisconnected) &&
         _tmuxBarEnabled &&
-        !_macroRunning;
+        !_inputLocked;
     final button = SizedBox(
       height: 32,
       child: OutlinedButton(
@@ -3525,7 +3657,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         onPressed: enabled
             ? () => _activateTerminalKeyButton(usageId, onPressed)
             : null,
-        child: _macroRunning
+        child: _inputLocked
             ? Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -3615,7 +3747,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                             foregroundColor: theme.colorScheme.onErrorContainer,
                           )
                         : null,
-                    onPressed: _transcribing || _macroRunning
+                    onPressed: _transcribing || _inputLocked
                         ? null
                         : (_recording
                               ? _finishVoiceRecording
@@ -3635,7 +3767,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         _connected &&
                             !_transcribing &&
                             !_recording &&
-                            !_macroRunning
+                            !_inputLocked
                         ? _submitComposer
                         : null,
                   ),

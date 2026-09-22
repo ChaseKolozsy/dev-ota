@@ -116,6 +116,7 @@ class PaneObservation {
   DateTime? changedAt;
   DateTime? observedAt;
   String? error;
+  String? runError;
   bool submissionUnconfirmed = false;
   int revision = 0;
 
@@ -156,6 +157,7 @@ class TerminalWatchController extends ChangeNotifier {
   Timer? _timer;
   Future<void>? _polling;
   int _generation = 0;
+  final String _instance = DateTime.now().microsecondsSinceEpoch.toString();
   bool _disposed = false;
   bool _busy = false;
   bool get busy => _busy;
@@ -164,6 +166,15 @@ class TerminalWatchController extends ChangeNotifier {
   String? progress;
   bool _stop = false;
   int get generation => _generation;
+
+  void updateMacros(List<TerminalMacro> available) {
+    if (jsonEncode(macros.map((m) => m.toJson()).toList()) ==
+        jsonEncode(available.map((m) => m.toJson()).toList())) {
+      return;
+    }
+    _generation++; // Invalidate buttons and stop a run whose definition changed.
+    macros = List.of(available);
+  }
 
   void connect(TmuxWatchTransport? transport) {
     _generation++;
@@ -211,7 +222,7 @@ class TerminalWatchController extends ChangeNotifier {
   }
 
   String token(TerminalWatchBinding binding) =>
-      '$_generation:${observations[binding.pane.id]?.revision ?? 0}';
+      '$_instance:$_generation:${observations[binding.pane.id]?.revision ?? 0}';
 
   Future<void> poll() {
     if (_transport == null || _disposed) return Future.value();
@@ -263,6 +274,7 @@ class TerminalWatchController extends ChangeNotifier {
         : macro == null
         ? 'Macro unavailable'
         : state?.error ??
+              state?.runError ??
               (state?.observedAt == null ||
                       now().difference(state!.observedAt!) > freshness
                   ? 'Disconnected / unknown'
@@ -303,6 +315,7 @@ class TerminalWatchController extends ChangeNotifier {
     final macro = macroFor(binding)!;
     _busy = true; // Lock synchronously, before preflight network operations.
     _stop = false;
+    state.runError = null;
     runningPane = paneId;
     progress = 'Checking terminal';
     _notify();
@@ -364,7 +377,7 @@ class TerminalWatchController extends ChangeNotifier {
       // Input may have reached the remote process even when its ACK was lost.
       // Never replay it on reconnect or claim success from socket writes.
       state.submissionUnconfirmed = true;
-      state.error = error is StateError
+      state.runError = error is StateError
           ? error.message.toString()
           : 'Input delivery uncertain';
     } finally {
