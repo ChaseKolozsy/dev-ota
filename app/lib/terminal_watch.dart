@@ -8,6 +8,33 @@ import 'terminal_conclusion.dart';
 typedef TerminalCommand = Future<String> Function(String command);
 String shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
 
+/// Notification bindings own routing. Only an initial numeric window selection
+/// can be replaced; switching after input would change a multi-window macro.
+String? notificationMacroError(TerminalMacro macro) {
+  var inputStarted = false;
+  for (final step in macro.steps) {
+    if (step.type == TerminalMacroStepType.wait) continue;
+    if (step.type == TerminalMacroStepType.tmux) {
+      if (inputStarted) {
+        return 'Not run: tmux switching after input is unsupported.';
+      }
+      if (!RegExp(r'^[0-9]$').hasMatch(step.value.trim())) {
+        return 'Not run: only an initial numeric tmux window selection is supported.';
+      }
+      continue;
+    }
+    if (step.type == TerminalMacroStepType.device) {
+      return 'Not run: device actions are unsupported here.';
+    }
+    if (step.type == TerminalMacroStepType.terminalKey &&
+        (step.value == 'ctrl_b' || terminalKeySequence(step.value) == null)) {
+      return 'Not run: unsupported terminal key ${step.value}.';
+    }
+    inputStarted = true;
+  }
+  return null;
+}
+
 class WatchedPane {
   const WatchedPane({
     required this.id,
@@ -432,7 +459,12 @@ class TerminalWatchController extends ChangeNotifier {
     runningPane = paneId;
     progress = 'Checking terminal';
     _notify();
+    var inputAttempted = false;
     try {
+      if (action == 'run') {
+        final compatibilityError = notificationMacroError(macro);
+        if (compatibilityError != null) throw StateError(compatibilityError);
+      }
       final before = await transport.capture(binding.pane);
       _checkRun(generation);
       state.observe(before, now(), freshness);
@@ -441,22 +473,10 @@ class TerminalWatchController extends ChangeNotifier {
       state.submittedScreen = before;
       state.awaitingOutput = true;
       if (action == 'enter') {
+        inputAttempted = true;
         await transport.key(binding.pane, 'enter');
         _checkRun(generation);
       } else {
-        // Preflight every step before sending any input.
-        for (final step in macro.steps) {
-          if (step.type == TerminalMacroStepType.device ||
-              (step.type == TerminalMacroStepType.tmux &&
-                  step.value != binding.pane.window) ||
-              (step.type == TerminalMacroStepType.terminalKey &&
-                  (step.value == 'ctrl_b' ||
-                      terminalKeySequence(step.value) == null))) {
-            throw StateError(
-              'Use command/key/wait steps. Window switching is handled by the binding.',
-            );
-          }
-        }
         for (var i = 0; i < macro.steps.length; i++) {
           _checkRun(generation);
           final step = macro.steps[i];
@@ -465,6 +485,7 @@ class TerminalWatchController extends ChangeNotifier {
           switch (step.type) {
             case TerminalMacroStepType.shell:
               if (step.value.trim().isNotEmpty) {
+                inputAttempted = true;
                 await transport.paste(binding.pane, step.value);
                 await _delay(terminalPasteSettleTime, generation);
                 if (commandNeedsEnter(macro.steps, i)) {
@@ -473,11 +494,12 @@ class TerminalWatchController extends ChangeNotifier {
                 }
               }
             case TerminalMacroStepType.terminalKey:
+              inputAttempted = true;
               await transport.key(binding.pane, step.value);
               if (step.value == 'enter') state.submissionUnconfirmed = true;
             case TerminalMacroStepType.wait:
             case TerminalMacroStepType.tmux:
-              break; // Matching window selection is already resolved to pane ID.
+              break; // Initial selection is overridden by the bound pane ID.
             case TerminalMacroStepType.device:
               throw StateError('Device macro is not a terminal macro');
           }
@@ -491,7 +513,7 @@ class TerminalWatchController extends ChangeNotifier {
     } catch (error) {
       // Input may have reached the remote process even when its ACK was lost.
       // Never replay it on reconnect or claim success from socket writes.
-      state.submissionUnconfirmed = true;
+      if (inputAttempted) state.submissionUnconfirmed = true;
       state.runError = error is StateError
           ? error.message.toString()
           : 'Input delivery uncertain';

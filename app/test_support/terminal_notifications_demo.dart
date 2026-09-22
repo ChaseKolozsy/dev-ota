@@ -58,6 +58,14 @@ class _DemoState extends State<Demo> {
             id: 'hello-$i',
             name: 'Hello ${i + 1}',
             steps: [
+              // Deliberately disagrees with the binding, as saved phone macros
+              // may target a different interactive window. Never execute it.
+              const TerminalMacroStep(
+                id: 'old-window',
+                type: TerminalMacroStepType.tmux,
+                value: '9',
+                delaySeconds: 0,
+              ),
               TerminalMacroStep(
                 id: 'text',
                 type: TerminalMacroStepType.shell,

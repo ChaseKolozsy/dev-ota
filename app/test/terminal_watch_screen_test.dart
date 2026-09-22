@@ -36,6 +36,10 @@ void main() {
     pending.complete([pane]);
     await tester.pumpAndSettle();
     expect(find.text('Window test:1.0 (%0)'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Save notification controls'),
+      200,
+    );
     expect(find.text('Save notification controls'), findsOneWidget);
   });
 
@@ -79,5 +83,51 @@ void main() {
     pending.complete([pane]);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unsupported macro is explained before saving bindings', (
+    tester,
+  ) async {
+    var saved = false;
+    final macro = TerminalMacro(
+      id: 'bad',
+      name: 'Bad',
+      steps: const [
+        TerminalMacroStep(
+          id: 'new-window',
+          type: TerminalMacroStepType.tmux,
+          value: 'c',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    watch.configure(
+      [TerminalWatchBinding(pane: pane, macroId: 'bad')],
+      [macro],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TerminalWatchScreen(
+          watch: watch,
+          loadPanes: () async => [pane],
+          macros: [macro],
+          onSave: (_, _, _) async {
+            saved = true;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Save notification controls'),
+      200,
+    );
+    await tester.tap(find.text('Save notification controls'));
+    await tester.pumpAndSettle();
+    expect(saved, isFalse);
+    expect(
+      find.textContaining('Not run: only an initial numeric'),
+      findsOneWidget,
+    );
   });
 }

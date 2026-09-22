@@ -13,6 +13,98 @@ TerminalMacroStep step(TerminalMacroStepType type, String value) =>
     TerminalMacroStep(id: value, type: type, value: value, delaySeconds: 0);
 
 void main() {
+  for (final oldWindow in ['1', '2', '3']) {
+    test(
+      'bound pane overrides initial window $oldWindow without switching',
+      () async {
+        var time = DateTime(2026);
+        final commands = <String>[];
+        final binding = TerminalWatchBinding(pane: pane, macroId: 'hello');
+        final watch = TerminalWatchController(now: () => time);
+        addTearDown(watch.dispose);
+        watch.configure(
+          [binding],
+          [
+            TerminalMacro(
+              id: 'hello',
+              name: 'Hello',
+              steps: [
+                step(TerminalMacroStepType.tmux, oldWindow),
+                step(TerminalMacroStepType.shell, 'hello'),
+                step(TerminalMacroStepType.terminalKey, 'enter'),
+              ],
+            ),
+          ],
+        );
+        watch.connect(
+          TmuxWatchTransport((command) async {
+            commands.add(command);
+            return 'unchanged';
+          }),
+        );
+        await watch.poll();
+        for (var i = 0; i < 2; i++) {
+          time = time.add(const Duration(seconds: 6));
+          await watch.poll();
+        }
+        await watch.act(pane.id, 'run', watch.token(binding));
+        expect(watch.observations[pane.id]!.runError, isNull);
+        expect(commands.where((c) => c.contains('paste-buffer')), hasLength(1));
+        expect(commands.where((c) => c.contains('send-keys')), hasLength(1));
+        expect(commands.every((c) => c.contains("-t '%1'")), isTrue);
+        expect(commands.any((c) => c.contains('select-window')), isFalse);
+      },
+    );
+  }
+
+  for (final unsafe in [
+    [step(TerminalMacroStepType.tmux, 'c')],
+    [step(TerminalMacroStepType.terminalKey, 'ctrl_b')],
+    [
+      step(TerminalMacroStepType.shell, 'hello'),
+      step(TerminalMacroStepType.tmux, '2'),
+    ],
+    [
+      step(TerminalMacroStepType.shell, 'hello'),
+      step(TerminalMacroStepType.tmux, '1'),
+    ],
+  ]) {
+    test(
+      'unsupported routing is rejected before any input: ${unsafe.map((s) => s.value)}',
+      () async {
+        var time = DateTime(2026);
+        final commands = <String>[];
+        final binding = TerminalWatchBinding(pane: pane, macroId: 'unsafe');
+        final watch = TerminalWatchController(now: () => time);
+        addTearDown(watch.dispose);
+        watch.configure(
+          [binding],
+          [TerminalMacro(id: 'unsafe', name: 'Unsafe', steps: unsafe)],
+        );
+        watch.connect(
+          TmuxWatchTransport((command) async {
+            commands.add(command);
+            return 'unchanged';
+          }),
+        );
+        await watch.poll();
+        for (var i = 0; i < 2; i++) {
+          time = time.add(const Duration(seconds: 6));
+          await watch.poll();
+        }
+        await watch.act(pane.id, 'run', watch.token(binding));
+        expect(
+          commands.any(
+            (c) => c.contains('paste-buffer') || c.contains('send-keys'),
+          ),
+          isFalse,
+        );
+        expect(watch.observations[pane.id]!.runError, startsWith('Not run:'));
+        expect(watch.observations[pane.id]!.submissionUnconfirmed, isFalse);
+      },
+    );
+  }
+
   test(
     'shell quoting preserves apostrophes and command substitution literally',
     () {

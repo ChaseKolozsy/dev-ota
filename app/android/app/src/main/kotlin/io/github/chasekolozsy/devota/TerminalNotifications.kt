@@ -93,7 +93,7 @@ internal object TerminalNotifications {
         if (cards.isEmpty() || !allowed(context)) return
         val style = Notification.InboxStyle().setBigContentTitle("DevOTA terminal · ${cards.size} windows")
         cards.forEachIndexed { index, row ->
-            style.addLine("${index + 1}. ${row["title"]} · ${row["macro"]}: ${row["status"]}")
+            style.addLine("${index + 1}. ${row["status"]} · ${row["title"]}")
             val action = if (row["stop"] == true) "stop" else "run"
             if (row[action] == true) {
                 val label = if (action == "stop") "${index + 1}: Stop"

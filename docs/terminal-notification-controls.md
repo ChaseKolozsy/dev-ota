@@ -101,10 +101,15 @@ input. After replacing/restarting tmux panes, select them again in settings.
 
 ## Macro compatibility and Enter
 
-Notification macros support Command, Key and Wait. A tmux selection step for
-the bound window number is redundant and skipped. Other tmux operations and
-Ctrl-B are rejected before any input is sent; use a macro that operates within
-its assigned window.
+Notification macros support Command, Key and Wait. Initial numeric tmux
+window-selection steps are overridden by the notification's explicit binding,
+even if the saved macro selects a different window. This changes only the
+notification run, not the shared macro or its interactive behavior. The setup
+screen explains this rule. Any tmux step after input, other tmux operations,
+and Ctrl-B are rejected before any input is sent; setup rejects these macros
+on Save as well. A preflight rejection reports **Not run**, without falsely
+flagging a new unconfirmed submission. Notification summary rows put status
+before pane labels so truncated rows still expose errors.
 
 Commands use bracketed paste when the receiving application requests it, wait
 200 ms for paste handling, then send a separate carriage return. If the next
@@ -169,6 +174,24 @@ Build the real phone APK afterward with `scripts/build/devota-public-debug.sh`.
 The fixture entry point and package ID are not used by that build.
 
 ## Recorded verification — 2026-09-21
+
+### Saved macro window-selection override
+
+- Phone screenshots showed the first two bound windows rejecting saved macros
+  whose initial tmux window numbers differed from their notification bindings.
+  A read-only capture of the third bound pane showed its submitted prompt and
+  active work; it was not rerun during debugging.
+- Flutter: **117 tests passed**, analysis: **no issues**. New coverage includes
+  matching/mismatched initial selection, rejection before any input of later
+  switching and unsupported tmux/key steps, and setup-time validation.
+- Fresh Android 36 emulator fixture over real Windows CMD → WSL: all three
+  Vim macros intentionally began with **window 9**, which does not exist in the
+  fixture. Their notification bindings still received exactly one greeting
+  each. The full three-shortcut, dropped-Enter recovery and disconnect test
+  passed: **6 Enters delivered, 1 deliberately dropped**. Evidence:
+  `/tmp/devota-bound-window-override-evidence`.
+- ARM64 **2026094107** staged, checksum verified and listed by `/builds`.
+  Live macro definitions were not modified and live agents were not invoked.
 
 ### SSH shortcut panel and delivery reconciliation follow-up
 

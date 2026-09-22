@@ -230,8 +230,9 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
       ),
       const SizedBox(height: 12),
       const Text(
-        'Use Command, Key and Wait steps. A tmux step selecting the '
-        'same window is supported; other window-switching steps and Ctrl-B are not.',
+        'The window chosen here overrides initial numeric tmux window-selection '
+        'steps in the macro. Command, Key and Wait steps run only in this window. '
+        'Switching windows after input, other tmux operations and Ctrl-B are unsupported.',
       ),
       const SizedBox(height: 16),
       SwitchListTile(
@@ -315,6 +316,15 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
                   error = null;
                 });
                 try {
+                  for (final pane in selected) {
+                    final macro = widget.macros.firstWhere(
+                      (m) => m.id == selections[pane.id],
+                    );
+                    final problem = notificationMacroError(macro);
+                    if (problem != null) {
+                      throw StateError('${pane.label}: $problem');
+                    }
+                  }
                   await widget.onSave(
                     selected
                         .map(
