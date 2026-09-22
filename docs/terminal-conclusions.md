@@ -98,6 +98,23 @@ prose is rejected. Invalid replies never become success and receive bounded retr
 Busy, timeout, incomplete-output, authentication and context-limit failures get
 specific safe messages; authentication/context-limit failures are not retried
 unchanged. No credentials or raw exception details appear in those messages.
+
+For counted tasks, the prompt requires full accounting of the requested total
+for every required stage. Partial completion or approval (19/20, 5/6, 8/10),
+skipped required items, or success over only an attempted subset means Needs
+attention. Missing totals or required-stage results mean Uncertain, not success.
+Explicit prose such as “all 20 completed and approved” is accepted; unrelated
+test counts cannot stand in for task totals. Superseded progress counts do not
+override a fully completed final result. Non-counted tasks need no invented
+totals. These are model instructions, not deterministic arithmetic validation;
+the reviewer still judges only the bounded excerpt, not the actual work.
+
+Count-prompt verification (2026-09-21): **9 reviewer unit tests** and **16
+synthetic local-model checks** passed. The first model run classified omitted
+totals as Needs attention rather than Uncertain; explicit omission examples
+were added, then all 16 checks passed. No live agent sessions were used. This
+is a host-helper-only change: subsequent reviews use it without an APK update;
+already cached verdicts are not reclassified automatically by this change.
 Quote validation cannot establish
 that the model interpreted context correctly. No transcripts, model replies,
 or exception details are logged by this helper, and no durable review cache is
@@ -116,10 +133,12 @@ service availability is not guaranteed, and that path remains Uncertain.
   submission, and independent good/bad windows.
 - `python3 -m unittest discover -s server -p test_terminal_review.py` tests
   verdict validation and bounded input handling.
-- `python3 scripts/test/terminal-review-smoke.py` uses five short synthetic
+- `python3 scripts/test/terminal-review-smoke.py` uses 16 short synthetic
   messages against the existing home model: success, failure, working, a new
   prompt following an old success, and an injected instruction to report a
-  false success. No agents are launched.
+  false success, plus full/partial counts, missing totals/approval, attempted
+  subsets, superseded progress, and test counts versus task totals. No agents
+  are launched.
 - The isolated Vim/Android fixture from `terminal-notification-controls.md`
   supports `python3 scripts/test/terminal-notification-ui.py reader --output
   /tmp/devota-terminal-reader-evidence`. It generates synthetic terminal prose,

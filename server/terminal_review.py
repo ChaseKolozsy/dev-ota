@@ -32,9 +32,27 @@ response, return uncertain: the old success does not apply to the new request.
 Return ONLY JSON with status, reason, evidence_line. status is one of:
 reported_success: the latest final answer explicitly reports the requested work
 complete and successful, with no remaining required work or failed checks.
-needs_attention: it reports a failure, blocked/unfinished required work, missing
-verification, or asks the user to take an action before completion.
+needs_attention: it explicitly reports a failure, blocked/unfinished required
+work, missing verification, or asks the user to act before completion.
 uncertain: still working, no clear final answer, insufficient or ambiguous context.
+COUNTED TASKS: Success requires explicit full accounting of the requested total
+for EVERY required stage (for example completed AND approved when both are
+required). 20/20 completed and 20/20 approved can support success. 19/20, 5 out
+of 6, or 8 of 10 completed/approved means needs_attention, even if the answer
+says "done" or "successful". 20/20 completed but 19/20 approved is NOT success
+when approval is required. Failed, blocked, pending, skipped or unverified items
+do not count as completed/approved required items. Do not shrink the requested
+denominator to the attempted subset or substitute passed tests for task totals.
+For a counted task, missing/ambiguous totals or missing required-stage results
+mean uncertain unless an explicit shortfall/failure already means needs_attention.
+Omission alone is uncertain, not needs_attention: request "complete and approve
+20 lessons" + final "Done" => uncertain; final "20/20 completed" with no approval
+result => uncertain. An explicitly pending approval => needs_attention.
+"All 20 completed and approved" counts as 20/20 for both stages; "done" alone
+does not. Judge the latest final outcome, not superseded progress counts: an
+earlier 19/20 followed by an explicit final 20/20 is not a remaining shortfall.
+Do not mistake unrelated ratios, dates or test counts for requested item totals.
+Non-counted tasks need no invented counts; use the completion rules above.
 reason: one short sentence, at most 180 characters.
 evidence_line: the integer line number of ONE line supporting your assessment.
 Use 0 for uncertain. Do not copy or paraphrase evidence. A non-uncertain status
