@@ -1,0 +1,86 @@
+{
+  "id": "cradle-lexical-navigation-20260922",
+  "name": "Cradle: JEV colors + morphology navigation",
+  "priority": 1000,
+  "steps": [
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertDeviceProfile\",\"args\":{\"profile\":\"revvl7pro-android36-1080x2436\",\"models\":[\"sdk_gphone64_x86_64\",\"TMRV07P5G\"],\"androidSdk\":36,\"shortSidePx\":1080,\"longSidePx\":2436,\"densityDpi\":480},\"capture\":true}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"launchIntent\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\",\"action\":\"android.intent.action.VIEW\",\"uri\":\"cradle:///\"},\"capture\":true,\"label\":\"Reset reader route without clearing app data\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 2
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"launchIntent\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\",\"action\":\"android.intent.action.VIEW\",\"uri\":\"cradle:///lesson/029e9bea-2650-4f6e-84e0-861c6a605412?sense=latigo-action\"},\"capture\":true,\"label\":\"Open the classified sentence\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 35
+    },
+    {
+      "type": "device",
+      "delaySeconds": 1,
+      "value": "{\"action\":\"swipe\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\",\"x1\":540,\"y1\":1950,\"x2\":540,\"y2\":950,\"durationMs\":500},\"capture\":true,\"label\":\"Reveal the example below the expanded action sense\"}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"Gilatigo\\nlatigo\",\"centerRegion\":{\"left\":0,\"right\":1,\"top\":0.2,\"bottom\":0.7}},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Sentence inflection menu\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 1
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"latigo → Gilatigo\"]},\"capture\":true}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"latigo\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Choose lemma\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 35
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"JEV first choice\",\"JEV second choice\"]},\"capture\":true,\"label\":\"Actual sense cards: action green, tool yellow\"}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"gilatigo\\nlatigo\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Morphology inflection still opens menu\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 1
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"expect\":{\"textIncludes\":[\"latigo → gilatigo\"]},\"capture\":true}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"contentDescriptionExact\":\"latigo\"},\"packageName\":\"io.github.chasekolozsy.cradlespeak\"},\"capture\":true,\"label\":\"Morphology lemma navigation\"}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 5
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"Isip\",\"Porma\"],\"textExcludes\":[\"JEV first choice\",\"JEV second choice\",\"Contextual lookup is pending\"]},\"capture\":true,\"label\":\"Navigation-only morphology: lesson present, no stale colors\"}"
+    }
+  ]
+}
