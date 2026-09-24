@@ -1,0 +1,28 @@
+{
+  "id": "cradle-learner-api31-anki-proof-20260923",
+  "name": "Cradle API31: Anki visible control",
+  "priority": 2000,
+  "steps": [
+    {
+      "type": "device",
+      "value": "{\"action\": \"assertDeviceProfile\", \"capture\": true, \"label\": \"\", \"args\": {\"profile\": \"cradle-api31-1080x2280\", \"models\": [\"sdk_gphone64_x86_64\"], \"androidSdk\": 31, \"shortSidePx\": 1080, \"longSidePx\": 2280, \"densityDpi\": 440}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\": \"launchIntent\", \"capture\": true, \"label\": \"Open Anki integration\", \"args\": {\"packageName\": \"io.github.chasekolozsy.cradlespeak\", \"action\": \"android.intent.action.VIEW\", \"uri\": \"cradle:///anki\"}}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 10
+    },
+    {
+      "type": "device",
+      "value": "{\"action\": \"assertUi\", \"capture\": true, \"label\": \"Anki integration visible\", \"expect\": {\"activePackage\": \"io.github.chasekolozsy.cradlespeak\", \"textIncludes\": [\"Anki\"]}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\": \"localHttpAssert\", \"capture\": true, \"label\": \"Audit engine healthy\", \"args\": {\"url\": \"http://127.0.0.1:18003/health\", \"jsonPathEquals\": {\"status\": \"ok\"}, \"expectedStatus\": 200}}"
+    }
+  ]
+}
