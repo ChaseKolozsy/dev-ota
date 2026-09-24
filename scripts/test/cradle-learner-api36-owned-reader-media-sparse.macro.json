@@ -1,0 +1,41 @@
+{
+  "id": "cradle-learner-api36-owned-reader-media-sparse-20260924",
+  "name": "Cradle API36: owned reader and podcast sparse capture",
+  "priority": 2011,
+  "steps": [
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertDeviceProfile\",\"capture\":false,\"label\":\"API36 REVVL-sized emulator\",\"args\":{\"profile\":\"revvl7pro-android36-1080x2436\",\"models\":[\"sdk_gphone64_x86_64\",\"TMRV07P5G\"],\"androidSdk\":36,\"shortSidePx\":1080,\"longSidePx\":2436,\"densityDpi\":480}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"capture\":false,\"label\":\"Owned self-hosted engine healthy\",\"args\":{\"url\":\"http://127.0.0.1:18005/health\",\"jsonPathEquals\":{\"status\":\"ok\"},\"expectedStatus\":200}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"capture\":false,\"label\":\"Owned English license available\",\"args\":{\"url\":\"http://127.0.0.1:18005/license?lang=en\",\"jsonPathEquals\":{\"licensed\":true,\"reason\":\"self_hosted\"},\"expectedStatus\":200}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"launchIntent\",\"capture\":false,\"label\":\"Open completed owned EPUB\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\",\"action\":\"android.intent.action.VIEW\",\"uri\":\"cradle:///native-gateway/book/book-cbc92a224b34da3b2dc741eb51230b12\"}}",
+      "delaySeconds": 6
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"capture\":true,\"label\":\"Reader title, chapter and progress visible\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"NativeAuditCheckpoint\",\"Chapter 1\",\"1 / 48400\"]}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"launchIntent\",\"capture\":false,\"label\":\"Open owned podcast\",\"args\":{\"packageName\":\"io.github.chasekolozsy.cradlespeak\",\"action\":\"android.intent.action.VIEW\",\"uri\":\"cradle:///podcast/579d4ef4-62e9-4b99-a62e-30b724971fe7\"}}",
+      "delaySeconds": 6
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"assertUi\",\"capture\":true,\"label\":\"Podcast player visible\",\"expect\":{\"activePackage\":\"io.github.chasekolozsy.cradlespeak\",\"textIncludes\":[\"OwnedAuditPodcast\"]}}"
+    },
+    {
+      "type": "device",
+      "value": "{\"action\":\"localHttpAssert\",\"capture\":false,\"label\":\"Podcast has transcript cues\",\"args\":{\"url\":\"http://127.0.0.1:18005/gateway/episode/579d4ef4-62e9-4b99-a62e-30b724971fe7/phrases\",\"expectedStatus\":200,\"bodyIncludes\":[\"I would like to explain this sentence.\"]}}"
+    }
+  ]
+}
