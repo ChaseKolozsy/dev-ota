@@ -9,6 +9,15 @@
     },
     {
       "type": "device",
+      "value": "{\"action\": \"launchIntent\", \"capture\": true, \"label\": \"Return to lesson catalog before opening generator\", \"args\": {\"packageName\": \"io.github.chasekolozsy.cradlespeak\", \"action\": \"android.intent.action.VIEW\", \"uri\": \"cradle:///arachnomind\"}}"
+    },
+    {
+      "type": "wait",
+      "value": "",
+      "delaySeconds": 2
+    },
+    {
+      "type": "device",
       "value": "{\"action\": \"launchIntent\", \"capture\": true, \"label\": \"Open lesson generator\", \"args\": {\"packageName\": \"io.github.chasekolozsy.cradlespeak\", \"action\": \"android.intent.action.VIEW\", \"uri\": \"cradle:///generate\"}}"
     },
     {
