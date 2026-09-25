@@ -7,16 +7,16 @@ roots:
 apps:
   - id: cradlespeak
     root: cradlespeak
-    label: Cradlespeak
+    label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Cradlespeak Android app.
+    notes: Signed ARM64 build 2153 from app source 4ac267c5; final main 06082b92 adds docs only. Native AnkiDroid integration and lexical lookup enabled. APK SHA256 eb60be144ac0604ddbcb008766c20df5009b1270692349c38f0b745f0750eb5f.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug
-        release: scripts/build_android_apk.sh release
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2153
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2153
   - id: devota
     root: devota
     label: DevOTA
