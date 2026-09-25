@@ -31,16 +31,21 @@ def pss_kib(meminfo):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True, help="exact ADB serial of the physical phone")
+    parser.add_argument("--device-model", required=True,
+                        help="exact model observed for the same phone")
+    parser.add_argument("--android-sdk", type=int, required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--duration-seconds", type=int, default=180)
     parser.add_argument("--interval-seconds", type=int, default=5)
     args = parser.parse_args()
     if not 5 <= args.duration_seconds <= 600 or not 2 <= args.interval_seconds <= 30:
         parser.error("duration must be 5–600 seconds and interval 2–30 seconds")
+    if not args.device_model.strip() or args.device_model != args.device_model.strip() or not 21 <= args.android_sdk <= 50:
+        parser.error("supply a valid exact model and Android SDK")
     model = adb(args.serial, "shell", "getprop", "ro.product.model").strip()
     sdk = adb(args.serial, "shell", "getprop", "ro.build.version.sdk").strip()
-    if (model, sdk) != ("TMRV07P5G", "36"):
-        parser.error(f"expected physical TMRV07P5G/Android 36, got {model}/{sdk}")
+    if (model, sdk) != (args.device_model, str(args.android_sdk)):
+        parser.error(f"ADB profile differs from the supplied phone model/SDK: got {model}/{sdk}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(args.output_dir, 0o700)
     summary = args.output_dir / "meminfo-samples.jsonl"

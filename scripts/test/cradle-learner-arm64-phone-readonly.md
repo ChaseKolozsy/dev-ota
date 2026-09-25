@@ -1,25 +1,31 @@
 # Signed ARM64 Cradlespeak phone check (read only)
 
-This renders one fixture-bound DevOTA device macro for the physical REVVL7 Pro
-(TMRV07P5G, Android 36). The macro launches the installed app, observes the
+This renders one fixture-bound DevOTA device macro for a phone whose model,
+Android SDK, screen geometry and density have been observed. The macro launches the installed app, observes the
 selected peer's CENC3 full-sync block, opens an existing owned book, taps one
 unique bound word, and observes its contextual lookup. It never installs,
 imports, syncs, classifies, purchases, edits, or asks for a human checkpoint.
 
 ## Required preflight
 
-1. The signed ARM64 Cradlespeak build must already be installed. Verify its
+1. The signed ARM64 Cradlespeak build must already be installed on a compatible
+   phone. Verify its
    package version and signer separately; `launchApp` cannot attest a build.
-2. In the app, select an existing CENC3 peer whose compatibility probe reports
-   that full sync is unsupported. Keep English as the display language. Do not
-   start a full transfer. Record the exact selected peer origin from the UI.
-3. The phone must already own a book with a visible, unique word occurrence and
+2. Read the phone's exact model, Android SDK, short and long screen sides, and
+   density from a read-only device status/profile response. Do not infer these
+   from an earlier REVVL device or an established relay socket. The first
+   macro step checks every supplied value and stops on a mismatch.
+3. In the app, select an existing CENC3 peer whose compatibility probe reports
+   that full sync is unsupported. Do not start a full transfer. Record the exact
+   selected peer origin and the three visible, localized labels: incompatibility
+   warning, disabled full-sync button, and language-picker button.
+4. The phone must already own a book with a visible, unique word occurrence and
    a persisted contextual lookup. Record the book ID, visible title, exact
    occurrence ID, accessibility content description of the word, and expected
    lookup text from a read-only fixture inspection. The macro label records the
    occurrence ID; the exact ID binding still needs backend evidence or a known
    fixture map. Do not create or classify content merely to run this macro.
-4. The DevOTA phone agent must be visibly connected, its accessibility service
+5. The DevOTA phone agent must be visibly connected, its accessibility service
    and whole-device control enabled, and Macros synced. A relay socket alone
    does not establish visible control.
 
@@ -27,12 +33,20 @@ Render, then validate before publishing to the DevOTA build server:
 
 ```bash
 python3 scripts/test/cradle-learner-arm64-phone-readonly.py \
+  --device-model "$OBSERVED_PHONE_MODEL" \
+  --android-sdk "$OBSERVED_PHONE_SDK" \
+  --short-side-px "$OBSERVED_SHORT_SIDE_PX" \
+  --long-side-px "$OBSERVED_LONG_SIDE_PX" \
+  --density-dpi "$OBSERVED_DENSITY_DPI" \
   --peer-url 'https://EXISTING-PEER' \
   --book-id 'EXISTING-OWNED-BOOK-ID' \
   --book-title 'VISIBLE BOOK TITLE' \
   --occurrence-id 'EXACT-OCCURRENCE-ID' \
   --tap-description 'UNIQUE ACCESSIBILITY WORD DESCRIPTION' \
-  --lookup-text 'JEV first choice' \
+  --sync-block-text 'EXACT VISIBLE LOCALIZED WARNING' \
+  --sync-now-text 'EXACT VISIBLE FULL-SYNC BUTTON' \
+  --choose-languages-text 'EXACT VISIBLE LANGUAGE-PICKER BUTTON' \
+  --lookup-text 'EXACT VISIBLE LOOKUP RESULT' \
   --output /private/evidence/cradle-arm64-phone-readonly.macro.json
 ```
 
@@ -55,6 +69,8 @@ bounded read-only observer immediately before the macro:
 ```bash
 python3 scripts/test/cradle-learner-arm64-memory-observer.py \
   --serial EXACT-PHYSICAL-ADB-SERIAL \
+  --device-model "$OBSERVED_PHONE_MODEL" \
+  --android-sdk "$OBSERVED_PHONE_SDK" \
   --output-dir /private/evidence/phone-meminfo \
   --duration-seconds 180 --interval-seconds 5
 ```
@@ -63,7 +79,9 @@ It refuses a different model/SDK, samples `dumpsys meminfo` for the app every
 five seconds, and saves timestamped raw files plus a PSS summary. Compare its
 timestamps with the DevOTA step times and report baseline, peak, and endpoint
 PSS only when the same phone is identified in both records. An emulator or a
-different ADB device does not establish phone RAM. Without an ADB connection,
+different ADB device does not establish phone RAM. The currently connected
+phone is DevOTA-only and has no ADB transport, so this observer cannot be used
+for that session. Without an ADB connection,
 the macro provides UI evidence only and phone memory remains unmeasured.
 
 No physical-phone run or memory result is implied by rendering or publishing
