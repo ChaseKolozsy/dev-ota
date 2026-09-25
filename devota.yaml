@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2163 from main source 37677ffd. Restores creative lesson fallback for missing definitions and preserves Jev tap context in blended lessons. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 ae304ea23d8d01aa70f74d28bc83b3396ad51f8ed2c5300cb4bc6befabf1cce9; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2164 from main source 7a893596. A word with one matching Creative lesson opens it directly when no definition exists; several matches remain selectable. Preserves Jev tap context in blended lessons. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 7c23beaf4d6dbe7c326b21340ab578efe586a4d44974d3cf29655f6a667a5438; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2163
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2163
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2164
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2164
   - id: devota
     root: devota
     label: DevOTA
