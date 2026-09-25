@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2161 from main source 912dfc24eb678573bdc4193e841399727031b801. Bounded learner-selected semantic review; AnkiDroid and lexical lookup. APK SHA256 73781efffb1577ec39d85ad6b0bc9ea98b5bf54e309a4ace5ea83cd4442f8fd4; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2162 from main source 8f35d481103fa94e2651775416d7813a63295012. Bounded learner-selected semantic review, AnkiDroid, lexical lookup, FFmpeg/FFprobe and gesture models. APK SHA256 722da243fbb08346a0b4515230168e18e6ba88c69bcd5142f1fa3b22ec1f6061; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2161
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2161
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2162
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2162
   - id: devota
     root: devota
     label: DevOTA
