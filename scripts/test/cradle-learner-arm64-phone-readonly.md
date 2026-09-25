@@ -69,3 +69,22 @@ the macro provides UI evidence only and phone memory remains unmeasured.
 No physical-phone run or memory result is implied by rendering or publishing
 this macro. A successful run also does not prove full-corpus RAM, a completed
 sync, or authorization for a different peer/profile.
+
+## Emulator route check, September 25
+
+On the preserved API36 x86 emulator `emulator-5554` with debug build 2153,
+`adb shell am start -W -a android.intent.action.VIEW -d cradle:///sync -p
+io.github.chasekolozsy.cradlespeak` returned `Status: ok` and delivered the
+intent to `MainActivity`. A subsequent UIAutomator dump showed `Sync`, the
+saved peer `http://10.0.2.2:18003`, `Sync now`, the protected-library warning,
+and `Choose languages instead`. This checks actual navigation despite the
+claim-specific `_onDeepLink` handler in app code.
+
+The same intent command with
+`cradle:///native-gateway/book/book-9402d14230f2411a3692591fce6982c0`
+also returned `Status: ok`. Its UI showed the GuidedReader shell (`Books` and
+`Retry`); that book did **not** load under the emulator's current content
+server/license configuration. Thus this check proves reader-route dispatch,
+not successful reader content or exact-occurrence lookup. The renderer's
+reader-title assertion will fail closed until an accessible owned phone
+fixture is verified. No physical phone was controlled in this route check.
