@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2203 from main source 3a455cf2. Restores encrypted ArachnoMind lesson-summary caching across app restarts. Accepts Cebuano 2.9.0 precomputed catalogs, validates installation manifests once per batch, and retains validated catalogs for later launches. Final emulator restart home requests took 0.15-0.29s; lookup warm-up took 3.63s versus 25.18s before the fixes. Downloaded Gilatigo Jev choices and small lemma menu verified. Phone timing remains unmeasured. Includes AnkiDroid and FFmpeg/FFprobe. APK SHA256 ae2d0e41348a2996db04b1ab2912f93ba63519eda4b21191aee9203f5d545f1c; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2209 from main source e3e76833. Fixes Primer and Ogden commentary generation from the currently displayed Creative lesson, including unapproved spec implementations and linked Blended Definitions. Resolves downloaded pack sources and preserves local commentary links without copying installed source bodies. Emulator 2208 verified both UI flows and six embedded-server source cases. Includes prior encrypted restart caching, Cebuano prepared lookup support, AnkiDroid, FFmpeg and FFprobe. APK SHA256 1e5f6c41730d5cd64fbaa40a04417807149ed8f1115a7c3d6e2e5fdffe97203c; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2203
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2203
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2209
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2209
   - id: devota
     root: devota
     label: DevOTA
