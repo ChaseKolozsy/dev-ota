@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2211 from main source 3be871b0. Primer and Ogden commentary use the displayed Creative or linked family source. Fixes rejection of readable local Creative lessons when a downloaded content shard cannot open; storage errors no longer claim a Creative is missing. Purchase controls now wrap long translated labels and hints. Includes prior Jev prepared lookups, encrypted restart caching, AnkiDroid, FFmpeg and FFprobe. Physical-device checks now reach model selection for downloaded Latigo on Phone server and generated Cat on Home server. No paid generation was started. APK SHA256 f59134949fabbc4129e334bd8b1e8145b0f3be7e228b57168e3ee58389807576.
+    notes: Signed ARM64 build 2213 from main source 5638c86f. Fixes Generate appearing unresponsive when review fields are cleared; blanks use the advertised 1–3 defaults, invalid fields show errors beside Generate, and confirmation scrolls on smaller screens. Includes commentary source fixes, Jev prepared lookups, encrypted restart caching, AnkiDroid, FFmpeg and FFprobe. APK SHA256 3d6df39230d65dcb6e85eb44d3990066e0415f54401273e468f9b11f88098879.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2211
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2211
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2213
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2213
   - id: devota
     root: devota
     label: DevOTA
