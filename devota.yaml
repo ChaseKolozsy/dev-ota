@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2181 from main source 6c182f98. Fixes Arachnomind blocking during lookup preparation, cancels abandoned requests, includes installed lessons in progress totals, and records study/encounter state without invalidating prepared lookup data. Encrypted installation lookups persist across restarts. Preserves shared Jev evidence, AnkiDroid, FFmpeg/FFprobe, gesture models and QA origin. APK SHA256 4db25af5bf6fe67f06c265d55a27350750eb0730fe2adf790faa501f21d31a48; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2184 from main source 0c4f43d7. Includes persistent encrypted installation lookups, preparation when unlocking already-downloaded content, installed lesson variants, profile progress, and concurrent Arachnomind loading. Offline Gilatigo Jev colors verified on the matching emulator source; physical-phone verification remains open. Preserves AnkiDroid, FFmpeg/FFprobe, gesture models and QA origin. APK SHA256 ee49ab27ca4703c0ba3d7fecfe77bedaae033aecd67f549916caeeb28cd3fbf3; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2181
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2181
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2184
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2184
   - id: devota
     root: devota
     label: DevOTA
