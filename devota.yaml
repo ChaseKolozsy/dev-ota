@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2186 from main source 388cb5c2. Adds device-wide lookup tuning and a Settings benchmark button; preserves taps, expanded senses and scroll state while Jev loads. Downloaded Cebuano Gilatigo lemma-menu lookup verified on emulator, with yellow tool and green action choices arriving automatically. Calibration persisted across emulator restart. Physical phone performance remains unmeasured. Includes AnkiDroid, FFmpeg/FFprobe, gesture models and QA origin. APK SHA256 c335604cc9ee72f3ef65c01a0b2470920cc1f603dcfa78327a3bad74a5586746; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2190 from main source 2117e526. Adds bounded, revision-validated lookup caches and updated device-wide calibration. Warm emulator lookup median improved from 1.058s to 0.491s; first lookup after restart still took 3.196s. Emulator calibration selected four workers; physical phone results must be measured separately. Preserves taps, expanded senses and scroll while Jev loads. Includes AnkiDroid and FFmpeg/FFprobe. APK SHA256 d37cb072f4ae21a6f2bdc66eb6c723e17780f43c1a2885563d0ef32d4fce3dda; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2186
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2186
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2190
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2190
   - id: devota
     root: devota
     label: DevOTA
