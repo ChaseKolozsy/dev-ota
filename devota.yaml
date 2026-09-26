@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2175 from main source dfc4136d. Desktop and embedded Jev now use one morphology evidence policy. Language installation prepares an encrypted persistent word-lookup cache, including Android foreground protection. Cebuano 2.8.4 contains the original shared Gilatigo annotation. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 00d80c50c172edff82b19246bac1e2f383593ffdc75701581010ab2d94fef3d9; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2177 from main source 4bc92249. Desktop and embedded Jev now use one morphology evidence policy. Language installation prepares an encrypted persistent word-lookup cache, including Android foreground protection. Cebuano 2.8.4 contains the original shared Gilatigo annotation. Creative reference prompts respect the 25-block floor; a confirmed relay reviewer failure preserves the last clean draft. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 b494a42df4b85deb6e7e7582090bf4461005a0cfbc73c6763178a20fb9e03b4d; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2175
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2175
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2177
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2177
   - id: devota
     root: devota
     label: DevOTA
