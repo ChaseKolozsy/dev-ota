@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · AnkiDroid
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2169 from main source 329b56ee. The inflected-form choice keeps the exact Jev occurrence; the opened blended lesson preserves its matching family member and shows contextual lookup status. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 1f23dad0ab2f18fd0e24b4abf45273a64c33e781e1450414db7e12b429fb292d; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
+    notes: Signed ARM64 build 2171 from main source 15abd228. The inflected-form choice keeps the exact Jev occurrence; the opened blended lesson preserves its matching family member and shows contextual lookup status. Free QA pack purchases now request contact verification when the relay requires it. Includes AnkiDroid, FFmpeg/FFprobe and gesture models. APK SHA256 093bc65b294229978c1f45e449ceafac1cb7c4f57ffc6e697eaf88ac1409dca1; signer SHA256 cf65f2dc8f0ab9d721b2256eaf123178041e74b97e979dec3bca4d7aa3a6dbd4.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2169
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2169
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2171
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2171
   - id: devota
     root: devota
     label: DevOTA
