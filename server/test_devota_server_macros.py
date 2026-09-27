@@ -28,9 +28,9 @@ class MacroStoreTests(unittest.TestCase):
                             "action": "doubleTap", "args": {"xNormalized": 0.5, "yNormalized": 0.5}
                         })},
                         {"type": "device", "value": json.dumps({
-                            "action": "gesturePath", "args": {"points": [
-                                {"xNormalized": 0.2, "yNormalized": 0.2, "tMs": 0},
-                                {"xNormalized": 0.8, "yNormalized": 0.8, "tMs": 300},
+                            "action": "gesturePath", "args": {"durationMs": 300, "points": [
+                                {"xNormalized": 0.2, "yNormalized": 0.2},
+                                {"xNormalized": 0.8, "yNormalized": 0.8},
                             ]}
                         })},
                     ],

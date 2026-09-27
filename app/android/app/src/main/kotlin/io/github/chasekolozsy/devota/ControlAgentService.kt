@@ -110,6 +110,7 @@ class ControlAgentService : Service() {
                 )
                 "gesturePath" -> ControlAccessibilityService.gesturePath(
                     args.getJSONArray("points"),
+                    args.getLong("durationMs"),
                     args.optString("packageName", DEFAULT_APP_PACKAGE),
                     allowWholeDevice,
                 )

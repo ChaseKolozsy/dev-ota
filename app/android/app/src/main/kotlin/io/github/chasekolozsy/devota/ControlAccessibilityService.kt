@@ -83,60 +83,42 @@ class ControlAccessibilityService : AccessibilityService() {
             ).put("intervalMs", 150)
         }
 
-        /** One continuous accessibility stroke. Points are screen pixels with
-         * elapsed milliseconds; callers must provide 2..64 points from t=0.
+        /** One continuous accessibility stroke through 2..64 screen-pixel
+         * waypoints. Android distributes one total duration along the path.
          */
         fun gesturePath(
             points: JSONArray,
+            durationMs: Long,
             packageName: String?,
             allowWholeDevice: Boolean,
         ): JSONObject {
             val service = requireService()
             service.requireScope(packageName, allowWholeDevice)
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                throw IllegalStateException("timed gesture paths require Android 8.0/API 26 or newer")
-            }
             if (points.length() !in 2..64) {
                 throw IllegalArgumentException("gesturePath requires 2..64 points")
             }
-            val timedPoints = ArrayList<Triple<Float, Float, Long>>(points.length())
-            var previousTime = -1L
+            if (durationMs !in 80L..5000L) {
+                throw IllegalArgumentException("gesturePath duration must be 80..5000 ms")
+            }
+            val path = Path()
             for (i in 0 until points.length()) {
                 val point = points.getJSONObject(i)
                 val x = point.getDouble("x")
                 val y = point.getDouble("y")
-                val tMs = point.getLong("tMs")
+                if (point.has("tMs")) {
+                    throw IllegalArgumentException("gesturePath uses one durationMs, not per-point tMs")
+                }
                 service.requireScreenPoint(x, y)
-                if (tMs < 0 || tMs > 5000 || (i == 0 && tMs != 0L) || tMs <= previousTime) {
-                    throw IllegalArgumentException("gesturePath times must increase from 0 through 5000 ms")
-                }
-                if (i > 0 && tMs - previousTime < 16) {
-                    throw IllegalArgumentException("gesturePath segments must last at least 16 ms")
-                }
-                timedPoints.add(Triple(x.toFloat(), y.toFloat(), tMs))
-                previousTime = tMs
+                if (i == 0) path.moveTo(x.toFloat(), y.toFloat())
+                else path.lineTo(x.toFloat(), y.toFloat())
             }
-            if (previousTime < 80) throw IllegalArgumentException("gesturePath duration must be at least 80 ms")
             val startedAtMs = SystemClock.elapsedRealtime()
-            var previousStroke: GestureDescription.StrokeDescription? = null
-            for (i in 1 until timedPoints.size) {
-                val (x0, y0, t0) = timedPoints[i - 1]
-                val (x1, y1, t1) = timedPoints[i]
-                val segment = Path().apply {
-                    moveTo(x0, y0)
-                    lineTo(x1, y1)
-                }
-                val continues = i < timedPoints.lastIndex
-                val stroke = previousStroke?.continueStroke(segment, 0, t1 - t0, continues)
-                    ?: GestureDescription.StrokeDescription(segment, 0, t1 - t0, continues)
-                service.runGesture(stroke)
-                previousStroke = stroke
-            }
+            service.runGesture(GestureDescription.StrokeDescription(path, 0, durationMs))
             return JSONObject().put("ok", true)
-                .put("durationMs", previousTime)
+                .put("durationMs", durationMs)
                 .put("elapsedMs", SystemClock.elapsedRealtime() - startedAtMs)
                 .put("pointCount", points.length())
-                .put("timing", "continued_strokes")
+                .put("timing", "single_stroke_path_length")
         }
 
         fun tapUi(

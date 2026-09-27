@@ -422,7 +422,7 @@ void main() {
     expect(swipeArgs, isNot(contains('x1Normalized')));
   });
 
-  test('native double tap and timestamped path resolve against screen', () async {
+  test('native double tap and single-duration path resolve against screen', () async {
     final sent = <String, Map<String, dynamic>>{};
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -460,7 +460,7 @@ void main() {
           id: 'path',
           type: TerminalMacroStepType.device,
           value:
-              '{"action":"gesturePath","args":{"points":[{"xNormalized":0.1,"yNormalized":0.2,"tMs":0},{"xNormalized":0.2,"yNormalized":0.3,"tMs":100},{"xNormalized":0.3,"yNormalized":0.4,"tMs":300}]}}',
+              '{"action":"gesturePath","args":{"durationMs":300,"points":[{"xNormalized":0.1,"yNormalized":0.2},{"xNormalized":0.2,"yNormalized":0.3},{"xNormalized":0.3,"yNormalized":0.4}]}}',
           delaySeconds: 0,
         ),
       ],
@@ -471,8 +471,8 @@ void main() {
     expect(sent['doubleTap'], containsPair('y', 609));
     final points = sent['gesturePath']!['points'] as List;
     expect(points, hasLength(3));
-    expect(points.first, {'x': 108, 'y': closeTo(487.2, 0.001), 'tMs': 0});
-    expect(points.last['tMs'], 300);
+    expect(points.first, {'x': 108, 'y': closeTo(487.2, 0.001)});
+    expect(sent['gesturePath']!['durationMs'], 300);
     expect(points.last, isNot(contains('xNormalized')));
   });
 
@@ -507,7 +507,7 @@ void main() {
           id: 'path',
           type: TerminalMacroStepType.device,
           value:
-              '{"action":"gesturePath","args":{"points":[{"xNormalized":0.5,"yNormalized":0.5,"tMs":0},{"xNormalized":1.1,"yNormalized":0.5,"tMs":200}]}}',
+              '{"action":"gesturePath","args":{"durationMs":200,"points":[{"xNormalized":0.5,"yNormalized":0.5},{"xNormalized":1.1,"yNormalized":0.5}]}}',
           delaySeconds: 0,
         ),
       ],
@@ -518,6 +518,22 @@ void main() {
       evidence.single.actionError,
       contains('invalid gesturePath point 1'),
     );
+    const timestamped = TerminalMacro(
+      id: 'old-timestamps',
+      name: 'Old timestamps',
+      steps: [
+        TerminalMacroStep(
+          id: 'path',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"gesturePath","args":{"durationMs":200,"points":[{"xNormalized":0.5,"yNormalized":0.5,"tMs":0},{"xNormalized":0.6,"yNormalized":0.5,"tMs":200}]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    await expectLater(runner.run(timestamped), throwsStateError);
+    expect(dispatched, isFalse);
+    expect(evidence.last.actionError, contains('invalid gesturePath point 0'));
   });
 
   test(

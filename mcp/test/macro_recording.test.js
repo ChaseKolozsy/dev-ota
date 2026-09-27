@@ -8,8 +8,8 @@ test("compiler preserves native gesture actions and flags raw coordinates for re
     id: "native-gestures",
     entries: [
       { index: 1, action: "doubleTap", args: { x: 100, y: 200 }, ok: true },
-      { index: 2, action: "gesturePath", args: { points: [
-        { x: 100, y: 200, tMs: 0 }, { x: 150, y: 250, tMs: 300 },
+      { index: 2, action: "gesturePath", args: { durationMs: 300, points: [
+        { x: 100, y: 200 }, { x: 150, y: 250 },
       ] }, ok: true },
     ],
   });
