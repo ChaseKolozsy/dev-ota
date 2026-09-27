@@ -33,10 +33,16 @@ class MacroStoreTests(unittest.TestCase):
                                 {"xNormalized": 0.8, "yNormalized": 0.8},
                             ]}
                         })},
+                        {"type": "device", "value": json.dumps({
+                            "action": "waitUi",
+                            "args": {"packageName": "example.app", "timeoutSeconds": 5,
+                                     "intervalMs": 200},
+                            "expect": {"textIncludes": ["Ready"]},
+                        })},
                     ],
                 },
             )
-            self.assertEqual(len(result["item"]["steps"]), 2)
+            self.assertEqual(len(result["item"]["steps"]), 3)
 
     @staticmethod
     def image_template():

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:devota/device_macro_runner.dart';
 import 'package:devota/terminal_macro.dart';
 import 'package:flutter/services.dart';
@@ -155,6 +157,250 @@ void main() {
       ),
       throwsStateError,
     );
+  });
+
+  test(
+    'waitUi polls for appearance and disappearance with terminal evidence',
+    () async {
+      var dumps = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            final action = (call.arguments as Map)['action'];
+            if (action == 'screenshot') return {'pngBase64': 'frame'};
+            if (action == 'uiDump') {
+              dumps++;
+              final text = dumps == 1 || dumps == 3 ? 'Loading' : 'Ready';
+              return {
+                'activePackage': 'game.app',
+                'nodes': [
+                  {'text': text},
+                ],
+              };
+            }
+            return {'ok': true};
+          });
+      final evidence = <DeviceMacroEvidence>[];
+      final runner = DeviceMacroRunner(
+        channel: channel,
+        evidenceSink: (item) async => evidence.add(item),
+        installBuild: (_) async => {'ok': true},
+        localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+      );
+      const macro = TerminalMacro(
+        id: 'wait-ui',
+        name: 'Wait UI',
+        steps: [
+          TerminalMacroStep(
+            id: 'appears',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":2,"intervalMs":100},"expect":{"textIncludes":["Ready"]}}',
+            delaySeconds: 0,
+          ),
+          TerminalMacroStep(
+            id: 'disappears',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":2,"intervalMs":100},"expect":{"textExcludes":["Loading"]}}',
+            delaySeconds: 0,
+          ),
+        ],
+      );
+      await runner.run(macro);
+      expect(evidence, hasLength(2));
+      expect(evidence.map((item) => item.actionResult?['attempts']), [2, 2]);
+      expect(evidence.every((item) => item.actionError == null), isTrue);
+      expect(evidence.every((item) => item.screenshot != null), isTrue);
+      expect(dumps, 4);
+      expect(evidence.first.actionResult?['matchedUi'], evidence.first.ui);
+      expect(evidence.first.actionResult?['matchedAt'], isNotNull);
+    },
+  );
+
+  test(
+    'waitUi preserves a match that disappears during screenshot capture',
+    () async {
+      var text = 'Ready';
+      var dumps = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            final action = (call.arguments as Map)['action'];
+            if (action == 'screenshot') {
+              text = 'Gone';
+              return {'pngBase64': 'frame'};
+            }
+            if (action == 'uiDump') {
+              dumps++;
+              return {
+                'activePackage': 'game.app',
+                'nodes': [
+                  {'text': text},
+                ],
+              };
+            }
+            return {'ok': true};
+          });
+      final runner = DeviceMacroRunner(
+        channel: channel,
+        evidenceSink: (_) async {},
+        installBuild: (_) async => {'ok': true},
+        localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+      );
+      const macro = TerminalMacro(
+        id: 'transient-wait',
+        name: 'Transient wait',
+        steps: [
+          TerminalMacroStep(
+            id: 'ready',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":240,"intervalMs":100},"expect":{"textIncludes":["Ready"]}}',
+            delaySeconds: 0,
+          ),
+        ],
+      );
+      final evidence = await runner.run(macro);
+      expect(dumps, 1);
+      expect(text, 'Gone');
+      expect(evidence.single.ui!['nodes'], [
+        {'text': 'Ready'},
+      ]);
+      expect(evidence.single.actionError, isNull);
+    },
+  );
+
+  test('waitUi deadline also bounds a stalled uiDump', () async {
+    var dumps = 0;
+    final evidence = <DeviceMacroEvidence>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final action = (call.arguments as Map)['action'];
+          if (action == 'screenshot') return {'pngBase64': 'frame'};
+          if (action == 'uiDump') {
+            dumps++;
+            if (dumps == 1) return Completer<Map<String, dynamic>>().future;
+            return {'activePackage': 'game.app', 'nodes': []};
+          }
+          return {'ok': true};
+        });
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async => evidence.add(item),
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'stalled-wait',
+      name: 'Stalled wait',
+      steps: [
+        TerminalMacroStep(
+          id: 'ready',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":0.1,"intervalMs":100},"expect":{"textIncludes":["Ready"]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    await expectLater(runner.run(macro), throwsStateError);
+    expect(dumps, 2);
+    expect(
+      evidence.single.actionError,
+      contains('uiDump exceeded remaining deadline'),
+    );
+    expect(evidence.single.screenshot, isNotNull);
+  });
+
+  test('waitUi preserves timeout when diagnostic uiDump also stalls', () async {
+    var dumps = 0;
+    final evidence = <DeviceMacroEvidence>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final action = (call.arguments as Map)['action'];
+          if (action == 'screenshot') return {'pngBase64': 'frame'};
+          if (action == 'uiDump') {
+            dumps++;
+            return Completer<Map<String, dynamic>>().future;
+          }
+          return {'ok': true};
+        });
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async => evidence.add(item),
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'stalled-diagnostic',
+      name: 'Stalled diagnostic',
+      steps: [
+        TerminalMacroStep(
+          id: 'ready',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":0.1,"intervalMs":100},"expect":{"textIncludes":["Ready"]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    final watch = Stopwatch()..start();
+    await expectLater(runner.run(macro), throwsStateError);
+    expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
+    expect(dumps, 2);
+    expect(
+      evidence.single.actionError,
+      contains('uiDump exceeded remaining deadline'),
+    );
+    expect(evidence.single.screenshot, isNotNull);
+    expect(evidence.single.ui, isNull);
+  });
+
+  test('waitUi times out with evidence and rejects a different app', () async {
+    var package = 'game.app';
+    var dumps = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final action = (call.arguments as Map)['action'];
+          if (action == 'screenshot') return {'pngBase64': 'frame'};
+          if (action == 'uiDump') {
+            dumps++;
+            return {
+              'activePackage': package,
+              'nodes': [
+                {'text': 'Loading'},
+              ],
+            };
+          }
+          return {'ok': true};
+        });
+    final evidence = <DeviceMacroEvidence>[];
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async => evidence.add(item),
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'wait-timeout',
+      name: 'Wait timeout',
+      steps: [
+        TerminalMacroStep(
+          id: 'ready',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"waitUi","args":{"packageName":"game.app","timeoutSeconds":0.25,"intervalMs":100},"expect":{"textIncludes":["Ready"]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    await expectLater(runner.run(macro), throwsStateError);
+    expect(evidence.single.actionError, contains('waitUi timed out'));
+    expect(evidence.single.screenshot, isNotNull);
+    package = 'other.app';
+    dumps = 0;
+    await expectLater(runner.run(macro), throwsStateError);
+    expect(dumps, 2); // One poll, then terminal evidence capture.
+    expect(evidence.last.actionError, contains('expected active package'));
   });
 
   test('matches an anonymous control by normalized center region', () {
@@ -422,59 +668,62 @@ void main() {
     expect(swipeArgs, isNot(contains('x1Normalized')));
   });
 
-  test('native double tap and single-duration path resolve against screen', () async {
-    final sent = <String, Map<String, dynamic>>{};
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-          final envelope = Map<String, dynamic>.from(call.arguments as Map);
-          final action = envelope['action'] as String;
-          if (action == 'deviceProfile') {
-            return {'widthPx': 1080, 'heightPx': 2436};
-          }
-          if (action == 'doubleTap' || action == 'gesturePath') {
-            sent[action] = Map<String, dynamic>.from(envelope['args'] as Map);
-          }
-          if (action == 'screenshot') return {'pngBase64': 'frame'};
-          if (action == 'uiDump')
-            return {'activePackage': 'example.app', 'nodes': []};
-          return {'ok': true};
-        });
-    final runner = DeviceMacroRunner(
-      channel: channel,
-      evidenceSink: (_) async {},
-      installBuild: (_) async => {'ok': true},
-      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
-    );
-    const macro = TerminalMacro(
-      id: 'native-gestures',
-      name: 'Native gestures',
-      steps: [
-        TerminalMacroStep(
-          id: 'double',
-          type: TerminalMacroStepType.device,
-          value:
-              '{"action":"doubleTap","args":{"xNormalized":0.5,"yNormalized":0.25}}',
-          delaySeconds: 0,
-        ),
-        TerminalMacroStep(
-          id: 'path',
-          type: TerminalMacroStepType.device,
-          value:
-              '{"action":"gesturePath","args":{"durationMs":300,"points":[{"xNormalized":0.1,"yNormalized":0.2},{"xNormalized":0.2,"yNormalized":0.3},{"xNormalized":0.3,"yNormalized":0.4}]}}',
-          delaySeconds: 0,
-        ),
-      ],
-    );
-    final evidence = await runner.run(macro);
-    expect(evidence.every((item) => item.actionError == null), isTrue);
-    expect(sent['doubleTap'], containsPair('x', 540));
-    expect(sent['doubleTap'], containsPair('y', 609));
-    final points = sent['gesturePath']!['points'] as List;
-    expect(points, hasLength(3));
-    expect(points.first, {'x': 108, 'y': closeTo(487.2, 0.001)});
-    expect(sent['gesturePath']!['durationMs'], 300);
-    expect(points.last, isNot(contains('xNormalized')));
-  });
+  test(
+    'native double tap and single-duration path resolve against screen',
+    () async {
+      final sent = <String, Map<String, dynamic>>{};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            final envelope = Map<String, dynamic>.from(call.arguments as Map);
+            final action = envelope['action'] as String;
+            if (action == 'deviceProfile') {
+              return {'widthPx': 1080, 'heightPx': 2436};
+            }
+            if (action == 'doubleTap' || action == 'gesturePath') {
+              sent[action] = Map<String, dynamic>.from(envelope['args'] as Map);
+            }
+            if (action == 'screenshot') return {'pngBase64': 'frame'};
+            if (action == 'uiDump')
+              return {'activePackage': 'example.app', 'nodes': []};
+            return {'ok': true};
+          });
+      final runner = DeviceMacroRunner(
+        channel: channel,
+        evidenceSink: (_) async {},
+        installBuild: (_) async => {'ok': true},
+        localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+      );
+      const macro = TerminalMacro(
+        id: 'native-gestures',
+        name: 'Native gestures',
+        steps: [
+          TerminalMacroStep(
+            id: 'double',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"doubleTap","args":{"xNormalized":0.5,"yNormalized":0.25}}',
+            delaySeconds: 0,
+          ),
+          TerminalMacroStep(
+            id: 'path',
+            type: TerminalMacroStepType.device,
+            value:
+                '{"action":"gesturePath","args":{"durationMs":300,"points":[{"xNormalized":0.1,"yNormalized":0.2},{"xNormalized":0.2,"yNormalized":0.3},{"xNormalized":0.3,"yNormalized":0.4}]}}',
+            delaySeconds: 0,
+          ),
+        ],
+      );
+      final evidence = await runner.run(macro);
+      expect(evidence.every((item) => item.actionError == null), isTrue);
+      expect(sent['doubleTap'], containsPair('x', 540));
+      expect(sent['doubleTap'], containsPair('y', 609));
+      final points = sent['gesturePath']!['points'] as List;
+      expect(points, hasLength(3));
+      expect(points.first, {'x': 108, 'y': closeTo(487.2, 0.001)});
+      expect(sent['gesturePath']!['durationMs'], 300);
+      expect(points.last, isNot(contains('xNormalized')));
+    },
+  );
 
   test('out-of-bounds gesture path fails before native dispatch', () async {
     var dispatched = false;

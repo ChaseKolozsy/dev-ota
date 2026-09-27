@@ -94,6 +94,7 @@ DEVICE_MACRO_ACTIONS = {
     "uiDump",
     "tapUi",
     "assertUi",
+    "waitUi",
     "assertDeviceProfile",
     "installBuild",
     "humanCheckpoint",

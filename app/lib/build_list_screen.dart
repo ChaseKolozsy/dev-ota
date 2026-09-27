@@ -2204,21 +2204,6 @@ class _BuildListScreenState extends State<BuildListScreen>
                           10,
                         ),
                         children: [
-                          for (final step in macro.steps)
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: Text(
-                                  _macroStepSummary(step),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(fontFamily: 'monospace'),
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 4),
                           Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -2247,6 +2232,21 @@ class _BuildListScreenState extends State<BuildListScreen>
                               ),
                             ],
                           ),
+                          const SizedBox(height: 4),
+                          for (final step in macro.steps)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  _macroStepSummary(step),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(fontFamily: 'monospace'),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     );

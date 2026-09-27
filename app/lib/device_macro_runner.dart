@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -25,6 +26,7 @@ const deviceMacroActions = <String>{
   'uiDump',
   'tapUi',
   'assertUi',
+  'waitUi',
   'assertDeviceProfile',
   'installBuild',
   'humanCheckpoint',
@@ -488,14 +490,33 @@ class DeviceMacroRunner {
         Map<String, dynamic>? screenshot;
         Map<String, dynamic>? ui;
         if (spec.capture || spec.expect.isNotEmpty) {
-          screenshot = await _takeScreenshot();
-          ui = await _invoke('uiDump');
-          try {
-            assertDeviceMacroExpectations(spec.expect, ui, actionError);
-          } catch (error) {
-            actionError = actionError == null
-                ? error.toString()
-                : '$actionError; expectation failed: $error';
+          if (spec.action == 'waitUi' && actionError != null) {
+            // The poll may have failed because uiDump itself stalled. Best
+            // effort diagnostics must not turn that bounded wait into a hang.
+            try {
+              screenshot = await _takeScreenshot().timeout(
+                const Duration(seconds: 2),
+              );
+            } catch (_) {}
+            try {
+              ui = await _invoke('uiDump').timeout(const Duration(seconds: 2));
+            } catch (_) {}
+          } else {
+            screenshot = await _takeScreenshot();
+            // A wait condition can be transient. Keep the snapshot that
+            // actually satisfied it instead of rechecking after capture.
+            ui = spec.action == 'waitUi' && actionResult?['matchedUi'] is Map
+                ? Map<String, dynamic>.from(actionResult!['matchedUi'] as Map)
+                : await _invoke('uiDump');
+            try {
+              if (spec.action != 'waitUi' || actionResult == null) {
+                assertDeviceMacroExpectations(spec.expect, ui, actionError);
+              }
+            } catch (error) {
+              actionError = actionError == null
+                  ? error.toString()
+                  : '$actionError; expectation failed: $error';
+            }
           }
         }
         final record = DeviceMacroEvidence(
@@ -665,6 +686,8 @@ class DeviceMacroRunner {
         final ui = await _invoke('uiDump');
         assertDeviceMacroExpectations(spec.expect, ui, null);
         return {'ok': true};
+      case 'waitUi':
+        return _waitUi(spec);
       case 'assertDeviceProfile':
         final observed = await _invoke('deviceProfile');
         assertDeviceMacroProfile(spec.args, observed);
@@ -685,6 +708,103 @@ class DeviceMacroRunner {
           spec.action,
           await _resolveNormalizedGestureArgs(spec.action, spec.args),
         );
+    }
+  }
+
+  Future<Map<String, dynamic>> _waitUi(DeviceMacroStepSpec spec) async {
+    final targetPackage =
+        (spec.args['packageName'] ?? spec.expect['activePackage'])?.toString();
+    if (targetPackage == null || targetPackage.isEmpty) {
+      throw const FormatException('waitUi requires a target packageName');
+    }
+    if (spec.expect['activePackage'] != null &&
+        spec.expect['activePackage'] != targetPackage) {
+      throw const FormatException(
+        'waitUi packageName and activePackage differ',
+      );
+    }
+    final includes = spec.expect['textIncludes'];
+    final excludes = spec.expect['textExcludes'];
+    if ((includes is! List || includes.isEmpty) &&
+        (excludes is! List || excludes.isEmpty)) {
+      throw const FormatException(
+        'waitUi requires expect.textIncludes or expect.textExcludes',
+      );
+    }
+    final timeout = spec.args['timeoutSeconds'];
+    final interval = spec.args['intervalMs'];
+    if (timeout is! num ||
+        !timeout.isFinite ||
+        timeout <= 0 ||
+        timeout > 300 ||
+        interval is! int ||
+        interval < 100 ||
+        interval > 5000) {
+      throw const FormatException(
+        'waitUi needs timeoutSeconds in (0,300] and intervalMs in [100,5000]',
+      );
+    }
+    final timeoutMs = (timeout * 1000).ceil();
+    final watch = Stopwatch()..start();
+    var attempts = 0;
+    Object? lastMismatch;
+    while (true) {
+      if (_shouldStop?.call() == true) {
+        throw StateError('waitUi stopped');
+      }
+      final remainingBeforePollMs = timeoutMs - watch.elapsedMilliseconds;
+      if (remainingBeforePollMs <= 0) {
+        throw StateError(
+          'waitUi timed out after ${watch.elapsedMilliseconds}ms'
+          ' ($attempts attempts): $lastMismatch',
+        );
+      }
+      final Map<String, dynamic> ui;
+      try {
+        ui = await _invoke(
+          'uiDump',
+        ).timeout(Duration(milliseconds: remainingBeforePollMs));
+      } on TimeoutException {
+        throw StateError(
+          'waitUi timed out after ${watch.elapsedMilliseconds}ms'
+          ' ($attempts attempts): uiDump exceeded remaining deadline',
+        );
+      }
+      attempts++;
+      final observedPackage = ui['activePackage']?.toString();
+      if (observedPackage != targetPackage) {
+        throw StateError(
+          'waitUi expected active package $targetPackage, got $observedPackage',
+        );
+      }
+      try {
+        assertDeviceMacroExpectations(
+          {...spec.expect, 'activePackage': targetPackage},
+          ui,
+          null,
+        );
+        return {
+          'ok': true,
+          'elapsedMs': watch.elapsedMilliseconds,
+          'attempts': attempts,
+          'activePackage': targetPackage,
+          'matchedAt': DateTime.now().toUtc().toIso8601String(),
+          'matchedUi': ui,
+        };
+      } on StateError catch (error) {
+        lastMismatch = error;
+      }
+      final remainingMs = timeoutMs - watch.elapsedMilliseconds;
+      if (remainingMs <= 0) {
+        throw StateError(
+          'waitUi timed out after ${watch.elapsedMilliseconds}ms'
+          ' ($attempts attempts): $lastMismatch',
+        );
+      }
+      await _delay(
+        Duration(milliseconds: math.min(interval, remainingMs)).inMilliseconds /
+            1000,
+      );
     }
   }
 
