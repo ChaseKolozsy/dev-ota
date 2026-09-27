@@ -2,6 +2,8 @@ const RECORDABLE_ACTIONS = new Set([
   "launchApp",
   "launchIntent",
   "tap",
+  "doubleTap",
+  "gesturePath",
   "tapImage",
   "tapUi",
   "longTap",
@@ -54,7 +56,7 @@ export function compileMacroRecording(recording, options = {}) {
         message: `Replace ${args.text} with a non-secret test value before publishing.`,
       });
     }
-    if (action === "tap" || action === "longTap" || action === "swipe") {
+    if (action === "tap" || action === "doubleTap" || action === "gesturePath" || action === "longTap" || action === "swipe") {
       warnings.push({
         index: entryIndex,
         code: "coordinate_action",

@@ -1907,6 +1907,46 @@ server.registerTool(
 );
 
 server.registerTool(
+  "android_double_tap",
+  {
+    title: "Double Tap Android Screen",
+    description: "Dispatch two native accessibility taps at one screen point.",
+    inputSchema: {
+      x: z.number(), y: z.number(),
+      appId: z.string().optional(), packageName: z.string().optional(),
+    },
+  },
+  async ({ x, y, appId, packageName }) => {
+    const targetPackage = await packageNameFor(appId, packageName);
+    return textResult(await phoneOrAdb("doubleTap", { x, y, packageName: targetPackage }, async () => {
+      throw new Error("doubleTap requires a connected DevOTA agent with native gesture support");
+    }, { macroAction: "doubleTap", macroArgs: { x, y, packageName: targetPackage } }));
+  },
+);
+
+server.registerTool(
+  "android_gesture_path",
+  {
+    title: "Draw Android Gesture Path",
+    description: "Dispatch one continuous native accessibility stroke with bounded timestamped screen points.",
+    inputSchema: {
+      points: z.array(z.object({ x: z.number(), y: z.number(), tMs: z.number().int() })).min(2).max(64),
+      appId: z.string().optional(), packageName: z.string().optional(),
+    },
+  },
+  async ({ points, appId, packageName }) => {
+    if (points[0].tMs !== 0 || points.at(-1).tMs < 80 || points.at(-1).tMs > 5000 ||
+        points.some((point, i) => i > 0 && point.tMs - points[i - 1].tMs < 16)) {
+      throw new Error("gesture path times must increase from 0 through 80..5000 ms with at least 16 ms per segment");
+    }
+    const targetPackage = await packageNameFor(appId, packageName);
+    return textResult(await phoneOrAdb("gesturePath", { points, packageName: targetPackage }, async () => {
+      throw new Error("gesturePath requires a connected DevOTA agent with native gesture support");
+    }, { macroAction: "gesturePath", macroArgs: { points, packageName: targetPackage } }));
+  },
+);
+
+server.registerTool(
   "android_swipe",
   {
     title: "Swipe Android Screen",

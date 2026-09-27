@@ -10,6 +10,8 @@ const deviceMacroActions = <String>{
   'launchApp',
   'launchIntent',
   'tap',
+  'doubleTap',
+  'gesturePath',
   'tapImage',
   'longTap',
   'swipe',
@@ -690,8 +692,75 @@ class DeviceMacroRunner {
     String action,
     Map<String, dynamic> args,
   ) async {
+    if (action == 'gesturePath') {
+      final rawPoints = args['points'];
+      if (rawPoints is! List || rawPoints.length < 2 || rawPoints.length > 64) {
+        throw const FormatException('gesturePath requires 2..64 points');
+      }
+      final points = rawPoints.map((raw) {
+        if (raw is! Map) {
+          throw const FormatException('gesturePath point must be an object');
+        }
+        return Map<String, dynamic>.from(raw);
+      }).toList();
+      final normalized = points.any(
+        (p) => p.containsKey('xNormalized') || p.containsKey('yNormalized'),
+      );
+      if (normalized &&
+          !points.every(
+            (p) =>
+                p.containsKey('xNormalized') &&
+                p.containsKey('yNormalized') &&
+                !p.containsKey('x') &&
+                !p.containsKey('y'),
+          )) {
+        throw const FormatException(
+          'gesturePath points must use one coordinate format',
+        );
+      }
+      final profile = await _invoke('deviceProfile');
+      final width = (profile['widthPx'] as num?)?.toDouble();
+      final height = (profile['heightPx'] as num?)?.toDouble();
+      if (width == null || height == null || width <= 0 || height <= 0) {
+        throw const FormatException('invalid device screen dimensions');
+      }
+      var previousTime = -1;
+      final resolvedPoints = <Map<String, dynamic>>[];
+      for (var i = 0; i < points.length; i++) {
+        final point = points[i];
+        final x = (point[normalized ? 'xNormalized' : 'x'] as num?)?.toDouble();
+        final y = (point[normalized ? 'yNormalized' : 'y'] as num?)?.toDouble();
+        final tMs = point['tMs'];
+        if (x == null ||
+            y == null ||
+            !x.isFinite ||
+            !y.isFinite ||
+            tMs is! int ||
+            (i == 0 && tMs != 0) ||
+            tMs - previousTime < (i == 0 ? 1 : 16) ||
+            tMs > 5000 ||
+            (normalized && (x < 0 || x >= 1 || y < 0 || y >= 1)) ||
+            (!normalized && (x < 0 || x >= width || y < 0 || y >= height))) {
+          throw FormatException('invalid gesturePath point $i');
+        }
+        previousTime = tMs;
+        resolvedPoints.add({
+          'x': normalized ? x * width : x,
+          'y': normalized ? y * height : y,
+          'tMs': tMs,
+        });
+      }
+      if (previousTime < 80) {
+        throw const FormatException(
+          'gesturePath duration must be at least 80 ms',
+        );
+      }
+      return {...args, 'points': resolvedPoints};
+    }
     final axes = switch (action) {
-      'tap' || 'longTap' => const {'x': 'widthPx', 'y': 'heightPx'},
+      'tap' ||
+      'doubleTap' ||
+      'longTap' => const {'x': 'widthPx', 'y': 'heightPx'},
       'swipe' => const {
         'x1': 'widthPx',
         'y1': 'heightPx',

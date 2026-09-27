@@ -422,6 +422,104 @@ void main() {
     expect(swipeArgs, isNot(contains('x1Normalized')));
   });
 
+  test('native double tap and timestamped path resolve against screen', () async {
+    final sent = <String, Map<String, dynamic>>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final envelope = Map<String, dynamic>.from(call.arguments as Map);
+          final action = envelope['action'] as String;
+          if (action == 'deviceProfile') {
+            return {'widthPx': 1080, 'heightPx': 2436};
+          }
+          if (action == 'doubleTap' || action == 'gesturePath') {
+            sent[action] = Map<String, dynamic>.from(envelope['args'] as Map);
+          }
+          if (action == 'screenshot') return {'pngBase64': 'frame'};
+          if (action == 'uiDump')
+            return {'activePackage': 'example.app', 'nodes': []};
+          return {'ok': true};
+        });
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (_) async {},
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'native-gestures',
+      name: 'Native gestures',
+      steps: [
+        TerminalMacroStep(
+          id: 'double',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"doubleTap","args":{"xNormalized":0.5,"yNormalized":0.25}}',
+          delaySeconds: 0,
+        ),
+        TerminalMacroStep(
+          id: 'path',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"gesturePath","args":{"points":[{"xNormalized":0.1,"yNormalized":0.2,"tMs":0},{"xNormalized":0.2,"yNormalized":0.3,"tMs":100},{"xNormalized":0.3,"yNormalized":0.4,"tMs":300}]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    final evidence = await runner.run(macro);
+    expect(evidence.every((item) => item.actionError == null), isTrue);
+    expect(sent['doubleTap'], containsPair('x', 540));
+    expect(sent['doubleTap'], containsPair('y', 609));
+    final points = sent['gesturePath']!['points'] as List;
+    expect(points, hasLength(3));
+    expect(points.first, {'x': 108, 'y': closeTo(487.2, 0.001), 'tMs': 0});
+    expect(points.last['tMs'], 300);
+    expect(points.last, isNot(contains('xNormalized')));
+  });
+
+  test('out-of-bounds gesture path fails before native dispatch', () async {
+    var dispatched = false;
+    final evidence = <DeviceMacroEvidence>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final envelope = Map<String, dynamic>.from(call.arguments as Map);
+          final action = envelope['action'] as String;
+          if (action == 'deviceProfile')
+            return {'widthPx': 1080, 'heightPx': 2436};
+          if (action == 'gesturePath') dispatched = true;
+          if (action == 'screenshot') return {'pngBase64': 'frame'};
+          if (action == 'uiDump')
+            return {'activePackage': 'example.app', 'nodes': []};
+          return {'ok': true};
+        });
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async {
+        evidence.add(item);
+      },
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'bad-path',
+      name: 'Bad path',
+      steps: [
+        TerminalMacroStep(
+          id: 'path',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"gesturePath","args":{"points":[{"xNormalized":0.5,"yNormalized":0.5,"tMs":0},{"xNormalized":1.1,"yNormalized":0.5,"tMs":200}]}}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    await expectLater(runner.run(macro), throwsStateError);
+    expect(dispatched, isFalse);
+    expect(
+      evidence.single.actionError,
+      contains('invalid gesturePath point 1'),
+    );
+  });
+
   test(
     'runner captures every step and captures a failure before stopping',
     () async {

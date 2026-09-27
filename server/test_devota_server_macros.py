@@ -17,6 +17,27 @@ SPEC.loader.exec_module(devota_server)
 
 
 class MacroStoreTests(unittest.TestCase):
+    def test_accepts_native_double_tap_and_path_device_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = devota_server.create_macro(
+                Path(tmp),
+                {
+                    "name": "Native gestures",
+                    "steps": [
+                        {"type": "device", "value": json.dumps({
+                            "action": "doubleTap", "args": {"xNormalized": 0.5, "yNormalized": 0.5}
+                        })},
+                        {"type": "device", "value": json.dumps({
+                            "action": "gesturePath", "args": {"points": [
+                                {"xNormalized": 0.2, "yNormalized": 0.2, "tMs": 0},
+                                {"xNormalized": 0.8, "yNormalized": 0.8, "tMs": 300},
+                            ]}
+                        })},
+                    ],
+                },
+            )
+            self.assertEqual(len(result["item"]["steps"]), 2)
+
     @staticmethod
     def image_template():
         output = BytesIO()

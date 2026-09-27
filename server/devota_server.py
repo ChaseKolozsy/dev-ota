@@ -79,6 +79,8 @@ DEVICE_MACRO_ACTIONS = {
     "launchApp",
     "launchIntent",
     "tap",
+    "doubleTap",
+    "gesturePath",
     "tapImage",
     "longTap",
     "swipe",

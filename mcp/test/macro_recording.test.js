@@ -3,6 +3,21 @@ import assert from "node:assert/strict";
 
 import { compileMacroRecording, sanitizeRecordedArgs } from "../src/macro_recording.js";
 
+test("compiler preserves native gesture actions and flags raw coordinates for review", () => {
+  const result = compileMacroRecording({
+    id: "native-gestures",
+    entries: [
+      { index: 1, action: "doubleTap", args: { x: 100, y: 200 }, ok: true },
+      { index: 2, action: "gesturePath", args: { points: [
+        { x: 100, y: 200, tMs: 0 }, { x: 150, y: 250, tMs: 300 },
+      ] }, ok: true },
+    ],
+  });
+  assert.deepEqual(result.steps.map((step) => JSON.parse(step.value).action), ["doubleTap", "gesturePath"]);
+  assert.equal(result.needsReview, true);
+  assert.deepEqual(result.warnings.map((item) => item.code), ["coordinate_action", "coordinate_action"]);
+});
+
 test("compiler prunes failed exploration and keeps semantic selectors", () => {
   const result = compileMacroRecording({
     id: "recording-proof",

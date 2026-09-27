@@ -102,6 +102,17 @@ class ControlAgentService : Service() {
                     args.optString("packageName", DEFAULT_APP_PACKAGE),
                     allowWholeDevice,
                 )
+                "doubleTap" -> ControlAccessibilityService.doubleTap(
+                    args.getDouble("x"),
+                    args.getDouble("y"),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
+                "gesturePath" -> ControlAccessibilityService.gesturePath(
+                    args.getJSONArray("points"),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
                 "tapImage" -> ControlAccessibilityService.tapImage(
                     args,
                     args.optString("packageName", DEFAULT_APP_PACKAGE),

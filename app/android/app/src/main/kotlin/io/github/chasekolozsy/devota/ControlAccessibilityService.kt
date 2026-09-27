@@ -69,6 +69,76 @@ class ControlAccessibilityService : AccessibilityService() {
             return service.runGesture(GestureDescription.StrokeDescription(p, 0, 80))
         }
 
+        fun doubleTap(x: Double, y: Double, packageName: String?, allowWholeDevice: Boolean): JSONObject {
+            val service = requireService()
+            service.requireScope(packageName, allowWholeDevice)
+            service.requireScreenPoint(x, y)
+            val first = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+            val second = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+            return service.runGesture(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(first, 0, 55))
+                    .addStroke(GestureDescription.StrokeDescription(second, 150, 55))
+                    .build(),
+            ).put("intervalMs", 150)
+        }
+
+        /** One continuous accessibility stroke. Points are screen pixels with
+         * elapsed milliseconds; callers must provide 2..64 points from t=0.
+         */
+        fun gesturePath(
+            points: JSONArray,
+            packageName: String?,
+            allowWholeDevice: Boolean,
+        ): JSONObject {
+            val service = requireService()
+            service.requireScope(packageName, allowWholeDevice)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                throw IllegalStateException("timed gesture paths require Android 8.0/API 26 or newer")
+            }
+            if (points.length() !in 2..64) {
+                throw IllegalArgumentException("gesturePath requires 2..64 points")
+            }
+            val timedPoints = ArrayList<Triple<Float, Float, Long>>(points.length())
+            var previousTime = -1L
+            for (i in 0 until points.length()) {
+                val point = points.getJSONObject(i)
+                val x = point.getDouble("x")
+                val y = point.getDouble("y")
+                val tMs = point.getLong("tMs")
+                service.requireScreenPoint(x, y)
+                if (tMs < 0 || tMs > 5000 || (i == 0 && tMs != 0L) || tMs <= previousTime) {
+                    throw IllegalArgumentException("gesturePath times must increase from 0 through 5000 ms")
+                }
+                if (i > 0 && tMs - previousTime < 16) {
+                    throw IllegalArgumentException("gesturePath segments must last at least 16 ms")
+                }
+                timedPoints.add(Triple(x.toFloat(), y.toFloat(), tMs))
+                previousTime = tMs
+            }
+            if (previousTime < 80) throw IllegalArgumentException("gesturePath duration must be at least 80 ms")
+            val startedAtMs = SystemClock.elapsedRealtime()
+            var previousStroke: GestureDescription.StrokeDescription? = null
+            for (i in 1 until timedPoints.size) {
+                val (x0, y0, t0) = timedPoints[i - 1]
+                val (x1, y1, t1) = timedPoints[i]
+                val segment = Path().apply {
+                    moveTo(x0, y0)
+                    lineTo(x1, y1)
+                }
+                val continues = i < timedPoints.lastIndex
+                val stroke = previousStroke?.continueStroke(segment, 0, t1 - t0, continues)
+                    ?: GestureDescription.StrokeDescription(segment, 0, t1 - t0, continues)
+                service.runGesture(stroke)
+                previousStroke = stroke
+            }
+            return JSONObject().put("ok", true)
+                .put("durationMs", previousTime)
+                .put("elapsedMs", SystemClock.elapsedRealtime() - startedAtMs)
+                .put("pointCount", points.length())
+                .put("timing", "continued_strokes")
+        }
+
         fun tapUi(
             selector: JSONObject,
             packageName: String?,
@@ -366,7 +436,19 @@ class ControlAccessibilityService : AccessibilityService() {
 
     private fun packageNameForSelf(): String = applicationContext.packageName
 
+    private fun requireScreenPoint(x: Double, y: Double) {
+        val metrics = resources.displayMetrics
+        if (!x.isFinite() || !y.isFinite() ||
+            x < 0 || y < 0 || x >= metrics.widthPixels || y >= metrics.heightPixels) {
+            throw IllegalArgumentException("gesture point outside ${metrics.widthPixels}x${metrics.heightPixels} screen")
+        }
+    }
+
     private fun runGesture(stroke: GestureDescription.StrokeDescription): JSONObject {
+        return runGesture(GestureDescription.Builder().addStroke(stroke).build())
+    }
+
+    private fun runGesture(gesture: GestureDescription): JSONObject {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             throw IllegalStateException("gestures require Android 7.0/API 24 or newer")
         }
@@ -374,7 +456,6 @@ class ControlAccessibilityService : AccessibilityService() {
         val completed = AtomicBoolean(false)
         val cancelled = AtomicBoolean(false)
         Handler(Looper.getMainLooper()).post {
-            val gesture = GestureDescription.Builder().addStroke(stroke).build()
             val accepted = dispatchGesture(
                 gesture,
                 object : GestureResultCallback() {
