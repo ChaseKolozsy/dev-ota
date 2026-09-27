@@ -9,14 +9,14 @@ apps:
     root: cradlespeak
     label: Cradlespeak — main · Title audit
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 versionCode 8250 from main source cd0b8fe7. Includes the title audit fixes through the terminal pose timeout, tracked runtime WAV assets, and the rebuilt embedded server. Gesture calibration and language-pack publication remain in progress. APK SHA256 0cf46b53f4d0eec9cd6748fed4e23ea82b352f2b203f1fbb0badbd88c0802385.
+    notes: Signed ARM64 versionCode 8253 from main. Includes the arm-raised down-rule fix, one-time CPU recovery for hand and body tracking GPU inference errors, title audit fixes, tracked runtime WAV assets, and the rebuilt embedded server. Gesture calibration and language-pack publication remain in progress. APK SHA256 e07019ba5ed662013310e155828753a211492e32656ba2e3215fdcf7fda39fe8.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://127.0.0.1:18003 --build-number 6250
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://127.0.0.1:18003 --build-number 6250
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://127.0.0.1:18003 --build-number 6253
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://127.0.0.1:18003 --build-number 6253
   - id: devota
     root: devota
     label: DevOTA
