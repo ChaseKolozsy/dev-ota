@@ -47,6 +47,24 @@ test("compiler prunes failed exploration and keeps semantic selectors", () => {
   assert.equal(result.needsReview, false);
 });
 
+test("compiler keeps semantic-origin gesture offsets without stale coordinates", () => {
+  const result = compileMacroRecording({
+    id: "semantic-gesture",
+    entries: [{
+      index: 1,
+      action: "gestureUi",
+      args: {
+        selector: { contentDescriptionExact: "Demo choice 📁" },
+        gesture: { kind: "swipe", dx: 0, dy: -300, durationMs: 150 },
+      },
+      ok: true,
+    }],
+  });
+  assert.equal(result.steps.length, 1);
+  assert.equal(JSON.parse(result.steps[0].value).action, "gestureUi");
+  assert.deepEqual(result.warnings, []);
+});
+
 test("compiler supports explicit pruning and blocks secret or coordinate drafts", () => {
   const result = compileMacroRecording(
     {

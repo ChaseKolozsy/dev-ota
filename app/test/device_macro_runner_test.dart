@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:devota/device_macro_runner.dart';
 import 'package:devota/terminal_macro.dart';
@@ -27,6 +28,142 @@ void main() {
       () => DeviceMacroStepSpec.parse('{"action":"arbitraryShell"}'),
       throwsFormatException,
     );
+  });
+
+  test('gestureUi validates a unique semantic origin and bounded offsets', () {
+    const selector = {'contentDescriptionExact': 'Demo choice 📁'};
+    expect(
+      validateGestureUiArgs({
+        'packageName': 'io.github.chasekolozsy.cradlespeak',
+        'selector': selector,
+        'gesture': {'kind': 'swipe', 'dx': 0, 'dy': -300, 'durationMs': 150},
+      })['gesture'],
+      containsPair('dy', -300),
+    );
+    expect(
+      validateGestureUiArgs({
+        'selector': selector,
+        'gesture': {
+          'kind': 'path',
+          'durationMs': 400,
+          'points': [
+            {'dx': 40, 'dy': 0},
+            {'dx': 80, 'dy': -80},
+            {'dx': 0, 'dy': -160},
+          ],
+        },
+      })['gesture'],
+      containsPair('durationMs', 400),
+    );
+    expect(
+      (validateGestureUiArgs({
+            'selector': selector,
+            'gesture': {
+              'kind': 'path',
+              'durationMs': 4800,
+              'points': List.generate(
+                57,
+                (i) => {
+                  'dx': 60.0 * math.cos(i * 0.2),
+                  'dy': 60.0 * math.sin(i * 0.2),
+                },
+              ),
+            },
+          })['gesture']
+          as Map)['points'],
+      hasLength(57),
+    );
+    for (final gesture in [
+      {'kind': 'swipe', 'dx': 0, 'dy': -300, 'durationMs': 5001},
+      {'kind': 'swipe', 'dx': double.nan, 'dy': -300},
+      {
+        'kind': 'path',
+        'durationMs': 79,
+        'points': [
+          {'dx': 40, 'dy': 0},
+          {'dx': 10, 'dy': 0},
+        ],
+      },
+      {
+        'kind': 'path',
+        'durationMs': 200,
+        'points': [
+          {'dx': 0, 'dy': 0, 'tMs': 0},
+          {'dx': 10, 'dy': 0},
+        ],
+      },
+    ]) {
+      expect(
+        () => validateGestureUiArgs({'selector': selector, 'gesture': gesture}),
+        throwsFormatException,
+      );
+    }
+    expect(
+      () => validateGestureUiArgs({
+        'selector': {
+          'centerRegion': {'left': 0, 'right': 1, 'top': 0, 'bottom': 1},
+        },
+        'gesture': {'kind': 'tap'},
+      }),
+      throwsFormatException,
+    );
+  });
+
+  test('gestureUi delegates live semantic resolution to native action', () async {
+    final actions = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          final envelope = Map<String, dynamic>.from(call.arguments as Map);
+          final action = envelope['action'] as String;
+          actions.add(action);
+          expect(action, 'gestureUi');
+          final args = Map<String, dynamic>.from(envelope['args'] as Map);
+          expect(
+            (args['selector'] as Map)['contentDescriptionExact'],
+            'Demo choice 📁',
+          );
+          expect((args['gesture'] as Map)['dx'], 0);
+          return {
+            'ok': true,
+            'resolvedBounds': {
+              'left': 325,
+              'top': 1732,
+              'right': 424,
+              'bottom': 1816,
+            },
+            'resolvedOrigin': {'x': 374.5, 'y': 1774},
+            'resolvedPoints': [
+              {'x': 374.5, 'y': 1774},
+              {'x': 374.5, 'y': 1474},
+            ],
+          };
+        });
+    final evidence = <DeviceMacroEvidence>[];
+    final runner = DeviceMacroRunner(
+      channel: channel,
+      evidenceSink: (item) async => evidence.add(item),
+      installBuild: (_) async => {'ok': true},
+      localHttpAssert: (_, {onAttempt}) async => {'ok': true},
+    );
+    const macro = TerminalMacro(
+      id: 'semantic-gesture',
+      name: 'Semantic gesture',
+      steps: [
+        TerminalMacroStep(
+          id: 'swipe-live-bead',
+          type: TerminalMacroStepType.device,
+          value:
+              '{"action":"gestureUi","args":{"packageName":"io.github.chasekolozsy.cradlespeak","selector":{"contentDescriptionExact":"Demo choice 📁"},"gesture":{"kind":"swipe","dx":0,"dy":-300,"durationMs":150}},"capture":false}',
+          delaySeconds: 0,
+        ),
+      ],
+    );
+    await runner.run(macro);
+    expect(actions, ['gestureUi']);
+    expect(evidence.single.actionResult?['resolvedOrigin'], {
+      'x': 374.5,
+      'y': 1774,
+    });
   });
 
   test('hostCommand validates exact nested action and permission allowlists', () {
@@ -683,8 +820,9 @@ void main() {
               sent[action] = Map<String, dynamic>.from(envelope['args'] as Map);
             }
             if (action == 'screenshot') return {'pngBase64': 'frame'};
-            if (action == 'uiDump')
+            if (action == 'uiDump') {
               return {'activePackage': 'example.app', 'nodes': []};
+            }
             return {'ok': true};
           });
       final runner = DeviceMacroRunner(
@@ -732,12 +870,14 @@ void main() {
         .setMockMethodCallHandler(channel, (call) async {
           final envelope = Map<String, dynamic>.from(call.arguments as Map);
           final action = envelope['action'] as String;
-          if (action == 'deviceProfile')
+          if (action == 'deviceProfile') {
             return {'widthPx': 1080, 'heightPx': 2436};
+          }
           if (action == 'gesturePath') dispatched = true;
           if (action == 'screenshot') return {'pngBase64': 'frame'};
-          if (action == 'uiDump')
+          if (action == 'uiDump') {
             return {'activePackage': 'example.app', 'nodes': []};
+          }
           return {'ok': true};
         });
     final runner = DeviceMacroRunner(

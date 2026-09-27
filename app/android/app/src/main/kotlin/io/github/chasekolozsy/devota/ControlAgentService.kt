@@ -124,6 +124,12 @@ class ControlAgentService : Service() {
                     args.optString("packageName", DEFAULT_APP_PACKAGE),
                     allowWholeDevice,
                 )
+                "gestureUi" -> ControlAccessibilityService.gestureUi(
+                    args.getJSONObject("selector"),
+                    args.getJSONObject("gesture"),
+                    args.optString("packageName", DEFAULT_APP_PACKAGE),
+                    allowWholeDevice,
+                )
                 "longTap" -> ControlAccessibilityService.longTap(
                     args.getDouble("x"),
                     args.getDouble("y"),

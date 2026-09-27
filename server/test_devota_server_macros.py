@@ -44,6 +44,29 @@ class MacroStoreTests(unittest.TestCase):
             )
             self.assertEqual(len(result["item"]["steps"]), 3)
 
+    def test_gesture_ui_requires_semantic_selector_and_bounded_relative_path(self):
+        good = {"action": "gestureUi", "args": {
+            "packageName": "io.github.chasekolozsy.cradlespeak",
+            "selector": {"contentDescriptionExact": "Demo choice 📁"},
+            "gesture": {"kind": "path", "durationMs": 400, "points": [
+                {"dx": 40, "dy": 0}, {"dx": 100, "dy": -100},
+            ]},
+        }}
+        normalized = devota_server.normalize_macro_step(
+            {"type": "device", "value": json.dumps(good)})
+        self.assertEqual(json.loads(normalized["value"])["action"], "gestureUi")
+        for bad in (
+            {**good, "args": {**good["args"], "selector": {"centerRegion": {"left": 0}}}},
+            {**good, "args": {**good["args"], "gesture": {
+                "kind": "path", "durationMs": 400,
+                "points": [{"dx": 1, "dy": 0, "tMs": 0}, {"dx": 100, "dy": -100}]}}},
+            {**good, "args": {**good["args"], "gesture": {
+                "kind": "swipe", "dx": 0, "dy": -300, "durationMs": 5001}}},
+        ):
+            with self.assertRaisesRegex(ValueError, "gestureUi"):
+                devota_server.normalize_macro_step(
+                    {"type": "device", "value": json.dumps(bad)})
+
     @staticmethod
     def image_template():
         output = BytesIO()

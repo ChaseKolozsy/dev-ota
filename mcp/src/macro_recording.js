@@ -6,6 +6,7 @@ const RECORDABLE_ACTIONS = new Set([
   "gesturePath",
   "tapImage",
   "tapUi",
+  "gestureUi",
   "longTap",
   "swipe",
   "typeText",

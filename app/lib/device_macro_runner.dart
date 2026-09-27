@@ -25,6 +25,7 @@ const deviceMacroActions = <String>{
   'screenshot',
   'uiDump',
   'tapUi',
+  'gestureUi',
   'assertUi',
   'waitUi',
   'assertDeviceProfile',
@@ -52,6 +53,100 @@ final _androidPackagePattern = RegExp(
   r'^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$',
 );
 final _devotaAppIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$');
+
+/// Validate semantic-origin gestures before sending them to Android. Native
+/// accessibility resolves the selector and screen bounds at dispatch time.
+Map<String, dynamic> validateGestureUiArgs(Map<String, dynamic> raw) {
+  if (raw.keys.toSet().difference(const {
+    'selector',
+    'gesture',
+    'packageName',
+  }).isNotEmpty) {
+    throw const FormatException('gestureUi has unsupported args');
+  }
+  final selectorRaw = raw['selector'];
+  final gestureRaw = raw['gesture'];
+  if (selectorRaw is! Map || gestureRaw is! Map) {
+    throw const FormatException(
+      'gestureUi requires selector and gesture objects',
+    );
+  }
+  final selector = Map<String, dynamic>.from(selectorRaw);
+  final gesture = Map<String, dynamic>.from(gestureRaw);
+  const identityKeys = {
+    'text',
+    'textExact',
+    'contentDescription',
+    'contentDescriptionExact',
+    'resourceId',
+    'resourceIdExact',
+    'className',
+    'classNameExact',
+  };
+  if (!identityKeys.any(
+    (key) =>
+        selector[key] is String && (selector[key] as String).trim().isNotEmpty,
+  )) {
+    throw const FormatException('gestureUi selector needs a nonempty identity');
+  }
+  final packageName = raw['packageName'];
+  if (packageName != null &&
+      (packageName is! String ||
+          !_androidPackagePattern.hasMatch(packageName))) {
+    throw const FormatException('gestureUi packageName is invalid');
+  }
+  final kind = gesture['kind'];
+  if (kind is! String) {
+    throw const FormatException('gestureUi gesture.kind is required');
+  }
+  final allowedKeys = switch (kind) {
+    'tap' || 'doubleTap' => const {'kind'},
+    'longTap' => const {'kind', 'durationMs'},
+    'swipe' => const {'kind', 'dx', 'dy', 'durationMs'},
+    'path' => const {'kind', 'points', 'durationMs'},
+    _ => throw FormatException('unsupported gestureUi kind: $kind'),
+  };
+  if (gesture.keys.toSet().difference(allowedKeys).isNotEmpty) {
+    throw FormatException('gestureUi $kind has unsupported fields');
+  }
+  final duration = gesture['durationMs'];
+  final minDuration = switch (kind) {
+    'longTap' => 500,
+    'swipe' => 1,
+    'path' => 80,
+    _ => 0,
+  };
+  if (duration != null &&
+      (duration is! int || duration < minDuration || duration > 5000)) {
+    throw FormatException('gestureUi $kind durationMs is invalid');
+  }
+  bool finiteNumber(Object? value) => value is num && value.toDouble().isFinite;
+  if (kind == 'swipe' &&
+      (!finiteNumber(gesture['dx']) || !finiteNumber(gesture['dy']))) {
+    throw const FormatException('gestureUi swipe requires finite dx and dy');
+  }
+  if (kind == 'path') {
+    if (duration == null) {
+      throw const FormatException('gestureUi path requires durationMs');
+    }
+    final points = gesture['points'];
+    if (points is! List || points.length < 2 || points.length > 64) {
+      throw const FormatException('gestureUi path requires 2..64 points');
+    }
+    for (var i = 0; i < points.length; i++) {
+      final point = points[i];
+      if (point is! Map ||
+          point.keys.toSet().difference(const {'dx', 'dy'}).isNotEmpty ||
+          !finiteNumber(point['dx']) ||
+          !finiteNumber(point['dy'])) {
+        throw FormatException('invalid gestureUi path point $i');
+      }
+    }
+  }
+  final validated = <String, dynamic>{'selector': selector, 'gesture': gesture};
+  if (packageName != null) validated['packageName'] = packageName;
+  return validated;
+}
 
 Map<String, dynamic> validateDeviceHostMacroArgs(Map<String, dynamic> raw) {
   if (raw.keys.toSet().difference(const {'action', 'args'}).isNotEmpty ||
@@ -647,6 +742,8 @@ class DeviceMacroRunner {
 
   Future<Map<String, dynamic>> _execute(DeviceMacroStepSpec spec) async {
     switch (spec.action) {
+      case 'gestureUi':
+        return _invoke('gestureUi', validateGestureUiArgs(spec.args));
       case 'tapUi':
         final selector = spec.args['selector'];
         if (selector is! Map) {

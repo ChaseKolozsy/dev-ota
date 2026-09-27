@@ -137,7 +137,8 @@ class ControlAccessibilityService : AccessibilityService() {
             pending.add(root)
             while (pending.isNotEmpty() && matches.size <= 1) {
                 val node = pending.removeFirst()
-                if (matchesSelector(node, selector, width, height)) matches.add(node)
+                if (node.isVisibleToUser &&
+                    matchesSelector(node, selector, width, height)) matches.add(node)
                 for (index in 0 until node.childCount) {
                     node.getChild(index)?.let(pending::addLast)
                 }
@@ -159,6 +160,165 @@ class ControlAccessibilityService : AccessibilityService() {
             return service.runGesture(GestureDescription.StrokeDescription(p, 0, 80))
                 .put("method", "gesture_fallback")
                 .put("bounds", rectJson(bounds))
+        }
+
+        /** Resolve a unique semantic node and dispatch from its *current*
+         * center in the same native command. Offsets are physical screen px.
+         * No prior Dart/UI-dump bounds can race the moving target.
+         */
+        fun gestureUi(
+            selector: JSONObject,
+            gesture: JSONObject,
+            packageName: String?,
+            allowWholeDevice: Boolean,
+        ): JSONObject {
+            val service = requireService()
+            service.requireScope(packageName, allowWholeDevice)
+            val target = packageName?.takeIf { it.isNotBlank() }
+                ?: ControlAgentService.DEFAULT_APP_PACKAGE
+            val root = service.activeRoot(target)
+                ?: throw IllegalStateException("gestureUi has no active $target window")
+            if (root.packageName?.toString() != target) {
+                throw IllegalStateException("gestureUi active window is outside $target")
+            }
+            val identityKeys = arrayOf(
+                "text", "textExact", "contentDescription", "contentDescriptionExact",
+                "resourceId", "resourceIdExact", "className", "classNameExact",
+            )
+            if (identityKeys.none {
+                    selector.has(it) && !selector.isNull(it) && selector.optString(it).isNotBlank()
+                }) {
+                throw IllegalArgumentException("gestureUi selector needs a nonempty identity")
+            }
+            val width = service.resources.displayMetrics.widthPixels.toDouble()
+            val height = service.resources.displayMetrics.heightPixels.toDouble()
+            val matches = mutableListOf<AccessibilityNodeInfo>()
+            val pending = ArrayDeque<AccessibilityNodeInfo>()
+            pending.add(root)
+            var visited = 0
+            while (pending.isNotEmpty() && matches.size <= 1) {
+                if (++visited > MAX_NODES) {
+                    throw IllegalStateException("gestureUi selector exceeded $MAX_NODES nodes")
+                }
+                val node = pending.removeFirst()
+                if (matchesSelector(node, selector, width, height)) matches.add(node)
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(pending::addLast)
+                }
+            }
+            if (matches.size != 1) {
+                throw IllegalStateException("gestureUi expected exactly one match, found ${matches.size}")
+            }
+            val match = matches.single()
+            if (match.packageName?.toString() != target) {
+                throw IllegalStateException("gestureUi matched node outside $target")
+            }
+            if (!match.isVisibleToUser) {
+                throw IllegalStateException("gestureUi matched a node not visible to the user")
+            }
+            val bounds = Rect().also(match::getBoundsInScreen)
+            if (bounds.isEmpty) throw IllegalStateException("gestureUi matched empty bounds")
+            val originX = bounds.exactCenterX().toDouble()
+            val originY = bounds.exactCenterY().toDouble()
+            service.requireScreenPoint(originX, originY)
+
+            val kind = gesture.optString("kind")
+            val points = JSONArray()
+            fun addPoint(dx: Double, dy: Double): Pair<Double, Double> {
+                if (!dx.isFinite() || !dy.isFinite()) {
+                    throw IllegalArgumentException("gestureUi offset must be finite")
+                }
+                val x = originX + dx
+                val y = originY + dy
+                service.requireScreenPoint(x, y)
+                points.put(JSONObject().put("x", x).put("y", y))
+                return x to y
+            }
+            val path = Path()
+            var durationMs = 80L
+            val builder = GestureDescription.Builder()
+            when (kind) {
+                "tap", "longTap", "doubleTap" -> {
+                    if (gesture.has("points") || gesture.has("dx") || gesture.has("dy")) {
+                        throw IllegalArgumentException("gestureUi $kind has no path offsets")
+                    }
+                    addPoint(0.0, 0.0)
+                    path.moveTo(originX.toFloat(), originY.toFloat())
+                    when (kind) {
+                        "tap" -> {
+                            if (gesture.has("durationMs")) {
+                                throw IllegalArgumentException("gestureUi tap has fixed duration")
+                            }
+                            builder.addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+                        }
+                        "longTap" -> {
+                            durationMs = gesture.optLong("durationMs", 750)
+                            if (durationMs !in 500L..5000L) {
+                                throw IllegalArgumentException("gestureUi longTap duration must be 500..5000 ms")
+                            }
+                            builder.addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                        }
+                        else -> {
+                            if (gesture.has("durationMs")) {
+                                throw IllegalArgumentException("gestureUi doubleTap has fixed timing")
+                            }
+                            durationMs = 205
+                            builder.addStroke(GestureDescription.StrokeDescription(path, 0, 55))
+                            val second = Path().apply { moveTo(originX.toFloat(), originY.toFloat()) }
+                            builder.addStroke(GestureDescription.StrokeDescription(second, 150, 55))
+                        }
+                    }
+                }
+                "swipe" -> {
+                    if (gesture.has("points")) {
+                        throw IllegalArgumentException("gestureUi swipe uses dx/dy")
+                    }
+                    durationMs = gesture.optLong("durationMs", 300)
+                    if (durationMs !in 1L..5000L) {
+                        throw IllegalArgumentException("gestureUi swipe duration must be 1..5000 ms")
+                    }
+                    addPoint(0.0, 0.0)
+                    path.moveTo(originX.toFloat(), originY.toFloat())
+                    val end = addPoint(gesture.getDouble("dx"), gesture.getDouble("dy"))
+                    path.lineTo(end.first.toFloat(), end.second.toFloat())
+                    builder.addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                }
+                "path" -> {
+                    if (gesture.has("dx") || gesture.has("dy")) {
+                        throw IllegalArgumentException("gestureUi path uses points")
+                    }
+                    durationMs = gesture.getLong("durationMs")
+                    if (durationMs !in 80L..5000L) {
+                        throw IllegalArgumentException("gestureUi path duration must be 80..5000 ms")
+                    }
+                    val relative = gesture.getJSONArray("points")
+                    if (relative.length() !in 2..64) {
+                        throw IllegalArgumentException("gestureUi path requires 2..64 points")
+                    }
+                    for (i in 0 until relative.length()) {
+                        val point = relative.getJSONObject(i)
+                        if (point.has("tMs")) {
+                            throw IllegalArgumentException("gestureUi path has one total durationMs")
+                        }
+                        val dx = point.getDouble("dx")
+                        val dy = point.getDouble("dy")
+                        val absolute = addPoint(dx, dy)
+                        if (i == 0) path.moveTo(absolute.first.toFloat(), absolute.second.toFloat())
+                        else path.lineTo(absolute.first.toFloat(), absolute.second.toFloat())
+                    }
+                    builder.addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                }
+                else -> throw IllegalArgumentException("unsupported gestureUi kind: $kind")
+            }
+            val startedAtMs = SystemClock.elapsedRealtime()
+            val result = service.runGesture(builder.build())
+            return result.put("kind", kind)
+                .put("durationMs", durationMs)
+                .put("elapsedMs", SystemClock.elapsedRealtime() - startedAtMs)
+                .put("resolvedBounds", rectJson(bounds))
+                .put("resolvedOrigin", JSONObject().put("x", originX).put("y", originY))
+                .put("resolvedPoints", points)
+                .put("packageName", target)
         }
 
         private fun matchesSelector(

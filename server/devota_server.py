@@ -93,6 +93,7 @@ DEVICE_MACRO_ACTIONS = {
     "screenshot",
     "uiDump",
     "tapUi",
+    "gestureUi",
     "assertUi",
     "waitUi",
     "assertDeviceProfile",
@@ -2219,6 +2220,47 @@ def new_macro_id(prefix: str) -> str:
     return f"{prefix}-{int(time.time() * 1_000_000)}-{uuid.uuid4().hex[:8]}"
 
 
+def validate_gesture_ui_args(raw: Any) -> None:
+    if not isinstance(raw, dict) or set(raw) - {"selector", "gesture", "packageName"}:
+        raise ValueError("gestureUi args must contain selector, gesture and optional packageName")
+    selector, gesture = raw.get("selector"), raw.get("gesture")
+    if not isinstance(selector, dict) or not isinstance(gesture, dict):
+        raise ValueError("gestureUi requires selector and gesture objects")
+    identity_keys = {"text", "textExact", "contentDescription", "contentDescriptionExact",
+                     "resourceId", "resourceIdExact", "className", "classNameExact"}
+    if not any(isinstance(selector.get(k), str) and selector[k].strip() for k in identity_keys):
+        raise ValueError("gestureUi selector needs a nonempty identity")
+    package = raw.get("packageName")
+    if package is not None and (not isinstance(package, str) or
+                                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+", package)):
+        raise ValueError("gestureUi packageName is invalid")
+    kind = gesture.get("kind")
+    allowed = {"tap": {"kind"}, "doubleTap": {"kind"},
+               "longTap": {"kind", "durationMs"},
+               "swipe": {"kind", "dx", "dy", "durationMs"},
+               "path": {"kind", "points", "durationMs"}}
+    if not isinstance(kind, str) or kind not in allowed or set(gesture) - allowed[kind]:
+        raise ValueError("unsupported gestureUi kind or fields")
+    duration = gesture.get("durationMs")
+    minimum = {"longTap": 500, "swipe": 1, "path": 80}.get(kind, 0)
+    if duration is not None and (isinstance(duration, bool) or not isinstance(duration, int) or
+                                 duration < minimum or duration > 5000):
+        raise ValueError("gestureUi durationMs is invalid")
+    def finite_number(value: Any) -> bool:
+        return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+    if kind == "swipe" and not (finite_number(gesture.get("dx")) and
+                                finite_number(gesture.get("dy"))):
+        raise ValueError("gestureUi swipe needs finite dx and dy")
+    if kind == "path":
+        points = gesture.get("points")
+        if duration is None or not isinstance(points, list) or not 2 <= len(points) <= 64:
+            raise ValueError("gestureUi path needs durationMs and 2..64 points")
+        for index, point in enumerate(points):
+            if (not isinstance(point, dict) or set(point) != {"dx", "dy"} or
+                    not finite_number(point["dx"]) or not finite_number(point["dy"])):
+                raise ValueError(f"invalid gestureUi path point {index}")
+
+
 def normalize_macro_step(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("macro step must be an object")
@@ -2261,6 +2303,8 @@ def normalize_macro_step(raw: Any) -> dict[str, Any]:
                     raise ValueError("tapImage durationMs must be from 80 to 5000")
         if action == "tapUi" and "imageFallback" in spec.get("args", {}):
             validate_image_template(spec["args"]["imageFallback"])
+        if action == "gestureUi":
+            validate_gesture_ui_args(spec.get("args", {}))
         if action == "humanCheckpoint":
             args = spec.get("args", {})
             countdown = args.get("countdownSeconds", 10)

@@ -37,13 +37,31 @@ let activeMacroRecording = null;
 
 const uiSelectorSchema = z.object({
   text: z.string().optional(),
+  textExact: z.string().optional(),
   contentDescription: z.string().optional(),
+  contentDescriptionExact: z.string().optional(),
   resourceId: z.string().optional(),
+  resourceIdExact: z.string().optional(),
   className: z.string().optional(),
+  classNameExact: z.string().optional(),
   checkable: z.boolean().optional(),
   checked: z.boolean().optional(),
   visibleOnly: z.boolean().default(true),
+  centerRegion: z.object({
+    left: z.number().min(0).max(1),
+    top: z.number().min(0).max(1),
+    right: z.number().min(0).max(1),
+    bottom: z.number().min(0).max(1),
+  }).optional(),
 });
+
+const gestureUiSpecSchema = z.union([
+  z.object({ kind: z.literal("tap") }).strict(),
+  z.object({ kind: z.literal("doubleTap") }).strict(),
+  z.object({ kind: z.literal("longTap"), durationMs: z.number().int().min(500).max(5000).optional() }).strict(),
+  z.object({ kind: z.literal("swipe"), dx: z.number(), dy: z.number(), durationMs: z.number().int().min(1).max(5000).optional() }).strict(),
+  z.object({ kind: z.literal("path"), points: z.array(z.object({ dx: z.number(), dy: z.number() }).strict()).min(2).max(64), durationMs: z.number().int().min(80).max(5000) }).strict(),
+]);
 
 const imageTemplateSchema = z.object({
   format: z.literal("devota-image-template"),
@@ -1826,6 +1844,27 @@ server.registerTool(
       label: `Tap ${selector.text || selector.contentDescription || selector.resourceId || "UI control"}`,
     });
     return textResult({ activePackage: dump.activePackage, match: summarizeNode(matches[0]), tap });
+  },
+);
+
+server.registerTool(
+  "android_gesture_ui",
+  {
+    title: "Gesture From Android UI Node",
+    description: "Resolve one semantic node on the device and dispatch a native gesture from its current center. Swipe/path offsets are physical screen pixels; path time is one total duration.",
+    inputSchema: {
+      selector: uiSelectorSchema,
+      gesture: gestureUiSpecSchema,
+      appId: z.string().optional(),
+      packageName: z.string().optional(),
+    },
+  },
+  async ({ selector, gesture, appId, packageName }) => {
+    const targetPackage = await packageNameFor(appId, packageName);
+    const args = { selector, gesture, packageName: targetPackage };
+    return textResult(await phoneOrAdb("gestureUi", args, async () => {
+      throw new Error("gestureUi requires a connected DevOTA agent with native gesture support");
+    }, { macroAction: "gestureUi", macroArgs: args }));
   },
 );
 
