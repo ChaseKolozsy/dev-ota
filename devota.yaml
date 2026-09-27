@@ -7,16 +7,16 @@ roots:
 apps:
   - id: cradlespeak
     root: cradlespeak
-    label: Cradlespeak — main · AnkiDroid
+    label: Cradlespeak — main · Title audit
     packageName: io.github.chasekolozsy.cradlespeak
-    notes: Signed ARM64 build 2215 from main source 4aab7437. Preserves model choice when generation quotes expire and displays the cloud catalog names DeepSeek Pro, Opus and GPT Sol. Confirmation and running screens identify the selected model; pending credit exposure appears during generation. Includes blank review defaults and commentary source fixes. APK SHA256 7200854a3bce6486c246736fc1646130f749ff217e71059549897c9b031d0b0b.
+    notes: Signed ARM64 versionCode 4236 from main source 619fcae5. Includes native gesture tracker fixes, complete dialogue emoji and asset fallbacks, separated choice pills, and audio load/cancellation repairs verified on emulators. Gesture calibration audit remains in progress. APK SHA256 256b70123f2546bb00e495a16e85ff6dbfbab9e09d0876e08169bb5e3f7358ca.
     buildDirs:
       - app/build/app/outputs/flutter-apk
     build:
       workingDir: .
       commands:
-        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2215
-        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2215
+        debug: scripts/build_android_apk.sh debug --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2236
+        release: scripts/build_android_apk.sh release --lexical --trusted-http-origin http://10.243.53.96:8002 --build-number 2236
   - id: devota
     root: devota
     label: DevOTA
