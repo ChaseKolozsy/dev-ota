@@ -84,4 +84,43 @@ void main() {
 
     expect(delivered, ['frame-1', 'frame-2', 'frame-3', 'complete']);
   });
+
+  test('retains an active run directory across interim flushes', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'devota-macro-active-outbox-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final delivered = <int>[];
+    final outbox = DeviceMacroEvidenceOutbox(
+      rootDirectory: () async => temporary,
+      sender: (url, payload) async {
+        if (url.endsWith('/steps')) delivered.add(payload['stepIndex'] as int);
+      },
+    );
+
+    await outbox.enqueueStep(
+      runId: 'run-active',
+      baseUrl: 'http://relay.example',
+      payload: {'stepIndex': 1},
+    );
+    await outbox.flush();
+    final runDir = Directory('${temporary.path}/run-active');
+    expect(await runDir.exists(), isTrue);
+    expect(await outbox.pendingRecordCount(), 0);
+
+    await outbox.enqueueStep(
+      runId: 'run-active',
+      baseUrl: 'http://relay.example',
+      payload: {'stepIndex': 2},
+    );
+    await outbox.enqueueCompletion(
+      runId: 'run-active',
+      baseUrl: 'http://relay.example',
+      payload: {'status': 'passed'},
+    );
+    await outbox.flush();
+
+    expect(delivered, [1, 2]);
+    expect(await runDir.exists(), isFalse);
+  });
 }

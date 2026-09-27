@@ -126,6 +126,7 @@ class DeviceMacroEvidenceOutbox {
       }
 
       final completion = File('${runDir.path}/complete.json');
+      var completionDelivered = false;
       if (await completion.exists()) {
         // Re-read after delivering steps so a concurrently queued frame cannot
         // be overtaken by the completion marker.
@@ -138,9 +139,17 @@ class DeviceMacroEvidenceOutbox {
                   entity.path.endsWith('.json'),
             )
             .isEmpty;
-        if (remainingSteps && !await _deliver(runId, completion)) return false;
+        if (remainingSteps) {
+          if (!await _deliver(runId, completion)) return false;
+          completionDelivered = true;
+        }
       }
-      if (await runDir.exists() && await runDir.list().isEmpty) {
+      // Keep an active run's directory in place between step deliveries.
+      // Deleting it after an interim flush races with the next enqueueStep:
+      // that writer may have created the directory but not its temp file yet.
+      if (completionDelivered &&
+          await runDir.exists() &&
+          await runDir.list().isEmpty) {
         await runDir.delete();
       }
     }
