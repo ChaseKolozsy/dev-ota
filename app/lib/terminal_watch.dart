@@ -142,6 +142,41 @@ class TmuxWatchTransport {
       '${_guard(pane)}tmux send-keys -H -t ${shellQuote(pane.id)} $bytes',
     );
   }
+
+  /// Passive voice: raw key bytes (from the voice grammar) as hex send-keys.
+  Future<void> sendBytes(WatchedPane pane, String sequence) async {
+    if (sequence.isEmpty || sequence.length > 4096) {
+      throw StateError('Invalid key bytes');
+    }
+    final bytes = utf8
+        .encode(sequence)
+        .map((b) => b.toRadixString(16))
+        .join(' ');
+    await command(
+      '${_guard(pane)}tmux send-keys -H -t ${shellQuote(pane.id)} $bytes',
+    );
+  }
+
+  /// Leaves tmux copy mode so keys never land in it.
+  Future<void> leaveCopyMode(WatchedPane pane) => command(
+    '${_guard(pane)}if [ "\$(tmux display-message -p -t ${shellQuote(pane.id)} '
+    "'#{pane_in_mode}')\" = 1 ]; then tmux send-keys -t ${shellQuote(pane.id)} "
+    '-X cancel; fi',
+  );
+
+  /// Passive voice: scroll the pane's history in tmux copy mode.
+  Future<void> scroll(WatchedPane pane, int lines, {required bool up}) {
+    final n = lines.clamp(1, 200);
+    final target = shellQuote(pane.id);
+    return command(
+      up
+          ? '${_guard(pane)}tmux copy-mode -t $target && '
+                'tmux send-keys -t $target -X -N $n scroll-up'
+          : '${_guard(pane)}if [ "\$(tmux display-message -p -t $target '
+                "'#{pane_in_mode}')\" = 1 ]; then tmux send-keys -t $target "
+                '-X -N $n scroll-down; fi',
+    );
+  }
 }
 
 class PaneObservation {
@@ -536,37 +571,14 @@ class TerminalWatchController extends ChangeNotifier {
         await transport.key(binding.pane, 'enter');
         _checkRun(generation);
       } else {
-        for (var i = 0; i < macro.steps.length; i++) {
-          _checkRun(generation);
-          final step = macro.steps[i];
-          progress = '${macro.name} · step ${i + 1}/${macro.steps.length}';
-          _notify();
-          switch (step.type) {
-            case TerminalMacroStepType.shell:
-              if (step.value.trim().isNotEmpty) {
-                inputAttempted = true;
-                await transport.paste(binding.pane, step.value);
-                await _delay(terminalPasteSettleTime, generation);
-                if (commandNeedsEnter(macro.steps, i)) {
-                  await transport.key(binding.pane, 'enter');
-                  state.submissionUnconfirmed = true;
-                }
-              }
-            case TerminalMacroStepType.terminalKey:
-              inputAttempted = true;
-              await transport.key(binding.pane, step.value);
-              if (step.value == 'enter') state.submissionUnconfirmed = true;
-            case TerminalMacroStepType.wait:
-            case TerminalMacroStepType.tmux:
-              break; // Initial selection is overridden by the bound pane ID.
-            case TerminalMacroStepType.device:
-              throw StateError('Device macro is not a terminal macro');
-          }
-          await _delay(
-            Duration(milliseconds: (step.delaySeconds * 1000).round()),
-            generation,
-          );
-        }
+        await _runMacroSteps(
+          macro,
+          binding.pane,
+          state,
+          transport,
+          generation,
+          () => inputAttempted = true,
+        );
       }
       state.error = null;
       if (action == 'run') state.macroSent = true;
@@ -587,6 +599,186 @@ class TerminalWatchController extends ChangeNotifier {
       _notify();
     }
   }
+
+  Future<void> _runMacroSteps(
+    TerminalMacro macro,
+    WatchedPane pane,
+    PaneObservation state,
+    TmuxWatchTransport transport,
+    int generation,
+    void Function() markInput,
+  ) async {
+    for (var i = 0; i < macro.steps.length; i++) {
+      _checkRun(generation);
+      final step = macro.steps[i];
+      progress = '${macro.name} · step ${i + 1}/${macro.steps.length}';
+      _notify();
+      switch (step.type) {
+        case TerminalMacroStepType.shell:
+          if (step.value.trim().isNotEmpty) {
+            markInput();
+            await transport.paste(pane, step.value);
+            await _delay(terminalPasteSettleTime, generation);
+            if (commandNeedsEnter(macro.steps, i)) {
+              await transport.key(pane, 'enter');
+              state.submissionUnconfirmed = true;
+            }
+          }
+        case TerminalMacroStepType.terminalKey:
+          markInput();
+          await transport.key(pane, step.value);
+          if (step.value == 'enter') state.submissionUnconfirmed = true;
+        case TerminalMacroStepType.wait:
+        case TerminalMacroStepType.tmux:
+          break; // Initial selection is overridden by the bound pane ID.
+        case TerminalMacroStepType.device:
+          throw StateError('Device macro is not a terminal macro');
+      }
+      await _delay(
+        Duration(milliseconds: (step.delaySeconds * 1000).round()),
+        generation,
+      );
+    }
+  }
+
+  /// Passive-voice input to a bound pane (docs/passive-voice-control.md).
+  ///
+  /// Uses the same guards as notification actions: pane identity on every
+  /// tmux command, a fresh observation, the busy lock, and (for text and
+  /// macros) a settled screen that a fresh capture still matches. Keys such
+  /// as Escape or Ctrl-C only need a fresh, identified pane, because
+  /// interrupting a working agent is their purpose. Leaves tmux copy mode
+  /// before any input. Returns null on success, otherwise a short spoken
+  /// reason. Nothing is ever retried.
+  Future<String?> voiceInput(
+    String paneId,
+    Future<void> Function(
+      TmuxWatchTransport transport,
+      WatchedPane pane,
+      PaneObservation state,
+      int generation,
+    )
+    send, {
+    bool requireSettled = false,
+    bool leaveCopyMode = true,
+    bool submits = false,
+  }) async {
+    if (_disposed) return 'app closed';
+    if (busy || externalBusy) return 'window busy';
+    final matching = bindings.where((b) => b.pane.id == paneId);
+    if (matching.isEmpty) return 'window not bound';
+    final binding = matching.first;
+    final transport = _transport;
+    if (transport == null) return 'SSH disconnected';
+    final state = observations[paneId];
+    final fresh =
+        state != null &&
+        state.error == null &&
+        state.observedAt != null &&
+        now().difference(state.observedAt!) <= freshness;
+    if (!fresh) return 'window unavailable';
+    if (requireSettled && !state.settled(now(), quietPeriod, freshness)) {
+      return 'window still changing';
+    }
+    final generation = _generation;
+    _busy = true;
+    _stop = false;
+    runningPane = paneId;
+    progress = 'Voice input';
+    state.runError = null;
+    _notify();
+    var inputAttempted = false;
+    String? failure;
+    try {
+      final seen = state.content;
+      final before = await transport.capture(binding.pane);
+      _checkRun(generation);
+      final changed = before != seen || state.content != seen;
+      state.observe(before, now(), freshness);
+      if (requireSettled && changed) {
+        throw StateError('window changed');
+      }
+      if (leaveCopyMode) await transport.leaveCopyMode(binding.pane);
+      _checkRun(generation);
+      inputAttempted = true;
+      if (submits) {
+        state.submittedScreen = before;
+        state.awaitingOutput = true;
+      }
+      await send(transport, binding.pane, state, generation);
+      state.error = null;
+    } catch (error) {
+      if (inputAttempted && submits) state.submissionUnconfirmed = true;
+      failure = error is StateError
+          ? error.message.toString()
+          : 'delivery uncertain';
+      state.runError = 'Voice: $failure';
+    } finally {
+      state.changedAt = now();
+      state.revision++;
+      state.verdict = null;
+      _busy = false;
+      runningPane = null;
+      progress = null;
+      _notify();
+    }
+    return failure;
+  }
+
+  /// Passive voice: paste text, let it settle, press Enter (draft submit and
+  /// slash commands).
+  Future<String?> voiceSubmitText(String paneId, String text) => voiceInput(
+    paneId,
+    (transport, pane, state, generation) async {
+      await transport.paste(pane, text);
+      await _delay(terminalPasteSettleTime, generation);
+      await transport.key(pane, 'enter');
+      state.submissionUnconfirmed = true;
+    },
+    requireSettled: true,
+    submits: true,
+  );
+
+  /// Passive voice: raw key bytes from the voice grammar.
+  Future<String?> voiceSendBytes(String paneId, String bytes) =>
+      voiceInput(paneId, (transport, pane, state, generation) async {
+        await transport.sendBytes(pane, bytes);
+        if (bytes.contains('\r')) state.submissionUnconfirmed = true;
+      }, submits: bytes.contains('\r'));
+
+  /// Passive voice: run a Command/Key/Wait macro on the voice target pane
+  /// (which need not be the macro bound to that pane's notification).
+  Future<String?> voiceRunMacro(String paneId, TerminalMacro macro) {
+    final error = notificationMacroError(macro);
+    if (error != null) return Future.value(error);
+    return voiceInput(
+      paneId,
+      (transport, pane, state, generation) async {
+        state.macroSent = false;
+        await _runMacroSteps(macro, pane, state, transport, generation, () {});
+        state.macroSent = true;
+      },
+      requireSettled: true,
+      submits: true,
+    );
+  }
+
+  /// Passive voice: scroll in tmux copy mode (does not leave it first).
+  Future<String?> voiceScroll(String paneId, int lines, {required bool up}) =>
+      voiceInput(
+        paneId,
+        (transport, pane, state, generation) =>
+            transport.scroll(pane, lines, up: up),
+        leaveCopyMode: false,
+      );
+
+  /// Passive voice: leave copy mode (back to the live bottom).
+  Future<String?> voiceScrollBottom(String paneId) =>
+      voiceInput(paneId, (transport, pane, state, generation) async {});
+
+  /// Passive voice: backspace N in the pane.
+  Future<String?> voiceBackspace(String paneId, int count) =>
+      voiceSendBytes(paneId, '\x7f' * count.clamp(1, 200));
 
   void _checkRun(int generation) {
     if (_disposed || _stop || generation != _generation || _transport == null) {
