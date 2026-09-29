@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +27,8 @@ import 'terminal_host_route.dart';
 import 'terminal_notification_bridge.dart';
 import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
+import 'voice/voice_commands.dart';
+import 'voice/voice_control.dart';
 
 class _TerminalKeyBarItem {
   const _TerminalKeyBarItem({
@@ -61,6 +64,41 @@ class _ToolBar {
   final VoidCallback onToggle;
   final VoidCallback onToggleFold;
   final Widget Function() buildContent;
+}
+
+/// One button of the tmux row. The row and voice control are both built from
+/// this list, so a spoken "next window" runs exactly what tapping Next does.
+class _TmuxButton {
+  const _TmuxButton(this.id, this.label, this.tooltip, this.action);
+
+  final String id;
+  final String label;
+  final String tooltip;
+  final VoidCallback action;
+}
+
+/// One arrow of the control pad's arrow cluster.
+class _ArrowKey {
+  const _ArrowKey(this.id, this.icon, this.tooltip, this.sequence, this.align);
+
+  final String id;
+  final IconData icon;
+  final String tooltip;
+  final String sequence;
+  final Alignment align;
+}
+
+/// Test seams for the Terminal tab. Production code never sets these.
+@visibleForTesting
+class SshTerminalTestHooks {
+  const SshTerminalTestHooks({this.sessionSink, this.requestMicrophone});
+
+  /// Stands in for a connected SSH session: the tab counts as connected and
+  /// every byte it would write to the session is passed here instead.
+  final void Function(String data)? sessionSink;
+
+  /// Replaces the microphone permission request.
+  final Future<bool> Function()? requestMicrophone;
 }
 
 /// Editor for a custom control-pad key. A dedicated StatefulWidget (rather than
@@ -358,6 +396,7 @@ class SshTerminalTab extends StatefulWidget {
     this.onMacroUsed,
     this.onMacroReorder,
     this.onZeroTierRecovery,
+    this.testHooks,
   });
 
   final Dio dio;
@@ -376,12 +415,16 @@ class SshTerminalTab extends StatefulWidget {
   /// bar, with its old and new index in [quickMacros].
   final void Function(int fromIndex, int toIndex)? onMacroReorder;
 
+  @visibleForTesting
+  final SshTerminalTestHooks? testHooks;
+
   @override
   State<SshTerminalTab> createState() => _SshTerminalTabState();
 }
 
 class _SshTerminalTabState extends State<SshTerminalTab>
-    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin<SshTerminalTab> {
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin<SshTerminalTab>
+    implements VoiceSurface {
   final _storage = const FlutterSecureStorage();
   late final _voice = VoiceInputService(widget.dio);
   late final _terminal = Terminal(maxLines: 10000);
@@ -410,6 +453,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   bool _macroRunning = false;
   final _watch = TerminalWatchController();
   TerminalHostRoute _watchRoute = const TerminalHostRoute();
+  late final _voiceSession = VoiceControlSession(
+    surface: this,
+    requestMicrophone:
+        widget.testHooks?.requestMicrophone ?? _voice.requestMicrophone,
+  );
   late final _notificationBridge = TerminalNotificationBridge(
     _watch,
     onSessionAction: _onNotificationSessionAction,
@@ -459,8 +507,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     WidgetsBinding.instance.addObserver(this);
     _terminal.write('DevOTA SSH terminal\r\n');
     _terminal.onOutput = (data) {
-      if (!_watch.busy) _session?.write(Uint8List.fromList(utf8.encode(data)));
+      if (!_watch.busy) _writeSessionBytes(data);
     };
+    if (widget.testHooks?.sessionSink != null) _connected = true;
     _terminal.onResize = (width, height, pixelWidth, pixelHeight) {
       _session?.resizeTerminal(width, height, pixelWidth, pixelHeight);
     };
@@ -471,6 +520,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _loadTerminalFontSize();
     _loadTerminalPadConfig();
     _loadBackgroundKeepAlive();
+    _loadVoiceQuietBeeps();
+    _voiceSession.addListener(_onVoiceChanged);
     _attachMacroController();
     _watch.addListener(_onWatchChanged);
     _notificationBridge.publish();
@@ -478,6 +529,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   @override
   void dispose() {
+    _voiceSession.removeListener(_onVoiceChanged);
+    _voiceSession.dispose();
     _watch.removeListener(_onWatchChanged);
     _notificationBridge.dispose();
     _watch.dispose();
@@ -552,6 +605,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   static const _terminalPadConfigKey = 'terminal_pad_config_json';
   static const _backgroundKeepAliveKey = 'terminal_background_keepalive';
   static const _backgroundBatteryPromptKey = 'terminal_background_battery_ask';
+  static const _voiceQuietBeepsKey = 'terminal_voice_quiet_beeps';
   static const _terminalDefaultFontSize = 13.0;
   static const _terminalMinFontSize = 8.0;
   static const _terminalMaxFontSize = 22.0;
@@ -1607,6 +1661,15 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _writeToSession(String text) {
     if (!_connected) return;
+    _writeSessionBytes(text);
+  }
+
+  void _writeSessionBytes(String text) {
+    final sink = widget.testHooks?.sessionSink;
+    if (sink != null) {
+      sink(text);
+      return;
+    }
     _session?.write(Uint8List.fromList(utf8.encode(text)));
   }
 
@@ -2021,6 +2084,178 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     return key;
   }
 
+  // --- Voice control --------------------------------------------------------
+  //
+  // The mic toggle in the top bar. Everything it does goes through the same
+  // handlers this tab's own buttons use, on this tab's current session.
+
+  Future<void> _loadVoiceQuietBeeps() async {
+    final prefs = await SharedPreferences.getInstance();
+    _voiceSession.quietBeeps = prefs.getBool(_voiceQuietBeepsKey) ?? true;
+  }
+
+  Future<void> _setVoiceQuietBeeps(bool quiet) async {
+    setState(() => _voiceSession.quietBeeps = quiet);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_voiceQuietBeepsKey, quiet);
+  }
+
+  void _onVoiceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleVoiceControl() async {
+    await _voiceSession.setEnabled(!_voiceSession.enabled);
+  }
+
+  bool get _canSubmitComposer =>
+      _connected && !_transcribing && !_recording && !_inputLocked;
+
+  VoidCallback _padKeyTap(TerminalPadKey key) =>
+      () => _activateTerminalPadKey(key);
+
+  VoidCallback _arrowTap(_ArrowKey arrow) =>
+      () => _activateTerminalKeyButton(
+        arrow.id,
+        () => _sendTerminalKey(arrow.sequence),
+      );
+
+  VoidCallback _tmuxTap(_TmuxButton button) =>
+      () => _activateTerminalKeyButton(button.id, button.action);
+
+  VoidCallback _macroTap(TerminalMacro macro) =>
+      () => unawaited(_runMacro(macro).catchError((Object _) {}));
+
+  VoidCallback _commandTap(String command) =>
+      () => _runSavedCommand(command);
+
+  /// Ctrl-C (or a custom key that sends it) asks for "yes" first.
+  bool _padKeyNeedsConfirm(TerminalPadKey key) =>
+      key.id == 'ctrl_c' || decodeKeySequence(key.sequence) == '\x03';
+
+  @override
+  bool get voiceConnected => _connected;
+
+  @override
+  bool get voiceBusy => _inputLocked;
+
+  @override
+  List<VoiceTarget> get voiceTargets => [
+    for (final key in _allPadKeys)
+      VoiceTarget(
+        kind: VoiceTargetKind.padKey,
+        id: key.id,
+        label: key.name,
+        abbreviation: key.abbreviation,
+        enabled: (_connected || key.enabledWhenDisconnected) && !_inputLocked,
+        confirm: _padKeyNeedsConfirm(key),
+        run: _padKeyTap(key),
+      ),
+    for (final arrow in _arrowKeys)
+      VoiceTarget(
+        kind: VoiceTargetKind.arrow,
+        id: arrow.id,
+        label: arrow.tooltip,
+        run: _arrowTap(arrow),
+      ),
+    for (final button in _tmuxButtons())
+      VoiceTarget(
+        kind: VoiceTargetKind.tmux,
+        id: button.id,
+        label: button.label,
+        tooltip: button.tooltip,
+        enabled: _tmuxBarEnabled,
+        run: _tmuxTap(button),
+      ),
+    for (final macro in widget.quickMacros)
+      VoiceTarget(
+        kind: VoiceTargetKind.macro,
+        id: macro.id,
+        label: macro.name,
+        enabled: _macroBarEnabled,
+        confirm: isExitLabel(macro.name),
+        run: _macroTap(macro),
+      ),
+    for (final command in widget.quickCommands)
+      VoiceTarget(
+        kind: VoiceTargetKind.command,
+        id: command,
+        label: command,
+        enabled: _commandBarEnabled,
+        confirm: isExitLabel(command),
+        run: _commandTap(command),
+      ),
+  ];
+
+  @override
+  String get composerText => _composerController.text;
+
+  @override
+  void appendDictation(String text) => _appendComposerText(text);
+
+  @override
+  bool submitComposer() {
+    if (!_canSubmitComposer) return false;
+    _submitComposer();
+    return true;
+  }
+
+  @override
+  void clearComposer() => _composerController.clear();
+
+  @override
+  void composerBackspace(int count) =>
+      _setComposerText(backspaceText(_composerController.text, count));
+
+  @override
+  void composerDeleteWords(int count) =>
+      _setComposerText(deleteLastWords(_composerController.text, count));
+
+  void _setComposerText(String text) {
+    _composerController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  Widget _buildVoiceStatusLine(ThemeData theme) {
+    final line = _voiceSession.statusLine;
+    if (line == null) return const SizedBox.shrink();
+    final scheme = theme.colorScheme;
+    final on = _voiceSession.enabled;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+      child: Row(
+        children: [
+          Icon(
+            on ? Icons.mic : Icons.mic_none,
+            size: 14,
+            color: on ? scheme.primary : scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              line,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall,
+            ),
+          ),
+          if (on && _voiceSession.nativeState != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              _voiceSession.nativeState!,
+              maxLines: 1,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -2030,6 +2265,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       child: Column(
         children: [
           _buildConnectionPanel(theme),
+          _buildVoiceStatusLine(theme),
           Expanded(
             child: Listener(
               onPointerDown: _handleTerminalPointerDown,
@@ -2215,6 +2451,19 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     ? null
                     : () => _connected ? _disconnect() : _connect(),
               ),
+              if (defaultTargetPlatform == TargetPlatform.android)
+                _terminalPanelIconButton(
+                  icon: Icon(
+                    _voiceSession.enabled ? Icons.mic : Icons.mic_none,
+                  ),
+                  tooltip: _voiceSession.enabled
+                      ? 'Voice control on'
+                      : 'Voice control off',
+                  selected: _voiceSession.enabled,
+                  onPressed: _voiceSession.starting
+                      ? null
+                      : () => unawaited(_toggleVoiceControl()),
+                ),
               _buildTerminalFontControls(theme),
               _terminalPanelIconButton(
                 icon: Icon(
@@ -2511,6 +2760,21 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         unawaited(_setKeepAliveInBackground(v));
                       },
                     ),
+                    if (Platform.isAndroid)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text('Voice control: quiet restart beeps'),
+                        subtitle: const Text(
+                          'Mutes media while the recognizer restarts, only '
+                          'when nothing else is playing.',
+                        ),
+                        value: _voiceSession.quietBeeps,
+                        onChanged: (v) {
+                          setSheetState(() => _voiceSession.quietBeeps = v);
+                          unawaited(_setVoiceQuietBeeps(v));
+                        },
+                      ),
                     if (_keepAliveInBackground &&
                         !_batteryOptimizationExempt &&
                         Platform.isAndroid)
@@ -2859,7 +3123,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: const EdgeInsets.symmetric(horizontal: 8),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        onPressed: enabled ? () => _activateTerminalPadKey(key) : null,
+        onPressed: enabled ? _padKeyTap(key) : null,
         child: icon != null
             ? Icon(icon, size: 16)
             : Text(key.abbreviation, maxLines: 1),
@@ -2886,7 +3150,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
               padding: EdgeInsets.symmetric(horizontal: icon != null ? 0 : 8),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            onPressed: enabled ? () => _activateTerminalPadKey(key) : null,
+            onPressed: enabled ? _padKeyTap(key) : null,
             child: icon != null
                 ? Icon(icon, size: 18)
                 : Text(key.abbreviation, maxLines: 1),
@@ -2896,61 +3160,53 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
+  static const _arrowKeys = <_ArrowKey>[
+    _ArrowKey(
+      'up',
+      Icons.keyboard_arrow_up,
+      'Up',
+      '\x1B[A',
+      Alignment.topCenter,
+    ),
+    _ArrowKey(
+      'left',
+      Icons.keyboard_arrow_left,
+      'Left',
+      '\x1B[D',
+      Alignment.bottomLeft,
+    ),
+    _ArrowKey(
+      'down',
+      Icons.keyboard_arrow_down,
+      'Down',
+      '\x1B[B',
+      Alignment.bottomCenter,
+    ),
+    _ArrowKey(
+      'right',
+      Icons.keyboard_arrow_right,
+      'Right',
+      '\x1B[C',
+      Alignment.bottomRight,
+    ),
+  ];
+
   Widget _buildArrowCluster() {
     return SizedBox(
       width: 94,
       height: 64,
       child: Stack(
         children: [
-          Align(
-            alignment: Alignment.topCenter,
-            child: _terminalArrowButton(
-              'up',
-              Icons.keyboard_arrow_up,
-              'Up',
-              '\x1B[A',
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: _terminalArrowButton(
-              'left',
-              Icons.keyboard_arrow_left,
-              'Left',
-              '\x1B[D',
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: _terminalArrowButton(
-              'down',
-              Icons.keyboard_arrow_down,
-              'Down',
-              '\x1B[B',
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomRight,
-            child: _terminalArrowButton(
-              'right',
-              Icons.keyboard_arrow_right,
-              'Right',
-              '\x1B[C',
-            ),
-          ),
+          for (final arrow in _arrowKeys)
+            Align(alignment: arrow.align, child: _terminalArrowButton(arrow)),
         ],
       ),
     );
   }
 
-  Widget _terminalArrowButton(
-    String usageId,
-    IconData icon,
-    String tooltip,
-    String sequence,
-  ) {
+  Widget _terminalArrowButton(_ArrowKey arrow) {
     return Tooltip(
-      message: tooltip,
+      message: arrow.tooltip,
       child: IconButton.filledTonal(
         visualDensity: VisualDensity.compact,
         style: IconButton.styleFrom(
@@ -2959,13 +3215,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: EdgeInsets.zero,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        icon: Icon(icon, size: 20),
-        onPressed: _connected && !_inputLocked
-            ? () => _activateTerminalKeyButton(
-                usageId,
-                () => _sendTerminalKey(sequence),
-              )
-            : null,
+        icon: Icon(arrow.icon, size: 20),
+        onPressed: _connected && !_inputLocked ? _arrowTap(arrow) : null,
       ),
     );
   }
@@ -3471,114 +3722,86 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  Widget _buildTmuxContent(ThemeData theme) {
-    var index = 0;
-    _TerminalKeyBarItem item(String id, Widget Function() build) {
-      return _TerminalKeyBarItem(
-        originalIndex: index++,
-        useCount: _terminalKeyUseCounts[id] ?? 0,
-        build: build,
-      );
-    }
+  /// The tmux row, in its catalog order. The row renders these and voice
+  /// control names them, so both run the same action.
+  List<_TmuxButton> _tmuxButtons() => [
+    _TmuxButton(
+      'tmux_prefix',
+      'Prefix',
+      'tmux send prefix',
+      () => _sendTmuxCommand('\x02'),
+    ),
+    _TmuxButton(
+      'tmux_new',
+      'New',
+      'tmux new window',
+      () => _sendTmuxCommand('c'),
+    ),
+    _TmuxButton(
+      'tmux_prev',
+      'Prev',
+      'tmux previous window',
+      () => _sendTmuxCommand('p'),
+    ),
+    _TmuxButton(
+      'tmux_next',
+      'Next',
+      'tmux next window',
+      () => _sendTmuxCommand('n'),
+    ),
+    _TmuxButton(
+      'tmux_list',
+      'List',
+      'tmux window list',
+      () => _sendTmuxCommand('w'),
+    ),
+    _tmuxScrollMode
+        ? _TmuxButton(
+            'tmux_scroll',
+            'Exit scroll',
+            'Exit tmux copy/scroll mode',
+            _exitTmuxScrollMode,
+          )
+        : _TmuxButton(
+            'tmux_scroll',
+            'Scroll',
+            'tmux copy/scroll mode',
+            _enterTmuxScrollMode,
+          ),
+    _TmuxButton('tmux_mouse', 'Mouse', 'tmux mouse on', _enableTmuxMouse),
+    _TmuxButton(
+      'tmux_split_vertical',
+      'Split |',
+      'tmux split pane side by side',
+      () => _sendTmuxCommand('%'),
+    ),
+    _TmuxButton(
+      'tmux_split_horizontal',
+      'Split -',
+      'tmux split pane top and bottom',
+      () => _sendTmuxCommand('"'),
+    ),
+    _TmuxButton(
+      'tmux_detach',
+      'Detach',
+      'tmux detach session',
+      () => _sendTmuxCommand('d'),
+    ),
+  ];
 
+  Widget _buildTmuxContent(ThemeData theme) {
+    final buttons = _tmuxButtons();
     final items = <_TerminalKeyBarItem>[
-      item(
-        'tmux_prefix',
-        () => _terminalKeyButton(
-          'tmux_prefix',
-          'Prefix',
-          () => _sendTmuxCommand('\x02'),
-          tooltip: 'tmux send prefix',
+      for (var i = 0; i < buttons.length; i++)
+        _TerminalKeyBarItem(
+          originalIndex: i,
+          useCount: _terminalKeyUseCounts[buttons[i].id] ?? 0,
+          build: () => _terminalKeyButton(
+            buttons[i].label,
+            _tmuxTap(buttons[i]),
+            tooltip: buttons[i].tooltip,
+          ),
         ),
-      ),
-      item(
-        'tmux_new',
-        () => _terminalKeyButton(
-          'tmux_new',
-          'New',
-          () => _sendTmuxCommand('c'),
-          tooltip: 'tmux new window',
-        ),
-      ),
-      item(
-        'tmux_prev',
-        () => _terminalKeyButton(
-          'tmux_prev',
-          'Prev',
-          () => _sendTmuxCommand('p'),
-          tooltip: 'tmux previous window',
-        ),
-      ),
-      item(
-        'tmux_next',
-        () => _terminalKeyButton(
-          'tmux_next',
-          'Next',
-          () => _sendTmuxCommand('n'),
-          tooltip: 'tmux next window',
-        ),
-      ),
-      item(
-        'tmux_list',
-        () => _terminalKeyButton(
-          'tmux_list',
-          'List',
-          () => _sendTmuxCommand('w'),
-          tooltip: 'tmux window list',
-        ),
-      ),
-      item(
-        'tmux_scroll',
-        () => _tmuxScrollMode
-            ? _terminalKeyButton(
-                'tmux_scroll',
-                'Exit scroll',
-                _exitTmuxScrollMode,
-                tooltip: 'Exit tmux copy/scroll mode',
-              )
-            : _terminalKeyButton(
-                'tmux_scroll',
-                'Scroll',
-                _enterTmuxScrollMode,
-                tooltip: 'tmux copy/scroll mode',
-              ),
-      ),
-      item(
-        'tmux_mouse',
-        () => _terminalKeyButton(
-          'tmux_mouse',
-          'Mouse',
-          _enableTmuxMouse,
-          tooltip: 'tmux mouse on',
-        ),
-      ),
-      item(
-        'tmux_split_vertical',
-        () => _terminalKeyButton(
-          'tmux_split_vertical',
-          'Split |',
-          () => _sendTmuxCommand('%'),
-          tooltip: 'tmux split pane side by side',
-        ),
-      ),
-      item(
-        'tmux_split_horizontal',
-        () => _terminalKeyButton(
-          'tmux_split_horizontal',
-          'Split -',
-          () => _sendTmuxCommand('"'),
-          tooltip: 'tmux split pane top and bottom',
-        ),
-      ),
-      item(
-        'tmux_detach',
-        () => _terminalKeyButton(
-          'tmux_detach',
-          'Detach',
-          () => _sendTmuxCommand('d'),
-          tooltip: 'tmux detach session',
-        ),
-      ),
     ];
 
     items.sort((a, b) {
@@ -3690,9 +3913,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : const Icon(Icons.play_arrow, size: 16),
-        onPressed: enabled
-            ? () => unawaited(_runMacro(macro).catchError((Object _) {}))
-            : null,
+        onPressed: enabled ? _macroTap(macro) : null,
         label: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 160),
           child: Text(macro.name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -3725,7 +3946,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                 ? _macroBusySpinner(size: 16)
                 : const Icon(Icons.keyboard_return, size: 16),
             onPressed: _commandBarEnabled && !_inputLocked
-                ? () => _runSavedCommand(command)
+                ? _commandTap(command)
                 : null,
             label: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
@@ -3743,7 +3964,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Widget _terminalKeyButton(
-    String usageId,
     String label,
     VoidCallback onPressed, {
     String? tooltip,
@@ -3761,9 +3981,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           padding: const EdgeInsets.symmetric(horizontal: 10),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        onPressed: enabled
-            ? () => _activateTerminalKeyButton(usageId, onPressed)
-            : null,
+        onPressed: enabled ? onPressed : null,
         child: _inputLocked
             ? Row(
                 mainAxisSize: MainAxisSize.min,
@@ -3870,13 +4088,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                           )
                         : const Icon(Icons.send),
                     tooltip: 'Submit to SSH',
-                    onPressed:
-                        _connected &&
-                            !_transcribing &&
-                            !_recording &&
-                            !_inputLocked
-                        ? _submitComposer
-                        : null,
+                    onPressed: _canSubmitComposer ? _submitComposer : null,
                   ),
                 ],
               ),
