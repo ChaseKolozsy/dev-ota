@@ -670,14 +670,37 @@ class TerminalWatchController extends ChangeNotifier {
     final binding = matching.first;
     final transport = _transport;
     if (transport == null) return 'SSH disconnected';
-    final state = observations[paneId];
+    var state = observations[paneId];
     final fresh =
         state != null &&
         state.error == null &&
         state.observedAt != null &&
         now().difference(state.observedAt!) <= freshness;
-    if (!fresh) return 'window unavailable';
-    if (requireSettled && !state.settled(now(), quietPeriod, freshness)) {
+    // Voice does not depend on the background poll having run recently: on
+    // the owner's phone the poll's last look was often stale, and every
+    // command failed "window unavailable". Look at the pane now instead. A
+    // submit additionally needs two identical looks 1.5 s apart, standing in
+    // for the quiet period the stale poll could not vouch for.
+    var settledNow = false;
+    if (!fresh) {
+      try {
+        var look = await transport.capture(binding.pane);
+        if (requireSettled) {
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+          final second = await transport.capture(binding.pane);
+          if (second != look) return 'window still changing';
+          look = second;
+          settledNow = true;
+        }
+        state = observations.putIfAbsent(paneId, PaneObservation.new);
+        state.observe(look, now(), freshness);
+      } catch (error) {
+        return 'window unavailable (${_brief(error)})';
+      }
+    }
+    if (requireSettled &&
+        !settledNow &&
+        !state.settled(now(), quietPeriod, freshness)) {
       return 'window still changing';
     }
     final generation = _generation;
@@ -723,6 +746,12 @@ class TerminalWatchController extends ChangeNotifier {
       _notify();
     }
     return failure;
+  }
+
+  static String _brief(Object error) {
+    final text = error is StateError ? error.message.toString() : '$error';
+    final line = text.split('\n').first.trim();
+    return line.length > 60 ? '${line.substring(0, 60)}…' : line;
   }
 
   /// Passive voice: paste text, let it settle, press Enter (draft submit and

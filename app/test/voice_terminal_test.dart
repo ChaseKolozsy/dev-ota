@@ -92,11 +92,35 @@ void main() {
     expect(commands.where((c) => c.contains('paste-buffer')), isEmpty);
   });
 
-  test('stale or unbound panes are refused', () async {
+  test('unbound panes are refused', () async {
     expect(await watch.voiceSendBytes('%9', '\t'), 'window not bound');
-    time = time.add(const Duration(seconds: 30));
-    expect(await watch.voiceSendBytes('%1', '\t'), 'window unavailable');
     expect(commands, isEmpty);
+  });
+
+  test('a stale pane is looked at now instead of refused', () async {
+    // On the owner's phone the background poll was often stale, so every
+    // voice command failed "window unavailable".
+    time = time.add(const Duration(seconds: 30));
+    expect(await watch.voiceSendBytes('%1', '\t'), isNull);
+    expect(commands.first, contains('capture-pane'));
+    expect(commands.any((c) => c.contains('send-keys -H')), isTrue);
+  });
+
+  test('a stale pane that cannot be read is refused with the reason', () async {
+    watch.connect(
+      TmuxWatchTransport((command) async {
+        commands.add(command);
+        if (command.contains('capture-pane')) throw StateError('no pane');
+        return '';
+      }),
+    );
+    commands.clear();
+    time = time.add(const Duration(seconds: 30));
+    expect(
+      await watch.voiceSendBytes('%1', '\t'),
+      'window unavailable (no pane)',
+    );
+    expect(commands.any((c) => c.contains('send-keys')), isFalse);
   });
 
   test('a busy controller refuses voice input', () async {
