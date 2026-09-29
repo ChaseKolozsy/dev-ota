@@ -1,7 +1,18 @@
 # Steering-wheel control for DevOTA — proposal
 
-Status: **PROPOSAL ONLY, nothing is built.** Written 2026-09-28 for the owner,
-who uses DevOTA while driving for Uber and DoorDash.
+Status: **Phases 0–3 built, NOT yet proven in the car** (2026-09-28). Written
+2026-09-28 for the owner, who uses DevOTA while driving for Uber and DoorDash.
+
+Built so far, all behind **Car button control** (default off; off = DevOTA as
+before): the Phase 0 car probe (Terminal → SSH settings → Car control →
+Button learning), the settings screen and editable button map, the spoken
+menu on next/previous/play-pause through DevOTA's own player, dictation on
+the voice button (home Whisper via `server/terminal_transcribe.py`, phone
+fallback) with read-back and send only on play or "submit", command mode
+with the §8.2 grammar, and confirmations. Not built: the optional
+accessibility service (§10), the Builds menu item, verdict-change
+announcements, and the Phase 3 recognizer measurement. Every [A] below is
+still unverified until the probe log comes back.
 
 > "Create a new version of DevOTA where I can navigate the app using my steering
 > wheel. I can navigate the buttons and stuff like that using my steering wheel.
