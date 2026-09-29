@@ -1,7 +1,34 @@
 # Steering-wheel control for DevOTA — proposal
 
-Status: **Phases 0–3 built, NOT yet proven in the car** (2026-09-28). Written
-2026-09-28 for the owner, who uses DevOTA while driving for Uber and DoorDash.
+Status: **Phases 0–3 built; probed in the owner's car; the Corolla button map
+and the pick-up redial guard built, NOT yet proven in the car** (2026-09-28).
+Written 2026-09-28 for the owner, who uses DevOTA while driving for Uber and
+DoorDash.
+
+**Corolla probe results (2026-09-28, REVVL V+ 5G on Android 12 / sdk 31, a
+2020s Toyota Corolla, three probe runs; logs in `~/devota-car-probe/`):**
+
+- Seek down `|◀◀` arrives as KEYCODE_MEDIA_PREVIOUS; seek up `▶▶|` as
+  KEYCODE_MEDIA_NEXT, **and the car then sends KEYCODE_MEDIA_PLAY on its own
+  about 0.5 s later** (one press = NEXT then PLAY). The `+` button arrives as
+  KEYCODE_MEDIA_PAUSE.
+- Every key is an instant down/up (heldMs 0): **no long or double press can be
+  detected** on this car.
+- The pick-up/talk button goes to Google Assistant (ACTION_VOICE_COMMAND
+  resolves to Google by system priority; there is no default to clear), so
+  DevOTA cannot take it as a voice button. The voice alias is left as it is.
+  **With no call active, pick-up makes the car redial the last number it
+  saw** — see §11.1.
+- Hang-up during DevOTA's self-managed call reaches `Connection.onDisconnect`
+  (proven). The car takes the call audio (route bluetooth, SCO connected);
+  speech during DevOTA's own call works since commit 90ab1bb.
+- Android 12 cannot feed a held recording to the phone's recognizer
+  (EXTRA_AUDIO_SOURCE is API 33+). When home Whisper fails, car mode now says
+  so plainly and keeps the audio for a retry (§7), instead of a fallback that
+  cannot work.
+
+The owner-approved map built from these findings is §5.2; the redial guard
+is §11.1.
 
 Built so far, all behind **Car button control** (default off; off = DevOTA as
 before): the Phase 0 car probe (Terminal → SSH settings → Car control →
@@ -340,6 +367,38 @@ constraint, and it has to be proven in Phase 0 on both Android 12 and 16.
 | Bluetooth HID steering-wheel remote (≈ $10–20 accessory) | Real key events → accessibility `onKeyEvent` with the screen on (F17/F18) | **High**, if the owner buys one (Q9) |
 
 ### 5.2 Default button map (editable)
+
+**Current default: the Corolla map (owner-approved 2026-09-28).** The car
+delivers only instant NEXT, PREVIOUS and PAUSE (+), hang-up of DevOTA's own
+call, and the pick-up redial (§11.1). PLAY and PAUSE are separate signals
+from the play/pause toggle, which keeps its old meaning for cars that send
+it.
+
+| Wheel button (signal) | Idle / menu | Dictating | Transcribing | Staged (after read-back) | Confirming | Reading |
+|---|---|---|---|---|---|---|
+| `|◀◀` Previous | **activate the focused item**; after a 15 s pause the focus is back on "Dictate", so a first `|◀◀` always dictates | — | — | record again | cancel | earlier |
+| `▶▶|` Next | move through the spoken menu | stop + transcribe | — | **send** | **confirm** | next chunk |
+| `+` Pause | **cancel**: stop speaking, menu back to the top | **cancel**: discard the recording | **cancel**: drop the transcription | **cancel**: stop the read-back, discard the text unsent | cancel | stop reading |
+| Hang-up (DevOTA's call) | — | **stop + transcribe → read back** | — | — | cancel | stop reading |
+| Pick-up (car redial, §11.1) | **dictate** | — | — | record again | — | dictate |
+| Play (lone, not after a Next) | activate | stop + transcribe | — | send | confirm | stop reading |
+
+- **NEXT→PLAY swallow.** Native code drops the first PLAY that arrives
+  within **1.2 s** of a NEXT (`CarSkipEcho`), so one `▶▶|` is one press. A
+  PLAY with no NEXT before it, or after the window, keeps whatever the map
+  gives it.
+- **`+` discards without confirmation.** Discarding your own unsent
+  dictation is the safe direction; nothing reaches a terminal. The spoken
+  "scratch that" stays confirmed. All other safety rules stand: destructive
+  commands are confirmed, "exit" is always confirmed.
+- **Confirm is `▶▶|`** because the Corolla has no lone play. Prompts say
+  "Press next to confirm." Every spoken hint names the button the current
+  (edited) map binds, so an edited map never contradicts the prompt.
+- A map saved before this version (no `version: 2`) described every play
+  and pause as the toggle, so it is ignored in favour of these defaults.
+
+The original table below (before the Corolla probe) is kept for history;
+its double and long presses cannot be detected on the Corolla.
 
 Modes are **Idle** (car mode on, nothing active), **Menu** (a focus exists),
 **Dictating**, **Staged** (a transcript is waiting), **Command**,
@@ -907,6 +966,71 @@ option (Q11).
 
 ---
 
+### 11.1 The stand-in call number and the pick-up redial guard
+
+**What happened (owner, 2026-09-28).** While DevOTA's self-managed call is
+up, the car learns its "number" over HFP and keeps it in its own recents. The
+Corolla showed DevOTA's call as **10000000** (it rendered the non-numeric
+address `devota:probe` that way). Pressing the wheel's **pick-up with no call
+active makes the car redial the last number it saw**, so the phone placed a
+**real carrier call to 10000000** ("cannot be completed as dialed"). The
+phone's call log shows "10000000 (6)" outgoing; the car's recents (synced
+from the phone) show the same, dialled as "1(000)000-0". DevOTA's own
+self-managed calls are not in either list: every entry is a car redial.
+
+**The address is now `tel:10000000`**, so what the car stores is chosen, not
+guessed, and the caller display name is **"DevOTA"**. Why 10000000:
+
+- it is exactly what the car already has stored, so one number covers the
+  old recents entries and new ones;
+- it can never be a reachable North American number: after the trunk prefix
+  1 an area code cannot start with 0, and 8 digits is not a valid length (the
+  owner's carrier confirmed it fails);
+- it is not an emergency or short code (911, 112, 999, 000, 988, N11 codes,
+  `*`/`#` feature codes).
+
+DevOTA holds MANAGE_OWN_CALLS only (no CALL_PHONE), so Telecom cannot turn
+its own placement into a carrier call.
+
+**The redial guard** (`CarRedialReceiver`, `CarStandIn`). A manifest receiver
+for the ordered `ACTION_NEW_OUTGOING_CALL` broadcast cancels the outgoing
+call (null result) **only when the number is 10000000**, however it is
+punctuated: `10000000`, `1(000)000-0`, `1-000-000-0`, `+10000000`, and the
+`+1`-prefixed `+1 10000000`. Anything else — another digit string, or a
+number with `*`, `#`, pause/wait characters or letters — passes untouched
+(unit-tested both ways). Emergency calls cannot be cancelled by apps at all.
+
+- **Why this mechanism:** it is deprecated since API 29 but still delivered
+  and still cancellable on Android 12, needs one runtime permission and no
+  role, and works while DevOTA is not running. The alternative,
+  `CallRedirectionService`, needs the exclusive call-redirection role (a
+  system dialog, and it replaces any app that already holds it).
+- **What the owner must grant:** Car control → **Allow redial guard**, which
+  asks for PROCESS_OUTGOING_CALLS. Android shows it under **"Call logs"**. If
+  no dialog appears, Android has blocked it as a restricted permission for a
+  sideloaded app: grant it in Settings → Apps → DevOTA → Permissions → Call
+  logs. The tile says "On" once granted and counts the redials it cancelled
+  (with the exact number seen, stored on the phone only).
+- **In car mode the pick-up becomes a trigger:** after the cancel, the redial
+  is the `redial` signal, mapped by default to **dictate** (§5.2), the same
+  as `|◀◀`. Outside car mode the redial is only cancelled.
+- **Not verified in the car:** that the phone's Bluetooth stack delivers the
+  car's dial through `NEW_OUTGOING_CALL` (it should: HFP dials go through
+  Telecom like any carrier call); whether the car shows "call failed" after
+  the cancel; whether Telecom briefly changes audio mode (which would make
+  DevOTA yield and ignore the redial); whether the cancelled attempt still
+  lands in the phone's call log; and whether a sideloaded DevOTA is allowed
+  the permission at all.
+- **The car's recents.** Nothing seen on the phone side stops the car from
+  logging the stand-in call: the car records HFP call state itself, and
+  hiding the call from HFP would also lose the car mic and hang-up. (Marking
+  the address PRESENTATION_RESTRICTED might make it log "Unknown"; untested.)
+  The owner can delete the 10000000 entries on the car. **Until the guard is
+  granted, do not press pick-up with no call active and do not redial
+  10000000 from the car** — it places a real carrier call.
+- Deleting DevOTA-caused 10000000 entries from the phone's call log would
+  need WRITE_CALL_LOG (another dangerous permission), so it is not done.
+
 ## 12. Safety rules
 
 - **S1. No step needs the screen while car mode is on.** Every action is
@@ -1151,5 +1275,11 @@ and Phase 0 exists to confirm them on the owner's hardware.
 | Q4 | DevOTA takes the car's voice button **only while car mode is on**, and gives it back to Google Assistant when car mode is off. |
 | Q5 | After hang-up: stage the text, read it back, and send only on play or a spoken "submit". |
 | Q3, Q6–Q15 | The recommended options, unless the owner says otherwise. |
+| Map | (after the Corolla probe) `|◀◀` dictates / activates, hang-up stops + transcribes + reads back, `▶▶|` sends or moves the menu, `+` cancels and discards; the car's automatic PLAY after NEXT is swallowed (§5.2). |
+| Redial | Pick-up redials DevOTA's stand-in number: cancel exactly that carrier call and, in car mode, dictate (§11.1). |
+
+The probes ran on a REVVL V+ 5G on Android 12 (sdk 31), not the Android 16
+phone named in Q2; every Android-version-dependent behaviour above assumes
+Android 12.
 
 Owner requirements given during design, which are all in the proposal: a double-press or voice trigger for command mode; keys, macros by number, slash commands (a bare "exit" maps to /exit), UI commands, submit/enter, backspace N, scroll; every car feature switchable on and off; and an optional, minimal accessibility service of DevOTA's own.
