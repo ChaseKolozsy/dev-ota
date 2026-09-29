@@ -7,6 +7,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Car control (steering-wheel buttons). Inert unless the owner turns car
+         mode on: the voice-command alias below is disabled by default and no
+         Telecom account, media session or receiver exists until then. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <!-- Doze can still stall an idle screen-off session even behind a foreground
          service; the app asks for this only when the user opts in. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
@@ -57,6 +65,38 @@
         </service>
         <receiver android:name=".TerminalActionReceiver" android:exported="false" />
         <service
+            android:name=".car.CarControlService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|microphone" />
+        <activity
+            android:name=".car.VoiceCommandActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@style/CarTrampolineTheme" />
+        <!-- DISABLED by default: enabled only while car mode or the car probe
+             runs, so Google Assistant keeps the car's voice button otherwise. -->
+        <activity-alias
+            android:name=".car.VoiceCommandAlias"
+            android:targetActivity=".car.VoiceCommandActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+        <service
+            android:name=".car.DevotaConnectionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+        <service
             android:name=".ControlAccessibilityService"
             android:exported="true"
             android:label="DevOTA Control Agent"
@@ -80,6 +120,7 @@
     </application>
     <queries>
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

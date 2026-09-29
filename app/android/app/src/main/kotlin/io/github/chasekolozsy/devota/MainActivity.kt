@@ -15,10 +15,12 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.github.chasekolozsy.devota.car.CarBridge
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -31,6 +33,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         TerminalNotifications.attach(this, MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_notifications"))
+        CarBridge.attach(this, MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "devota/car"))
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.github.chasekolozsy.devota/control_agent"
@@ -167,7 +170,14 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         TerminalNotifications.detach()
+        CarBridge.detach()
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    // Logged only while the car probe runs; never consumed.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        CarBridge.onActivityKey(event)
+        return super.dispatchKeyEvent(event)
     }
 
     private fun jsonValue(value: Any?): Any? = when (value) {
