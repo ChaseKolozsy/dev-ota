@@ -16,6 +16,7 @@ import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import io.github.chasekolozsy.devota.voice.VoiceControl
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -27,10 +28,23 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 class MainActivity : FlutterActivity() {
+    // Voice control may only start from the visible app (StartGate).
+    override fun onResume() {
+        super.onResume()
+        VoiceControl.setResumed(true)
+    }
+
+    override fun onPause() {
+        VoiceControl.setResumed(false)
+        super.onPause()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         TerminalNotifications.attach(this, MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_notifications"))
+        VoiceControl.attach(this, MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "devota/voice_control"))
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.github.chasekolozsy.devota/control_agent"
@@ -166,6 +180,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        VoiceControl.detach()
         TerminalNotifications.detach()
         super.cleanUpFlutterEngine(flutterEngine)
     }

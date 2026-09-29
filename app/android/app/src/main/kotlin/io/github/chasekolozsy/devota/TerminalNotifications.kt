@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Looper
 import android.os.Bundle
 import io.flutter.plugin.common.MethodChannel
+import io.github.chasekolozsy.devota.voice.VoiceControl
 
 /** Notification callbacks use the live engine, without launching an Activity.
  * No commands are persisted or replayed after engine/process death. */
@@ -226,7 +227,8 @@ internal object TerminalNotifications {
 
 class TerminalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
+        if (intent.hasExtra("voiceAction")) VoiceControl.dispatch(context, intent)
+        else if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
         else if (intent.hasExtra("sessionAction")) TerminalNotifications.dispatchSession(intent)
         else TerminalNotifications.dispatch(intent)
     }
