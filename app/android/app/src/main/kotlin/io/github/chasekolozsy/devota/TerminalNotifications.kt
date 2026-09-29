@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Looper
 import android.os.Bundle
 import io.flutter.plugin.common.MethodChannel
+import io.github.chasekolozsy.devota.voice.PassiveVoice
 
 /** Notification callbacks use the live engine, without launching an Activity.
  * No commands are persisted or replayed after engine/process death. */
@@ -89,7 +90,9 @@ internal object TerminalNotifications {
     /** The already-visible SSH notification also carries one Run shortcut per
      * window, so OEM group presentation cannot hide the entire control surface. */
     fun decorateSession(context: Context, builder: Notification.Builder) {
-        builder.addExtras(Bundle().apply { putString(SNAPSHOT, cards.toString()) })
+        builder.addExtras(Bundle().apply {
+            putString(SNAPSHOT, "$cards|voice=${PassiveVoice.running}")
+        })
         if (cards.isEmpty() || !allowed(context)) return
         val style = Notification.InboxStyle().setBigContentTitle("DevOTA terminal · ${cards.size} windows")
         cards.forEachIndexed { index, row ->
@@ -226,7 +229,8 @@ internal object TerminalNotifications {
 
 class TerminalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
+        if (intent.hasExtra("voiceAction")) PassiveVoice.dispatch(context, intent)
+        else if (intent.hasExtra("readerAction")) TerminalSpeech.dispatch(intent)
         else if (intent.hasExtra("sessionAction")) TerminalNotifications.dispatchSession(intent)
         else TerminalNotifications.dispatch(intent)
     }

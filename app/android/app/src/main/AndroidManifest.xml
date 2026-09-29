@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <!-- Passive listening: keeps the CPU awake between recognizer sessions
+         with the screen off, re-armed every session with a 30-minute cap. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Doze can still stall an idle screen-off session even behind a foreground
          service; the app asks for this only when the user opts in. -->
@@ -56,6 +60,13 @@
                 android:value="Holds an interactive SSH terminal session the user is actively working in; the connection must survive app switches." />
         </service>
         <receiver android:name=".TerminalActionReceiver" android:exported="false" />
+        <!-- Passive listening (docs/passive-voice-control.md): started only
+             from the visible app; stops with the task. -->
+        <service
+            android:name=".voice.PassiveVoiceService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="microphone" />
         <service
             android:name=".ControlAccessibilityService"
             android:exported="true"
@@ -80,6 +91,7 @@
     </application>
     <queries>
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

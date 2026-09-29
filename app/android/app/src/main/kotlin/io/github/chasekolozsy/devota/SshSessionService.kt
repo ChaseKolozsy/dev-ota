@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.content.ContextCompat
+import io.github.chasekolozsy.devota.voice.PassiveVoice
 
 /**
  * Keeps the app process out of Android's cached state while an SSH session is
@@ -183,6 +184,8 @@ class SshSessionService : Service() {
             .addAction(TerminalNotifications.buildSessionAction(
                 this, currentAction, currentActionLabel,
             ))
+        // The passive-listening switch; second so it stays among the visible actions.
+        if (PassiveVoice.attached) builder.addAction(PassiveVoice.sessionAction(this))
         if (zeroTierRecovery) {
             builder.addAction(TerminalNotifications.buildSessionAction(
                 this, "restartZeroTier", "Restart ZeroTier",
