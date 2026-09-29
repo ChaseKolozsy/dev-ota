@@ -15,6 +15,10 @@ import 'package:xterm/xterm.dart';
 
 import 'backup_service.dart';
 import 'background_session_service.dart';
+import 'car/car_grammar.dart';
+import 'car/car_session.dart';
+import 'car/car_settings_screen.dart';
+import 'car/car_terminal_target.dart';
 import 'macro_reorder.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
@@ -414,6 +418,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _watch,
     onSessionAction: _onNotificationSessionAction,
   );
+
+  /// Car control (steering-wheel proposal). Android only; inert while its
+  /// master switch is off.
+  CarSession? _car;
   bool get _inputLocked => _macroRunning || _watch.busy;
   String? _macroRunningName;
   int _macroStepIndex = 0;
@@ -474,10 +482,90 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _attachMacroController();
     _watch.addListener(_onWatchChanged);
     _notificationBridge.publish();
+    if (Platform.isAndroid) _initCarControl();
+  }
+
+  void _initCarControl() {
+    final car = CarSession(
+      target: CarTerminalTarget(
+        watch: _watch,
+        rankedMacros: () => rankTerminalMacros(widget.notificationMacros),
+        onUi: _onCarUiCommand,
+        onReconnect: () => _onNotificationSessionAction('connect'),
+        onRestartZeroTier: () =>
+            _onNotificationSessionAction('restartZeroTier'),
+        openAiTranscriber: _carOpenAiTranscribe,
+      ),
+    );
+    car.sendProbeToHost = _sendCarProbeToHost;
+    _car = car;
+    unawaited(car.init());
+  }
+
+  /// UI voice commands act on the visible app only (proposal §8.2).
+  Future<bool> _onCarUiCommand(CarUiCommand command) async {
+    if (!mounted ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return false;
+    }
+    switch (command) {
+      case CarUiCommand.openKeyboard:
+        _setNativeKeyboardLocked(false);
+        _focusTerminalInput();
+      case CarUiCommand.closeKeyboard:
+        _hideTerminalKeyboard();
+      case CarUiCommand.maximize:
+      case CarUiCommand.minimize:
+        final change = widget.onFullscreenChanged;
+        if (change == null) return false;
+        change(command == CarUiCommand.maximize);
+      case CarUiCommand.openTools:
+      case CarUiCommand.collapseTools:
+        final visible = command == CarUiCommand.openTools;
+        if (_terminalToolsVisible != visible) _toggleTerminalTools();
+    }
+    return true;
+  }
+
+  Future<String?> _carOpenAiTranscribe(Uint8List wav) async {
+    final key = await _voice.loadApiKey();
+    if (key == null || key.isEmpty) return null;
+    final dir = await Directory.systemTemp.createTemp('devota-car');
+    final file = File('${dir.path}/car.wav');
+    try {
+      await file.writeAsBytes(wav, flush: true);
+      return await _voice.transcribe(file.path, key);
+    } finally {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// Car probe export → the build host, over the existing SSH connection.
+  Future<String> _sendCarProbeToHost(String localPath) async {
+    final client = _client;
+    if (client == null || !_connected) throw StateError('SSH not connected');
+    final name = localPath.split('/').last;
+    if (!RegExp(r'^[A-Za-z0-9._-]{1,80}$').hasMatch(name)) {
+      throw StateError('Unexpected log name');
+    }
+    final file = File(localPath);
+    if (await file.length() > 4 * 1024 * 1024) {
+      throw StateError('Log too large');
+    }
+    final router = sshHostRouter(client, route: _watchRoute);
+    await router.execute(
+      'mkdir -p "\$HOME/devota-car-probe" && '
+      'cat > "\$HOME/devota-car-probe/$name"',
+      input: await file.readAsString(),
+    );
+    return '~/devota-car-probe/$name';
   }
 
   @override
   void dispose() {
+    _car?.dispose();
     _watch.removeListener(_onWatchChanged);
     _notificationBridge.dispose();
     _watch.dispose();
@@ -2348,6 +2436,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Future<void> _showConnectionSheet() async {
     final theme = Theme.of(context);
+    var openCarControl = false;
     final openNotificationControls = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -2497,6 +2586,23 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                               Navigator.pop(ctx, true);
                             },
                     ),
+                    if (_car != null)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.directions_car_outlined),
+                        title: const Text('Car control'),
+                        subtitle: Text(
+                          _car!.settings.enabled
+                              ? (_car!.running
+                                    ? 'Car mode on'
+                                    : 'Steering-wheel buttons and voice')
+                              : 'Off',
+                        ),
+                        onTap: () {
+                          openCarControl = true;
+                          Navigator.pop(ctx, false);
+                        },
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
@@ -2567,6 +2673,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     if (mounted) {
       setState(() {});
       if (openNotificationControls == true) await _showNotificationControls();
+      final car = _car;
+      if (openCarControl && car != null && mounted) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(builder: (_) => CarSettingsScreen(session: car)),
+        );
+      }
     }
   }
 
