@@ -14,10 +14,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.MediaStore
-import android.os.Bundle
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import io.github.chasekolozsy.devota.voice.PassiveVoice
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -29,33 +27,10 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 class MainActivity : FlutterActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        PassiveVoice.handleIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        PassiveVoice.handleIntent(intent)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        PassiveVoice.setResumed(true)
-    }
-
-    override fun onPause() {
-        PassiveVoice.setResumed(false)
-        super.onPause()
-    }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         TerminalNotifications.attach(this, MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_notifications"))
-        PassiveVoice.attach(this, MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger, "devota/passive_voice"))
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.github.chasekolozsy.devota/control_agent"
@@ -191,7 +166,6 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
-        PassiveVoice.detach()
         TerminalNotifications.detach()
         super.cleanUpFlutterEngine(flutterEngine)
     }

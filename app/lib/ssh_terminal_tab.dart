@@ -9,7 +9,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:pinenacl/ed25519.dart' as ed25519;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
@@ -27,7 +26,6 @@ import 'terminal_host_route.dart';
 import 'terminal_notification_bridge.dart';
 import 'terminal_pad_key.dart';
 import 'voice_input_service.dart';
-import 'voice/passive_voice_session.dart';
 
 class _TerminalKeyBarItem {
   const _TerminalKeyBarItem({
@@ -353,7 +351,6 @@ class SshTerminalTab extends StatefulWidget {
     this.quickCommands = const [],
     this.quickMacros = const [],
     this.notificationMacros = const [],
-    this.voiceMacros = const [],
     this.macroController,
     this.fullscreen = false,
     this.onFullscreenChanged,
@@ -368,9 +365,6 @@ class SshTerminalTab extends StatefulWidget {
   final List<String> quickCommands;
   final List<TerminalMacro> quickMacros;
   final List<TerminalMacro> notificationMacros;
-
-  /// Every macro in Macros-tab order, for "macro N" in passive listening.
-  final List<TerminalMacro> voiceMacros;
   final TerminalMacroController? macroController;
   final bool fullscreen;
   final ValueChanged<bool>? onFullscreenChanged;
@@ -421,10 +415,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     onSessionAction: _onNotificationSessionAction,
   );
   bool get _inputLocked => _macroRunning || _watch.busy;
-
-  /// Passive listening (docs/passive-voice-control.md); Android only.
-  PassiveVoiceSession? _passiveVoice;
-  static const _passiveVoiceQuietKey = 'passive_voice_quiet_beeps';
   String? _macroRunningName;
   int _macroStepIndex = 0;
   int _macroStepCount = 0;
@@ -484,72 +474,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _attachMacroController();
     _watch.addListener(_onWatchChanged);
     _notificationBridge.publish();
-    if (Platform.isAndroid) _initPassiveVoice();
-  }
-
-  void _initPassiveVoice() {
-    final session = PassiveVoiceSession(
-      terminal: WatchVoiceTerminal(_watch, () => widget.voiceMacros),
-      canStart: () => !_connected
-          ? 'Connect SSH first.'
-          : _watch.bindings.isEmpty
-          ? 'Bind a window first: SSH settings → Notification macros.'
-          : null,
-      requestMicrophone: () async =>
-          (await Permission.microphone.request()).isGranted,
-      isAppVisible: () =>
-          mounted &&
-          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
-      onOpenKeyboard: () {
-        if (!mounted) return;
-        _setNativeKeyboardLocked(false);
-        _focusTerminalInput();
-      },
-      onCloseKeyboard: () {
-        if (mounted) _hideTerminalKeyboard();
-      },
-    )..addListener(_onPassiveVoiceChanged);
-    _passiveVoice = session;
-    unawaited(() async {
-      final prefs = await SharedPreferences.getInstance();
-      session.quietBeeps = prefs.getBool(_passiveVoiceQuietKey) ?? true;
-      if (mounted) await session.init();
-    }());
-  }
-
-  String? _passiveVoiceShownMessage;
-
-  void _onPassiveVoiceChanged() {
-    if (!mounted) return;
-    setState(() {});
-    final session = _passiveVoice;
-    final message = session?.message;
-    // Say why listening stopped on its own (notification Stop, a fatal
-    // recognizer error, "stop listening").
-    if (session != null &&
-        !session.enabled &&
-        !session.starting &&
-        message != null &&
-        message != _passiveVoiceShownMessage) {
-      _passiveVoiceShownMessage = message;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('Passive listening off: $message')),
-      );
-    } else if (session?.enabled ?? false) {
-      _passiveVoiceShownMessage = null;
-    }
-  }
-
-  Future<void> _togglePassiveVoice() async {
-    final session = _passiveVoice;
-    if (session == null) return;
-    await session.setEnabled(!session.enabled);
   }
 
   @override
   void dispose() {
-    _passiveVoice?.removeListener(_onPassiveVoiceChanged);
-    _passiveVoice?.dispose();
     _watch.removeListener(_onWatchChanged);
     _notificationBridge.dispose();
     _watch.dispose();
@@ -2102,7 +2030,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       child: Column(
         children: [
           _buildConnectionPanel(theme),
-          if (_passiveVoice?.enabled ?? false) _buildPassiveVoiceBanner(theme),
           Expanded(
             child: Listener(
               onPointerDown: _handleTerminalPointerDown,
@@ -2238,89 +2165,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     );
   }
 
-  /// Passive listening status: the target window, the draft, and any
-  /// question waiting for "yes".
-  Widget _buildPassiveVoiceBanner(ThemeData theme) {
-    final session = _passiveVoice!;
-    final voice = session.controller;
-    final scheme = theme.colorScheme;
-    final draft = voice.draft;
-    final prompt = voice.pendingPrompt;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-      child: Material(
-        color: scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.mic, size: 16, color: scheme.onSecondaryContainer),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      '${session.nativeState ?? 'Listening'} · ${voice.statusLine}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: scheme.onSecondaryContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Stop listening',
-                    icon: const Icon(Icons.stop_circle_outlined, size: 20),
-                    color: scheme.onSecondaryContainer,
-                    onPressed: () => unawaited(session.setEnabled(false)),
-                  ),
-                ],
-              ),
-              if (prompt != null)
-                Text(
-                  prompt,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.error,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 72),
-                child: SingleChildScrollView(
-                  reverse: true,
-                  child: Text(
-                    draft.isEmpty
-                        ? 'Draft empty. Speak to dictate; say "submit" to send.'
-                        : draft,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: scheme.onSecondaryContainer.withValues(
-                        alpha: draft.isEmpty ? 0.7 : 1,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (voice.lastHeard != null)
-                Text(
-                  'Heard "${voice.lastHeard}" → ${voice.lastOutcome ?? ''}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSecondaryContainer.withValues(alpha: 0.75),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildConnectionPanel(ThemeData theme) {
     final connectionLabel = _host.isEmpty
         ? 'No SSH host saved'
@@ -2372,19 +2216,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                     : () => _connected ? _disconnect() : _connect(),
               ),
               _buildTerminalFontControls(theme),
-              if (_passiveVoice != null)
-                _terminalPanelIconButton(
-                  icon: Icon(
-                    _passiveVoice!.enabled ? Icons.mic : Icons.mic_none,
-                  ),
-                  tooltip: _passiveVoice!.enabled
-                      ? 'Passive listening on · tap to stop'
-                      : 'Passive listening',
-                  selected: _passiveVoice!.enabled,
-                  onPressed: _passiveVoice!.starting
-                      ? null
-                      : _togglePassiveVoice,
-                ),
               _terminalPanelIconButton(
                 icon: Icon(
                   _nativeKeyboardLocked ? Icons.keyboard_hide : Icons.keyboard,
@@ -2666,25 +2497,6 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                               Navigator.pop(ctx, true);
                             },
                     ),
-                    if (_passiveVoice != null)
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        title: const Text(
-                          'Passive listening: quiet restart beeps',
-                        ),
-                        subtitle: const Text(
-                          'Mutes media audio while the recognizer restarts, '
-                          'only when nothing else is playing. Takes effect '
-                          'the next time listening starts.',
-                        ),
-                        value: _passiveVoice!.quietBeeps,
-                        onChanged: (v) async {
-                          setSheetState(() => _passiveVoice!.quietBeeps = v);
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setBool(_passiveVoiceQuietKey, v);
-                        },
-                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,

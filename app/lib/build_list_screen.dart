@@ -1722,7 +1722,6 @@ class _BuildListScreenState extends State<BuildListScreen>
           notificationMacros: _rankedMacros
               .where((m) => !m.isDeviceMacro)
               .toList(),
-          voiceMacros: _rankedMacros,
           macroController: _macroController,
           onFullscreenChanged: _setTerminalFullscreen,
           onCommandUsed: _recordCommandUse,
