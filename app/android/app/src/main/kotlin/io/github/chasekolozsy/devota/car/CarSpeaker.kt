@@ -142,7 +142,11 @@ internal class CarSpeaker(private val ctx: Context, private val listener: Listen
     }
 
     private fun play(item: Item, file: File) {
-        if (!takeFocus()) return finish(item, false, "focus_denied")
+        // During DevOTA's own call, Telecom holds the call focus and denies every
+        // request, ours included (probe, REVVL V+ 5G / Android 12 in a Corolla:
+        // every line during the test call failed focus_denied). The call is ours,
+        // so speak on the call's voice path without asking.
+        if (!listener.inCall() && !takeFocus()) return finish(item, false, "focus_denied")
         val mp = MediaPlayer()
         try {
             mp.setAudioAttributes(attributes())
