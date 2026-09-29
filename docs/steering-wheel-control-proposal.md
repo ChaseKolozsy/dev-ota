@@ -1130,3 +1130,15 @@ AOSP source (`HeadsetSystemInterface`, `HeadsetStateMachine`) could not be
 fetched during this research: googlesource returned 503 and the GitHub mirrors
 returned 404. The [V2] claims therefore rest on the secondary sources above,
 and Phase 0 exists to confirm them on the owner's hardware.
+
+## Owner decisions (2026-09-28)
+
+| # | Decision |
+|---|---|
+| Q1 | Plain Bluetooth (phone + media), no Android Auto. |
+| Q2 | The Android 16 phone (REVVL 7 Pro profile). |
+| Q4 | DevOTA takes the car's voice button **only while car mode is on**, and gives it back to Google Assistant when car mode is off. |
+| Q5 | After hang-up: stage the text, read it back, and send only on play or a spoken "submit". |
+| Q3, Q6–Q15 | The recommended options, unless the owner says otherwise. |
+
+Owner requirements given during design, which are all in the proposal: a double-press or voice trigger for command mode; keys, macros by number, slash commands (a bare "exit" maps to /exit), UI commands, submit/enter, backspace N, scroll; every car feature switchable on and off; and an optional, minimal accessibility service of DevOTA's own.
