@@ -24,11 +24,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.lang.ref.WeakReference
 
 /**
  * The native half of DevOTA car control, behind MethodChannel "devota/car".
@@ -46,7 +48,9 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
 
     private val handler = Handler(Looper.getMainLooper())
     private var app: Context? = null
+    private var activity: WeakReference<Activity>? = null
     private var channel: MethodChannel? = null
+    private const val REDIAL_PERMISSION_REQUEST = 4711
 
     var carModeActive = false
         private set
@@ -77,6 +81,9 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
         }, "media_session")
     }
 
+    /** Swallows the Corolla's automatic PLAY after each NEXT. */
+    private val skipEcho = CarSkipEcho()
+
     private var probeBvraOrder = "none"
     private var carBvraOrder = "none"
     private var headset: BluetoothHeadset? = null
@@ -98,6 +105,7 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
 
     fun attach(activity: Activity, methodChannel: MethodChannel) {
         app = activity.applicationContext
+        this.activity = WeakReference(activity)
         channel = methodChannel
         methodChannel.setMethodCallHandler { call, result ->
             try {
@@ -200,6 +208,15 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
             "probeLog" -> result.success(probe?.recent(call.long("limit", 500L).toInt()) ?: emptyList<Any>())
             "probeExport" -> result.success(probe?.export())
             "probeClear" -> { probe?.clear(); result.success(null) }
+            "redialGuardStatus" -> result.success(CarRedialLog.status(ctx))
+            "requestRedialGuard" -> {
+                val a = activity?.get()
+                if (a != null && !CarRedialLog.granted(ctx)) {
+                    ActivityCompat.requestPermissions(a,
+                        arrayOf(Manifest.permission.PROCESS_OUTGOING_CALLS), REDIAL_PERMISSION_REQUEST)
+                }
+                result.success(null)
+            }
             "shareFile" -> result.success(shareFile(ctx, call.argument<String>("path").orEmpty(),
                 call.argument<String>("mime") ?: "application/json"))
             else -> result.notImplemented()
@@ -287,6 +304,7 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
             if (CarTelecom.connection?.purpose != "probe") CarTelecom.end()
             speaker?.stop()
             classifier.reset()
+            skipEcho.reset()
             unregister(ctx, carReceiver)
             carReceiver = null
         }
@@ -318,16 +336,32 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
         val up = event.action == KeyEvent.ACTION_UP
         probe?.log("media_button", "key", keyDetail(event))
         if (!carModeActive || probeActive) return
+        val firstDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         when (event.keyCode) {
-            KeyEvent.KEYCODE_MEDIA_NEXT -> if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) emitSignal("next", "media_session")
-            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) emitSignal("previous", "media_session")
-            KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_NEXT -> if (firstDown) {
+                skipEcho.onNext(event.downTime)
+                emitSignal("next", "media_session")
+            }
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> if (firstDown) emitSignal("previous", "media_session")
+            // The Corolla sends every key as an instant down/up, so play and
+            // pause are not timing-classified: they are separate signals.
+            KeyEvent.KEYCODE_MEDIA_PLAY -> if (firstDown) play(event.downTime)
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> if (firstDown) emitSignal("pause", "media_session")
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> when {
                 event.action == KeyEvent.ACTION_DOWN ->
                     classifier.onDown(if (event.repeatCount == 0) event.downTime else event.eventTime, event.repeatCount)
                 up -> classifier.onUp(event.eventTime)
             }
         }
+    }
+
+    /** A PLAY: dropped when it is the car's echo of a NEXT, else a signal. */
+    private fun play(t: Long) {
+        if (skipEcho.swallowPlay(t)) {
+            probe?.log("media_button", "play_after_next_swallowed", emptyMap())
+            return
+        }
+        emitSignal("play", "media_session")
     }
 
     private fun keyDetail(event: KeyEvent): Map<String, Any?> = mapOf(
@@ -351,9 +385,13 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
         probe?.log("media_session", name, detail)
         if (!carModeActive || probeActive) return
         when (name) {
-            "onSkipToNext" -> emitSignal("next", "media_session")
+            "onSkipToNext" -> {
+                skipEcho.onNext(SystemClock.uptimeMillis())
+                emitSignal("next", "media_session")
+            }
             "onSkipToPrevious" -> emitSignal("previous", "media_session")
-            "onPlay", "onPause" -> classifier.onTap(SystemClock.uptimeMillis())
+            "onPlay" -> play(SystemClock.uptimeMillis())
+            "onPause" -> emitSignal("pause", "media_session")
         }
     }
 
@@ -499,6 +537,22 @@ internal object CarBridge : CarSpeaker.Listener, CarMediaSession.Listener, CarTe
         if (purpose == "recording") awaitingCall?.let { wait ->
             handler.removeCallbacks(wait)
             handler.post(wait)
+        }
+    }
+
+    /**
+     * The car redialled the stand-in number and CarRedialReceiver cancelled
+     * the carrier call. In car mode the pick-up button then means "dictate".
+     */
+    fun onStandInRedial(ctx: Context, number: String) {
+        if (app == null) app = ctx
+        handler.post {
+            probe?.log("redial_guard", "cancelled", mapOf("number" to number.take(40)))
+            // Give Telecom a moment to finish tearing the cancelled call down
+            // before the dictation call is placed.
+            if (carModeActive && !probeActive) {
+                handler.postDelayed({ emitSignal("redial", "redial_guard") }, 400)
+            }
         }
     }
 

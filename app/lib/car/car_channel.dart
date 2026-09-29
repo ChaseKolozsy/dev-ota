@@ -18,6 +18,8 @@ abstract class CarEventSink {
 CarSignal? carSignalFromWire(String? name) => switch (name) {
   'next' => CarSignal.next,
   'previous' => CarSignal.previous,
+  'play' => CarSignal.play,
+  'pause' => CarSignal.pause,
   'playPause' => CarSignal.playPause,
   'playPauseDouble' => CarSignal.playPauseDouble,
   'playPauseLong' => CarSignal.playPauseLong,
@@ -25,6 +27,7 @@ CarSignal? carSignalFromWire(String? name) => switch (name) {
   'voiceDouble' => CarSignal.voiceDouble,
   'answer' => CarSignal.answer,
   'hangUp' => CarSignal.hangUp,
+  'redial' => CarSignal.redial,
   _ => null,
 };
 
@@ -135,6 +138,31 @@ class CarChannel implements CarPlatform {
 
   Future<void> setAutoDevice(String? address) =>
       _invoke<void>('setAutoDevice', {'address': address});
+
+  /// The redial guard: whether Android lets DevOTA see outgoing calls, and
+  /// the car redials of the stand-in number it cancelled (newest first).
+  Future<CarRedialGuardStatus> redialGuardStatus() async {
+    final raw = await _invoke<Map<Object?, Object?>>('redialGuardStatus');
+    if (raw == null) return const CarRedialGuardStatus();
+    return CarRedialGuardStatus(
+      granted: raw['granted'] == true,
+      number: raw['number']?.toString() ?? '',
+      cancelled: (raw['cancelled'] as num?)?.toInt() ?? 0,
+      recent: [
+        for (final e in (raw['recent'] as List<Object?>? ?? const []))
+          if (e is Map)
+            (
+              at: DateTime.fromMillisecondsSinceEpoch(
+                (e['t'] as num?)?.toInt() ?? 0,
+              ),
+              number: e['number']?.toString() ?? '',
+            ),
+      ],
+    );
+  }
+
+  /// Asks Android for the outgoing-call permission the redial guard needs.
+  Future<void> requestRedialGuard() => _invoke<void>('requestRedialGuard');
 
   // --------------------------------------------------------------------- probe
 
@@ -248,6 +276,21 @@ class CarChannel implements CarPlatform {
   @override
   Future<void> discardRecording() => _invoke<void>('discardRecording');
 
+  bool? _canRecognizeRecording;
+
+  /// Android 13+ only: earlier versions cannot feed a held recording to the
+  /// phone's recognizer (the Corolla phone is Android 12).
+  @override
+  Future<bool> canRecognizeRecording() async {
+    final known = _canRecognizeRecording;
+    if (known != null) return known;
+    final status = await this.status();
+    final sdk = (status['sdk'] as num?)?.toInt() ?? 0;
+    final can = sdk >= 33 && status['recognizerAvailable'] == true;
+    if (status.isNotEmpty) _canRecognizeRecording = can;
+    return can;
+  }
+
   @override
   Future<String?> recognizeRecording() async {
     final raw = await _invoke<Map<Object?, Object?>>('recognizeRecording', {
@@ -291,4 +334,19 @@ class CarChannel implements CarPlatform {
 
   @override
   Future<void> claimButtons() => _invoke<void>('claimButtons');
+}
+
+class CarRedialGuardStatus {
+  const CarRedialGuardStatus({
+    this.granted = false,
+    this.number = '',
+    this.cancelled = 0,
+    this.recent = const [],
+  });
+  final bool granted;
+
+  /// The stand-in call's number, which the car stores and redials.
+  final String number;
+  final int cancelled;
+  final List<({DateTime at, String number})> recent;
 }

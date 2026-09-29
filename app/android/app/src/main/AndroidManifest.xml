@@ -9,10 +9,17 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Car control (steering-wheel buttons). Inert unless the owner turns car
          mode on: the voice-command alias below is disabled by default and no
-         Telecom account, media session or receiver exists until then. -->
+         Telecom account, media session or receiver exists until then. The
+         one exception is the redial guard receiver below, which does nothing
+         until the owner grants its permission and then only ever cancels
+         the car's redial of DevOTA's stand-in number. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS"/>
+    <!-- Redial guard: lets CarRedialReceiver cancel the car's redial of
+         DevOTA's stand-in call number (10000000) and nothing else. Runtime
+         permission ("Call logs"), granted only from Car control. -->
+    <uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <!-- Doze can still stall an idle screen-off session even behind a foreground
@@ -88,6 +95,17 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity-alias>
+        <!-- Cancels ONLY outgoing calls to CarStandIn.NUMBER (the car
+             redialling DevOTA's stand-in call). NEW_OUTGOING_CALL is a
+             protected broadcast; without PROCESS_OUTGOING_CALLS it is never
+             delivered. Low priority so the cancellation is the final word. -->
+        <receiver
+            android:name=".car.CarRedialReceiver"
+            android:exported="true">
+            <intent-filter android:priority="-900">
+                <action android:name="android.intent.action.NEW_OUTGOING_CALL" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".car.DevotaConnectionService"
             android:exported="true"

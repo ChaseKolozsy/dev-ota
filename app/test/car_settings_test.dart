@@ -90,53 +90,70 @@ void main() {
   });
 
   group('button map', () {
-    test('defaults follow the proposal table (§5.2)', () {
+    test('the default map is the owner-approved Corolla map', () {
       final map = CarButtonMap.defaults();
+      // |◀◀ activates the focused item ("Dictate" after any pause).
+      expect(map.action(CarMode.idle, CarSignal.previous), CarAction.activate);
       expect(map.action(CarMode.idle, CarSignal.next), CarAction.focusNext);
-      expect(map.action(CarMode.idle, CarSignal.playPause), CarAction.activate);
-      expect(map.action(CarMode.idle, CarSignal.voice), CarAction.dictate);
-      expect(
-        map.action(CarMode.idle, CarSignal.playPauseDouble),
-        CarAction.commandMode,
-      );
-      expect(
-        map.action(CarMode.dictating, CarSignal.hangUp),
-        CarAction.stopTranscribe,
-      );
-      expect(
-        map.action(CarMode.dictating, CarSignal.playPause),
-        CarAction.stopTranscribe,
-      );
-      expect(map.action(CarMode.staged, CarSignal.playPause), CarAction.submit);
-      expect(map.action(CarMode.staged, CarSignal.next), CarAction.readAgain);
-      expect(map.action(CarMode.staged, CarSignal.voice), CarAction.redictate);
-      expect(
-        map.action(CarMode.command, CarSignal.hangUp),
-        CarAction.endCommand,
-      );
-      expect(
-        map.action(CarMode.confirming, CarSignal.playPause),
-        CarAction.confirm,
-      );
-      expect(map.action(CarMode.confirming, CarSignal.next), CarAction.cancel);
-      expect(
-        map.action(CarMode.confirming, CarSignal.hangUp),
-        CarAction.cancel,
-      );
+      expect(map.action(CarMode.idle, CarSignal.pause), CarAction.cancelAll);
+      expect(map.action(CarMode.idle, CarSignal.redial), CarAction.dictate);
+      // Hang-up stops and transcribes; + discards the recording.
+      expect(map.action(CarMode.dictating, CarSignal.hangUp), CarAction.stopTranscribe);
+      expect(map.action(CarMode.dictating, CarSignal.pause), CarAction.cancelAll);
+      expect(map.action(CarMode.transcribing, CarSignal.pause), CarAction.cancelAll);
+      // After the read-back: ▶▶| sends, + discards, |◀◀ records again.
+      expect(map.action(CarMode.staged, CarSignal.next), CarAction.submit);
+      expect(map.action(CarMode.staged, CarSignal.pause), CarAction.cancelAll);
+      expect(map.action(CarMode.staged, CarSignal.previous), CarAction.redictate);
+      expect(map.action(CarMode.staged, CarSignal.redial), CarAction.redictate);
+      // No lone play on the Corolla: ▶▶| confirms, + and |◀◀ cancel.
+      expect(map.action(CarMode.confirming, CarSignal.next), CarAction.confirm);
+      expect(map.action(CarMode.confirming, CarSignal.pause), CarAction.cancel);
+      expect(map.action(CarMode.confirming, CarSignal.previous), CarAction.cancel);
+      expect(map.action(CarMode.confirming, CarSignal.hangUp), CarAction.cancel);
+      expect(map.action(CarMode.reading, CarSignal.next), CarAction.nextChunk);
       expect(map.action(CarMode.reading, CarSignal.previous), CarAction.earlier);
-      // Transcribing ignores every button.
+      expect(map.action(CarMode.reading, CarSignal.pause), CarAction.cancelAll);
+      // A lone play and the play/pause toggle keep their earlier meanings.
+      for (final s in [CarSignal.play, CarSignal.playPause]) {
+        expect(map.action(CarMode.idle, s), CarAction.activate);
+        expect(map.action(CarMode.dictating, s), CarAction.stopTranscribe);
+        expect(map.action(CarMode.staged, s), CarAction.submit);
+        expect(map.action(CarMode.confirming, s), CarAction.confirm);
+      }
+      expect(map.action(CarMode.command, CarSignal.hangUp), CarAction.endCommand);
+      // Transcribing ignores every button except cancel.
       for (final s in CarSignal.values) {
+        if (s == CarSignal.pause) continue;
         expect(map.action(CarMode.transcribing, s), CarAction.nothing);
       }
+      expect(editableCarModes, contains(CarMode.transcribing));
     });
 
     test('next/previous function rewrites only the idle column', () {
       final scroll = CarButtonMap.defaults(CarNextPrevMode.scrollPane);
       expect(scroll.action(CarMode.idle, CarSignal.next), CarAction.scrollDown);
       expect(scroll.action(CarMode.idle, CarSignal.previous), CarAction.scrollUp);
-      expect(scroll.action(CarMode.staged, CarSignal.next), CarAction.readAgain);
+      expect(scroll.action(CarMode.staged, CarSignal.next), CarAction.submit);
       final arrows = CarButtonMap.defaults(CarNextPrevMode.arrowKeys);
       expect(arrows.action(CarMode.idle, CarSignal.next), CarAction.arrowDown);
+      final back = arrows.withNextPrevMode(CarNextPrevMode.menuFocus);
+      expect(back.action(CarMode.idle, CarSignal.previous), CarAction.activate);
+      expect(back.action(CarMode.idle, CarSignal.next), CarAction.focusNext);
+    });
+
+    test('a map saved before separate play/pause signals falls back to the defaults', () async {
+      const old =
+          '{"idle":{"next":"focusNext","previous":"focusPrevious","playPause":"activate"},'
+          '"staged":{"next":"readAgain","playPause":"submit"}}';
+      expect(CarButtonMap.tryDecode(old), isNull);
+      SharedPreferences.setMockInitialValues({CarSettings.kButtonMap: old});
+      final loaded = await CarSettings.load();
+      expect(loaded.buttonMap, isNull);
+      expect(
+        loaded.effectiveButtonMap.action(CarMode.staged, CarSignal.next),
+        CarAction.submit,
+      );
     });
 
     test('encode/decode keeps edits and ignores junk', () {
@@ -152,7 +169,7 @@ void main() {
       );
       expect(decoded.action(CarMode.idle, CarSignal.voice), CarAction.dictate);
       final junk = CarButtonMap.tryDecode(
-        '{"idle":{"next":"explode","warp":"activate"}}',
+        '{"version":2,"idle":{"next":"explode","warp":"activate"}}',
       )!;
       expect(junk.action(CarMode.idle, CarSignal.next), CarAction.nothing);
       expect(CarButtonMap.tryDecode('not json'), isNull);

@@ -211,3 +211,61 @@ class CarSpeechCoalescerTest {
         assertEquals(CarSpeechCoalescer.Decision.SpeakNow, c.offer(2100, CarSpokenLine("Volume 7.", "volume")))
     }
 }
+
+class CarStandInTest {
+    @Test fun `the stand-in number matches however it is punctuated`() {
+        for (n in listOf("10000000", "1(000)000-0", "1-000-000-0", "1 000 000 0", "+10000000",
+                "+1 10000000", "+1 (10) 000-000", "110000000", " 10000000 ", "1.000.000.0")) {
+            assertTrue(n, CarStandIn.isStandIn(n))
+        }
+    }
+
+    @Test fun `every other number is left alone`() {
+        for (n in listOf(null, "", "   ", "911", "112", "988", "0000000", "1000000", "100000000",
+                "10000001", "01000000", "1110000000", "+11 10000000", "*10000000", "#10000000",
+                "10000000#", "10000000,1", "10000000;1", "1000000O", "+1+10000000",
+                "tel:10000000", "5551234567", "+15551234567", "18005550199")) {
+            assertEquals(n, false, CarStandIn.isStandIn(n))
+        }
+    }
+
+    @Test fun `cancel only the stand-in, and never during DevOTA's own placement`() {
+        assertTrue(CarStandIn.shouldCancel("10000000", "10000000", now = 10_000, ownPlacementUntil = 0))
+        // An earlier receiver rewrote the result: the original still decides.
+        assertTrue(CarStandIn.shouldCancel("1(000)000-0", null, now = 10_000, ownPlacementUntil = 0))
+        assertEquals(false, CarStandIn.shouldCancel("5551234567", "5551234567", now = 10_000, ownPlacementUntil = 0))
+        assertEquals(false, CarStandIn.shouldCancel("911", null, now = 10_000, ownPlacementUntil = 0))
+        assertEquals(false, CarStandIn.shouldCancel("10000000", "10000000", now = 10_000, ownPlacementUntil = 12_000))
+        assertTrue(CarStandIn.shouldCancel("10000000", "10000000", now = 12_000, ownPlacementUntil = 12_000))
+    }
+}
+
+class CarSkipEchoTest {
+    @Test fun `the car's PLAY half a second after NEXT is swallowed`() {
+        val echo = CarSkipEcho()
+        echo.onNext(1_000)
+        assertTrue(echo.swallowPlay(1_500))
+    }
+
+    @Test fun `the swallow window is 1_2 s inclusive and one PLAY per NEXT`() {
+        val echo = CarSkipEcho()
+        echo.onNext(1_000)
+        assertTrue(echo.swallowPlay(2_200))
+        assertEquals(false, echo.swallowPlay(2_300)) // a second PLAY is a real press
+    }
+
+    @Test fun `a PLAY outside the window or with no NEXT is a real press`() {
+        val echo = CarSkipEcho()
+        assertEquals(false, echo.swallowPlay(500))
+        echo.onNext(1_000)
+        assertEquals(false, echo.swallowPlay(2_201))
+        assertEquals(false, echo.swallowPlay(2_250))
+    }
+
+    @Test fun `reset forgets the last NEXT`() {
+        val echo = CarSkipEcho()
+        echo.onNext(1_000)
+        echo.reset()
+        assertEquals(false, echo.swallowPlay(1_100))
+    }
+}

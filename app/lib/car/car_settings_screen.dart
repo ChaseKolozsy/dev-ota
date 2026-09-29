@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'car_buttons.dart';
+import 'car_channel.dart';
 import 'car_session.dart';
 import 'car_settings.dart';
 
@@ -183,7 +184,7 @@ class _CarSettingsScreenState extends State<CarSettingsScreen> {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Dictation on the call button'),
+              title: const Text('Dictation (|◀◀, pick-up, voice button)'),
               value: s.dictationEnabled,
               onChanged: (v) => _set(s.copyWith(dictationEnabled: v)),
             ),
@@ -302,6 +303,8 @@ class _CarSettingsScreenState extends State<CarSettingsScreen> {
               onChanged: (v) => _set(s.copyWith(playPauseLong: v)),
             ),
             const Divider(height: 28),
+            CarRedialGuardTile(session: session),
+            const Divider(height: 28),
             Text('Permissions', style: theme.textTheme.titleSmall),
             Wrap(
               spacing: 8,
@@ -323,6 +326,92 @@ class _CarSettingsScreenState extends State<CarSettingsScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// The redial guard (steering-wheel proposal §11.1). The Corolla's pick-up
+/// button redials the last number it saw, which is DevOTA's stand-in call;
+/// without this permission that redial becomes a real carrier call.
+class CarRedialGuardTile extends StatefulWidget {
+  const CarRedialGuardTile({super.key, required this.session});
+  final CarSession session;
+
+  @override
+  State<CarRedialGuardTile> createState() => _CarRedialGuardTileState();
+}
+
+class _CarRedialGuardTileState extends State<CarRedialGuardTile>
+    with WidgetsBindingObserver {
+  CarRedialGuardStatus? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The permission dialog pauses the activity; re-read when it closes.
+    if (state == AppLifecycleState.resumed) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final status = await widget.session.channel.redialGuardStatus();
+    if (mounted) setState(() => _status = status);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final status = _status;
+    final granted = status?.granted == true;
+    final number = status?.number.isNotEmpty == true ? status!.number : '10000000';
+    final last = status == null || status.recent.isEmpty ? null : status.recent.first;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Pick-up redial guard', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text(
+          granted
+              ? 'On. When the car redials $number, DevOTA cancels the carrier call '
+                    'and, in car mode, starts dictation. No other call is touched.'
+              : 'Off. The car stores DevOTA\'s stand-in call as $number and the '
+                    'pick-up button redials it as a REAL carrier call. Allow '
+                    '"Call logs" (outgoing calls) so DevOTA can cancel exactly that number.',
+          style: TextStyle(color: granted ? null : theme.colorScheme.error),
+        ),
+        if (status != null && status.cancelled > 0)
+          Text(
+            'Cancelled ${status.cancelled} redial${status.cancelled == 1 ? '' : 's'}'
+            '${last == null ? '' : ', last ${last.number} at ${last.at.hour.toString().padLeft(2, '0')}:${last.at.minute.toString().padLeft(2, '0')}'}.',
+          ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 8,
+          children: [
+            if (!granted)
+              FilledButton.tonal(
+                onPressed: () async {
+                  await widget.session.channel.requestRedialGuard();
+                  await Future<void>.delayed(const Duration(milliseconds: 500));
+                  await _refresh();
+                },
+                child: const Text('Allow redial guard'),
+              ),
+            TextButton(onPressed: _refresh, child: const Text('Refresh')),
+          ],
+        ),
+      ],
     );
   }
 }

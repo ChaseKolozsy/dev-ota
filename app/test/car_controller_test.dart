@@ -18,6 +18,9 @@ class FakePlatform implements CarPlatform {
   String? onDevice = 'phone words';
   bool hasRecording = false;
 
+  /// false = Android 12: no recognizer for a held recording.
+  bool canRecognize = true;
+
   @override
   Future<bool> speak(String text, {bool interrupt = true}) async {
     spoken.add(text);
@@ -52,6 +55,9 @@ class FakePlatform implements CarPlatform {
     calls.add('discard');
     hasRecording = false;
   }
+
+  @override
+  Future<bool> canRecognizeRecording() async => canRecognize;
 
   @override
   Future<String?> recognizeRecording() async {
@@ -107,6 +113,9 @@ class FakeTarget implements CarTarget {
   final sent = <String>[];
   String? failure;
   String? home = 'hello from the car';
+
+  /// When set, home transcription waits for it (a transcription in flight).
+  Completer<void>? homeGate;
   bool visible = true;
   String? deleted;
 
@@ -141,6 +150,7 @@ class FakeTarget implements CarTarget {
   @override
   Future<String?> transcribeHome(Uint8List wav) async {
     sent.add('home:${wav.length}');
+    await homeGate?.future;
     return home;
   }
 
@@ -208,25 +218,69 @@ void main() {
   });
 
   group('spoken menu', () {
-    test('next and previous move focus, speak the label and wrap', () async {
+    test('next moves focus, speaks the label and wraps', () async {
       await car.handleSignal(CarSignal.next);
       expect(platform.spoken.last, 'Listen, window 1');
-      await car.handleSignal(CarSignal.previous);
-      expect(platform.spoken.last, 'Dictate to window 1');
-      await car.handleSignal(CarSignal.previous);
+      // Dictate, Listen, Status, Macros, Commands, Reconnect, ZeroTier, Off.
+      for (var i = 0; i < 6; i++) {
+        await car.handleSignal(CarSignal.next);
+      }
       expect(platform.spoken.last, 'Car mode off');
+      await car.handleSignal(CarSignal.next);
+      expect(platform.spoken.last, 'Dictate to window 1');
       // Any button stops current speech first (§6).
       expect(platform.calls, contains('stopSpeaking'));
+      expect(car.mode, CarMode.idle);
     });
 
-    test('the first press after a pause repeats the item instead of moving', () async {
+    test('the first press after a pause returns to the top instead of moving', () async {
       await car.handleSignal(CarSignal.next);
-      expect(platform.spoken.last, 'Listen, window 1');
-      time = time.add(const Duration(seconds: 30));
-      await car.handleSignal(CarSignal.next);
-      expect(platform.spoken.last, 'Listen, window 1');
       await car.handleSignal(CarSignal.next);
       expect(platform.spoken.last, 'Status');
+      time = time.add(const Duration(seconds: 30));
+      await car.handleSignal(CarSignal.next);
+      expect(platform.spoken.last, 'Dictate to window 1');
+      await car.handleSignal(CarSignal.next);
+      expect(platform.spoken.last, 'Listen, window 1');
+    });
+
+    test('|◀◀ from idle starts dictation', () async {
+      await car.handleSignal(CarSignal.previous);
+      expect(car.mode, CarMode.dictating);
+      expect(platform.spoken.last, 'Recording, window 1.');
+      expect(platform.calls, contains('startDictation:window 1'));
+    });
+
+    test('|◀◀ after a pause dictates even if the menu was left elsewhere', () async {
+      for (var i = 0; i < 7; i++) {
+        await car.handleSignal(CarSignal.next);
+      }
+      expect(platform.spoken.last, 'Car mode off');
+      time = time.add(const Duration(seconds: 30));
+      await car.handleSignal(CarSignal.previous);
+      expect(carOff, 0);
+      expect(car.mode, CarMode.dictating);
+    });
+
+    test('|◀◀ right after next activates the item just heard', () async {
+      target.paneList = [const CarPane('%1', '✓ Reported success · Tests pass')];
+      await car.handleSignal(CarSignal.next);
+      await car.handleSignal(CarSignal.next);
+      expect(platform.spoken.last, 'Status');
+      await car.handleSignal(CarSignal.previous);
+      expect(platform.spoken.last, 'Window 1: Reported success, Tests pass');
+      expect(car.mode, CarMode.idle);
+    });
+
+    test('+ in idle stops speech and returns the menu to the top', () async {
+      await car.handleSignal(CarSignal.next);
+      await car.handleSignal(CarSignal.next);
+      final spoken = platform.spoken.length;
+      await car.handleSignal(CarSignal.pause);
+      expect(platform.calls.last, 'earcon:stop');
+      expect(platform.calls, contains('stopSpeaking'));
+      expect(platform.spoken.length, spoken);
+      expect(car.focusedItem.id, 'dictate');
     });
 
     test('items that need a disabled feature are absent', () async {
@@ -266,40 +320,156 @@ void main() {
       unawaited(car.handleSignal(CarSignal.playPause));
       await settle();
       expect(car.mode, CarMode.confirming);
-      expect(platform.spoken.last, 'Run Macro Cebuano middle in window 1? Press play to confirm.');
+      expect(platform.spoken.last, 'Run Macro Cebuano middle in window 1? Press next to confirm.');
       await car.handleSignal(CarSignal.playPause);
       await settle();
       expect(target.sent, ['macro:%1:Cebuano middle']);
     });
 
-    test('car mode off item calls back', () async {
+    test('in a confirmation next confirms and + cancels', () async {
+      target.macroList = [
+        TerminalMacro(id: 'a', name: 'Deploy', steps: [shell('go')]),
+      ];
+      for (var i = 0; i < 3; i++) {
+        await car.handleSignal(CarSignal.next);
+      }
       await car.handleSignal(CarSignal.previous);
-      await car.handleSignal(CarSignal.playPause);
+      expect(platform.spoken.last, 'Macros. Macro 1, Deploy');
+      unawaited(car.handleSignal(CarSignal.previous));
+      await settle();
+      expect(car.mode, CarMode.confirming);
+      await car.handleSignal(CarSignal.pause);
+      await settle();
+      expect(platform.spoken.last, 'Cancelled.');
+      expect(target.sent, isEmpty);
+      unawaited(car.handleSignal(CarSignal.previous));
+      await settle();
+      expect(car.mode, CarMode.confirming);
+      await car.handleSignal(CarSignal.next);
+      await settle();
+      expect(target.sent, ['macro:%1:Deploy']);
+    });
+
+    test('car mode off item calls back', () async {
+      for (var i = 0; i < 7; i++) {
+        await car.handleSignal(CarSignal.next);
+      }
+      await car.handleSignal(CarSignal.previous);
       expect(carOff, 1);
     });
   });
 
   group('dictation (§7)', () {
-    test('call starts, hang-up stops, text is staged and only sent on play', () async {
-      await car.handleSignal(CarSignal.voice);
+    test('|◀◀ records, hang-up transcribes and reads back, ▶▶| sends', () async {
+      await car.handleSignal(CarSignal.previous);
       expect(car.mode, CarMode.dictating);
-      expect(platform.spoken.last, 'Recording, window 1.');
       expect(platform.calls, contains('startDictation:window 1'));
       await car.handleSignal(CarSignal.hangUp);
       expect(platform.calls, contains('stopDictation:button'));
       expect(target.sent, ['home:3']);
       expect(car.mode, CarMode.staged);
       expect(car.stagedText, 'hello from the car');
-      expect(platform.spoken.last, 'Staged: hello from the car. Play to send.');
+      expect(platform.spoken.last, 'Staged: hello from the car. Next to send.');
       // Hang-up never sends: nothing reached the pane yet.
       expect(target.sent.where((s) => s.startsWith('submit')), isEmpty);
       await car.handleSignal(CarSignal.next);
-      expect(platform.spoken.last, 'Staged: hello from the car. Play to send.');
-      await car.handleSignal(CarSignal.playPause);
       expect(target.sent.last, 'submit:%1:hello from the car');
       expect(platform.spoken.last, 'Sent to window 1.');
       expect(car.mode, CarMode.idle);
       expect(car.stagedText, isNull);
+      // Back in the menu at "Dictate": the next ▶▶| moves on, not sends.
+      await car.handleSignal(CarSignal.next);
+      expect(platform.spoken.last, 'Listen, window 1');
+      expect(target.sent.where((s) => s.startsWith('submit')).length, 1);
+    });
+
+    test('a lone play keeps its mapped meaning: send when staged', () async {
+      await car.handleSignal(CarSignal.voice);
+      await car.handleSignal(CarSignal.hangUp);
+      await car.handleSignal(CarSignal.play);
+      expect(target.sent.last, 'submit:%1:hello from the car');
+    });
+
+    test('+ during the read-back stops it and discards the text unsent', () async {
+      await car.handleSignal(CarSignal.previous);
+      await car.handleSignal(CarSignal.hangUp);
+      expect(car.mode, CarMode.staged);
+      platform.calls.clear();
+      await car.handleSignal(CarSignal.pause);
+      expect(platform.calls.first, 'stopSpeaking');
+      expect(platform.calls, contains('discard'));
+      expect(car.stagedText, isNull);
+      expect(car.mode, CarMode.idle);
+      expect(platform.spoken.last, 'Discarded.');
+      // Nothing was sent, and ▶▶| now moves the menu instead of sending.
+      await car.handleSignal(CarSignal.next);
+      expect(target.sent.where((s) => s.startsWith('submit')), isEmpty);
+      expect(platform.spoken.last, 'Listen, window 1');
+    });
+
+    test('+ while recording discards the recording', () async {
+      await car.handleSignal(CarSignal.previous);
+      await car.handleSignal(CarSignal.pause);
+      expect(platform.calls, contains('stopDictation:cancel'));
+      expect(platform.calls, contains('discard'));
+      expect(car.mode, CarMode.idle);
+      expect(platform.spoken.last, 'Recording discarded.');
+      expect(target.sent, isEmpty);
+    });
+
+    test('+ during transcription drops the result', () async {
+      target.homeGate = Completer<void>();
+      await car.handleSignal(CarSignal.previous);
+      unawaited(car.handleSignal(CarSignal.hangUp));
+      await settle();
+      expect(car.mode, CarMode.transcribing);
+      await car.handleSignal(CarSignal.pause);
+      expect(car.mode, CarMode.idle);
+      target.homeGate!.complete();
+      await settle();
+      expect(car.mode, CarMode.idle);
+      expect(car.stagedText, isNull);
+      expect(platform.spoken.last, 'Discarded.');
+    });
+
+    test('+ during an auto-send countdown discards instead of sending', () async {
+      final c = make(const CarSettings(enabled: true, dictationSend: CarDictationSend.autoSendCountdown));
+      await c.start();
+      await c.handleSignal(CarSignal.previous);
+      await c.handleSignal(CarSignal.hangUp);
+      await c.handleSignal(CarSignal.pause);
+      expect(c.stagedText, isNull);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(target.sent.where((s) => s.startsWith('submit')), isEmpty);
+    });
+
+    test('the car redialling the stand-in number dictates; after a read-back it re-records', () async {
+      await car.handleSignal(CarSignal.redial);
+      expect(car.mode, CarMode.dictating);
+      await car.handleSignal(CarSignal.hangUp);
+      expect(car.mode, CarMode.staged);
+      await car.handleSignal(CarSignal.redial);
+      expect(car.mode, CarMode.dictating);
+      expect(car.stagedText, isNull);
+    });
+
+    test('Android 12: no phone fallback for a held recording, a clear spoken failure', () async {
+      platform.canRecognize = false;
+      target.home = null;
+      await car.handleSignal(CarSignal.previous);
+      await car.handleSignal(CarSignal.hangUp);
+      expect(platform.calls, isNot(contains('recognizeRecording')));
+      expect(platform.spoken, isNot(contains('Using phone recognizer.')));
+      expect(
+        platform.spoken.last,
+        'Home transcription failed. Recording kept. '
+        'Next to try again, previous to record again, pause to discard.',
+      );
+      expect(car.mode, CarMode.staged);
+      target.home = 'second try';
+      await car.handleSignal(CarSignal.next);
+      expect(car.stagedText, 'second try');
+      expect(target.sent.where((s) => s.startsWith('submit')), isEmpty);
     });
 
     test('home Whisper unavailable falls back to the phone recognizer', () async {
@@ -336,7 +506,10 @@ void main() {
       platform.onDevice = null;
       await car.handleSignal(CarSignal.voice);
       await car.handleSignal(CarSignal.hangUp);
-      expect(platform.spoken.last, "Couldn't transcribe. Play to try again, call to redo.");
+      expect(
+        platform.spoken.last,
+        "Couldn't transcribe. Next to try again, previous to record again, pause to discard.",
+      );
       expect(car.mode, CarMode.staged);
       target.home = 'second try';
       await car.handleSignal(CarSignal.playPause);
@@ -365,7 +538,7 @@ void main() {
       await c.handleSignal(CarSignal.hangUp);
       expect(platform.spoken.last, 'Staged: hello from the car. Sending in 3.');
       await c.handleSignal(CarSignal.next);
-      expect(platform.spoken.last, 'Not sent. Play to send.');
+      expect(platform.spoken.last, 'Not sent. Next to send.');
       await Future<void>.delayed(const Duration(milliseconds: 100));
       expect(target.sent.where((s) => s.startsWith('submit')), isEmpty);
     });
@@ -421,7 +594,7 @@ void main() {
       platform.say('exit');
       await settle();
       expect(car.mode, CarMode.confirming);
-      expect(platform.spoken.last, 'Exit Claude in window 1? Press play to confirm.');
+      expect(platform.spoken.last, 'Exit Claude in window 1? Press next to confirm.');
       expect(target.sent.where((s) => s.contains('/exit')), isEmpty);
       await car.handleSignal(CarSignal.playPause);
       await settle();
@@ -451,11 +624,11 @@ void main() {
       expect(target.sent.where((s) => s.contains('/compact')), isEmpty);
     });
 
-    test('next or hang-up cancels a pending confirmation', () async {
+    test('+ or previous cancels a pending confirmation', () async {
       await enter();
       platform.say('clear line');
       await settle();
-      await car.handleSignal(CarSignal.next);
+      await car.handleSignal(CarSignal.pause);
       await settle();
       expect(platform.spoken, contains('Cancelled.'));
       expect(target.sent.where((s) => s.contains('21')), isEmpty);
@@ -505,7 +678,7 @@ void main() {
       await enter();
       platform.say('macro 1');
       await settle();
-      expect(platform.spoken.last, 'Run Macro 1, Cebuano middle in window 1? Press play to confirm.');
+      expect(platform.spoken.last, 'Run Macro 1, Cebuano middle in window 1? Press next to confirm.');
       platform.say('yes');
       await settle();
       expect(target.sent.last, 'macro:%1:Cebuano middle');

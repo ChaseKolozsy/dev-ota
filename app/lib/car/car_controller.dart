@@ -20,6 +20,9 @@ abstract class CarPlatform {
   Future<int> stopDictation(String reason);
   Future<Uint8List?> takeRecording();
   Future<void> discardRecording();
+
+  /// Whether [recognizeRecording] can work at all on this phone.
+  Future<bool> canRecognizeRecording();
   Future<String?> recognizeRecording();
   Future<CarStartResult> startCommandSession(String label);
   Future<void> endCommandSession();
@@ -156,6 +159,9 @@ class CarController extends ChangeNotifier {
   bool _commandLoop = false;
   bool _commandCall = false;
   bool _pausedByCall = false;
+
+  /// Why the last transcription failed, for the spoken failure.
+  String? _transcribeFailure;
   final _log = <String>[];
 
   /// Recent controller decisions (no transcript or terminal text), for the
@@ -257,6 +263,44 @@ class CarController extends ChangeNotifier {
     return platform.speak(spoken, interrupt: interrupt);
   }
 
+  /// Button order for spoken hints: the Corolla's wheel buttons first.
+  static const _hintOrder = [
+    CarSignal.next,
+    CarSignal.previous,
+    CarSignal.pause,
+    CarSignal.hangUp,
+    CarSignal.play,
+    CarSignal.playPause,
+    CarSignal.redial,
+    CarSignal.voice,
+    CarSignal.answer,
+  ];
+
+  /// The spoken name of the button that does [action] in [mode], so every
+  /// prompt stays true to the (editable) button map.
+  String? _button(CarMode mode, CarAction action) {
+    final map = _settings.effectiveButtonMap;
+    for (final signal in _hintOrder) {
+      if (map.action(mode, signal) == action) return carSignalSpoken(signal);
+    }
+    return null;
+  }
+
+  static String _cap(String s) =>
+      s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+
+  /// "Next to try again, previous to redo." for the staged choices.
+  String _stagedChoices(String retry) {
+    final parts = [
+      if (_button(CarMode.staged, CarAction.submit) case final b?) '$b to $retry',
+      if (_button(CarMode.staged, CarAction.redictate) case final b?)
+        '$b to record again',
+      if (_button(CarMode.staged, CarAction.cancelAll) case final b?)
+        '$b to discard',
+    ];
+    return parts.isEmpty ? '' : '${_cap(parts.join(', '))}.';
+  }
+
   // ---------------------------------------------------------------- signals
 
   /// A car button arrived (already timing-classified natively).
@@ -271,15 +315,19 @@ class CarController extends ChangeNotifier {
         ? null
         : now().difference(_lastSignalAt!);
     _lastSignalAt = now();
+    final action = _settings.effectiveButtonMap.action(_mode, signal);
     if (_autoSend != null) {
-      // Any button cancels an auto-send countdown (§7, Q5 option b).
+      // Any button cancels an auto-send countdown (§7, Q5 option b); cancel
+      // itself goes on to discard the text.
       _autoSend?.cancel();
       _autoSend = null;
-      unawaited(platform.stopSpeaking());
-      await _say('Not sent. Play to send.');
-      return;
+      if (action != CarAction.cancelAll) {
+        unawaited(platform.stopSpeaking());
+        final send = _button(CarMode.staged, CarAction.submit);
+        await _say(send == null ? 'Not sent.' : 'Not sent. ${_cap(send)} to send.');
+        return;
+      }
     }
-    final action = _settings.effectiveButtonMap.action(_mode, signal);
     _trace('${signal.name} in ${_mode.name} -> ${action.name}');
     if (action == CarAction.nothing) return;
     if (action != CarAction.repeat) unawaited(platform.stopSpeaking());
@@ -294,7 +342,7 @@ class CarController extends ChangeNotifier {
       case CarAction.focusPrevious:
         await _moveFocus(action == CarAction.focusNext ? 1 : -1, idleFor);
       case CarAction.activate:
-        await _activate();
+        await _activate(idleFor: idleFor);
       case CarAction.dictate:
       case CarAction.redictate:
         await _dictate();
@@ -316,6 +364,8 @@ class CarController extends ChangeNotifier {
         );
       case CarAction.cancel:
         _resolveConfirm(false);
+      case CarAction.cancelAll:
+        await _cancelAll();
       case CarAction.confirm:
         _resolveConfirm(true);
       case CarAction.endCommand:
@@ -398,10 +448,23 @@ class CarController extends ChangeNotifier {
     return items[_focus];
   }
 
+  /// Back to the top menu's first item ("Dictate" whenever dictation is on
+  /// and a window is bound).
+  void _toTop() {
+    _menuStack.clear();
+    _focus = 0;
+  }
+
+  bool _afterPause(Duration? idleFor) =>
+      idleFor != null && idleFor >= idleRefocus;
+
   Future<void> _moveFocus(int delta, Duration? idleFor) async {
-    final items = menuItems();
-    // The first press after a pause says where you are instead of moving.
-    if (idleFor == null || idleFor < idleRefocus) {
+    if (_afterPause(idleFor)) {
+      // The first press after a pause says where you are instead of moving,
+      // and after a pause that is always the top of the menu.
+      _toTop();
+    } else {
+      final items = menuItems();
       _focus = (_focus + delta) % items.length;
       if (_focus < 0) _focus += items.length;
     }
@@ -409,7 +472,10 @@ class CarController extends ChangeNotifier {
     await _say(focusedItem.label);
   }
 
-  Future<void> _activate() async {
+  Future<void> _activate({Duration? idleFor}) async {
+    // After a pause (or as the very first press) the focus is back on
+    // "Dictate", so a first activate always starts dictation.
+    if (idleFor == null || _afterPause(idleFor)) _toTop();
     final item = focusedItem;
     _trace('activate ${item.id}');
     switch (item.id) {
@@ -476,10 +542,12 @@ class CarController extends ChangeNotifier {
     _epoch++;
     _commandLoop = false;
     _cancelTimers();
+    _toTop();
     await platform.discardRecording();
     _staged = null;
     _stagedNeedsTranscription = false;
     _pausedByCall = false;
+    _transcribeFailure = null;
     _setMode(CarMode.dictating);
     await _say('Recording, ${_label(pane)}.');
     if (_mode != CarMode.dictating) return;
@@ -496,6 +564,54 @@ class CarController extends ChangeNotifier {
     _setMode(CarMode.idle);
     await platform.earcon('stop');
     await _say('Recording discarded.');
+  }
+
+  /// Cancel (the Corolla's "+"): stop speaking and throw away whatever is
+  /// pending — a recording, a transcription in flight, staged text, a
+  /// reading, a confirmation — without sending anything. Discarding one's own
+  /// unsent dictation is the safe direction, so it is not confirmed.
+  Future<void> _cancelAll() async {
+    _epoch++;
+    _cancelTimers();
+    await platform.stopSpeaking();
+    if (_confirm != null) {
+      _resolveConfirm(false);
+      return;
+    }
+    switch (_mode) {
+      case CarMode.dictating:
+        await platform.stopDictation('cancel');
+        await _discardPending();
+        await platform.earcon('stop');
+        await _say('Recording discarded.');
+      case CarMode.transcribing:
+      case CarMode.staged:
+        if (_mode == CarMode.transcribing) {
+          await platform.cancelListening();
+        }
+        await _discardPending();
+        await _say('Discarded.');
+      case CarMode.reading:
+        _setMode(CarMode.idle);
+        await platform.earcon('stop');
+      case CarMode.command:
+        await endCommandMode();
+      case CarMode.idle:
+      case CarMode.confirming:
+        _toTop();
+        _notify();
+        await platform.earcon('stop');
+    }
+  }
+
+  Future<void> _discardPending() async {
+    await platform.discardRecording();
+    _staged = null;
+    _stagedNeedsTranscription = false;
+    _pausedByCall = false;
+    _transcribeFailure = null;
+    _toTop();
+    _setMode(_commandLoop ? CarMode.command : CarMode.idle);
   }
 
   /// Hang-up, play/pause, the cap, or a lost link stopped the recording.
@@ -522,15 +638,30 @@ class CarController extends ChangeNotifier {
       _staged = null;
       _stagedNeedsTranscription = true;
       _setMode(CarMode.staged);
-      await _say("Couldn't transcribe. Play to try again, call to redo.");
+      await _say(_transcribeFailedText());
       return;
     }
     await _handleTranscript(text.trim());
   }
 
+  String _transcribeFailedText() {
+    final lead = switch (_transcribeFailure) {
+      'home' => 'Home transcription failed. Recording kept.',
+      'phone' => "This phone can't transcribe a recording. Recording kept.",
+      _ => "Couldn't transcribe.",
+    };
+    final choices = _stagedChoices('try again');
+    return choices.isEmpty ? lead : '$lead $choices';
+  }
+
   Future<String?> _transcribe() async {
+    _transcribeFailure = null;
     switch (_settings.dictationRecognizer) {
       case CarDictationRecognizer.onDevice:
+        if (!await platform.canRecognizeRecording()) {
+          _transcribeFailure = 'phone';
+          return null;
+        }
         return platform.recognizeRecording();
       case CarDictationRecognizer.openAi:
         final wav = await platform.takeRecording();
@@ -546,6 +677,13 @@ class CarController extends ChangeNotifier {
           text = null;
         }
         if (text != null) return text;
+        // Android 12 cannot feed a held recording to the phone recognizer,
+        // and the car's mic left with the call: say so plainly and keep the
+        // audio for a retry rather than pretend to fall back.
+        if (!await platform.canRecognizeRecording()) {
+          _transcribeFailure = 'home';
+          return null;
+        }
         await _say('Using phone recognizer.');
         return platform.recognizeRecording();
     }
@@ -582,8 +720,8 @@ class CarController extends ChangeNotifier {
     if (staged == null) {
       await _say(
         _pausedByCall
-            ? 'Dictation paused by a call. Play to transcribe what I have, call to start over.'
-            : "Couldn't transcribe. Play to try again, call to redo.",
+            ? 'Dictation paused by a call. ${_stagedChoices('transcribe what I have')}'
+            : _transcribeFailedText(),
       );
       return;
     }
@@ -591,14 +729,15 @@ class CarController extends ChangeNotifier {
     final where = _settings.verbosity == CarVerbosity.terse
         ? 'Staged'
         : 'Staged for $_targetLabel';
+    final send = _button(CarMode.staged, CarAction.submit);
     switch (_settings.dictationSend) {
       case CarDictationSend.stageOnly:
         await _say(fresh ? '$where.' : '$where: $readback.');
       case CarDictationSend.stageReadConfirm:
         await _say(
           _settings.verbosity == CarVerbosity.terse
-              ? '$where: $readback. Play to send.'
-              : '$where: $readback. Press play to send, next to hear it again, or call to redo.',
+              ? (send == null ? '$where: $readback.' : '$where: $readback. ${_cap(send)} to send.')
+              : '$where: $readback. ${_stagedChoices('send')}',
         );
       case CarDictationSend.autoSendCountdown:
         final ok = await _say('$where: $readback. Sending in 3.');
@@ -757,7 +896,8 @@ class CarController extends ChangeNotifier {
     _setMode(CarMode.confirming);
     _confirmTimer?.cancel();
     _confirmTimer = Timer(confirmTimeout, () => _resolveConfirm(false));
-    await _say('$prompt Press play to confirm.');
+    final yes = _button(CarMode.confirming, CarAction.confirm);
+    await _say(yes == null ? '$prompt Say yes to confirm.' : '$prompt Press $yes to confirm.');
     if (_commandLoop && !completer.isCompleted) {
       // In command mode "yes" / "no" also answer (§8.6).
       unawaited(() async {
@@ -1149,7 +1289,7 @@ class CarController extends ChangeNotifier {
     _yielded = false;
     if (_pausedByCall) {
       await _say(
-        'Back. Dictation paused, play to transcribe what I have, call to start over.',
+        'Back. Dictation paused. ${_stagedChoices('transcribe what I have')}',
       );
       _pausedByCall = false;
     } else {

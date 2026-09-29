@@ -106,6 +106,9 @@ void main() {
     expect(await session.startProbe(), isFalse);
     // Native events are not even listened to.
     await nativeSends('signal', {'button': 'playPause', 'source': 'media_session'});
+    await nativeSends('signal', {'button': 'previous', 'source': 'media_session'});
+    await nativeSends('signal', {'button': 'pause', 'source': 'media_session'});
+    await nativeSends('signal', {'button': 'redial', 'source': 'redial_guard'});
     expect(calls, isEmpty);
     expect(session.running, isFalse);
   });

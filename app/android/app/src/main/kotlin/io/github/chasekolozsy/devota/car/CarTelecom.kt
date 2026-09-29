@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.telecom.CallAudioState
 import android.telecom.CallEndpoint
 import android.telecom.Connection
@@ -37,7 +38,17 @@ internal object CarTelecom {
 
     var listener: Listener? = null
     internal var pendingPurpose = "recording"
-    internal var pendingLabel = "DevOTA"
+
+    /** What the car shows for the call (HFP/CNAP name). */
+    const val DISPLAY_NAME = "DevOTA"
+
+    /**
+     * elapsedRealtime until which the redial guard stands aside for DevOTA's
+     * own placement (Telecom does not broadcast self-managed calls; this is
+     * belt and braces so the guard can never cancel DevOTA's own call).
+     */
+    @Volatile var ownPlacementUntil = 0L
+        private set
     var connection: DevotaConnection? = null
         internal set
     val callActive get() = connection != null
@@ -84,13 +95,17 @@ internal object CarTelecom {
         return try {
             if (!telecom.isOutgoingCallPermitted(h)) return "not_permitted"
             pendingPurpose = purpose
-            pendingLabel = label.take(80)
             val extras = Bundle().apply {
                 putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, h)
                 putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false)
             }
-            telecom.placeCall(Uri.fromParts("devota", purpose, null), extras)
-            listener?.onTelecomEvent("place", mapOf("purpose" to purpose))
+            ownPlacementUntil = SystemClock.elapsedRealtime() + CarStandIn.OWN_PLACEMENT_GRACE_MS
+            // The address is what the car stores and later redials: see
+            // CarStandIn for why it is 10000000 and how the redial is caught.
+            // DevOTA holds MANAGE_OWN_CALLS only (no CALL_PHONE), so Telecom
+            // cannot turn this into a carrier call.
+            telecom.placeCall(Uri.fromParts("tel", CarStandIn.NUMBER, null), extras)
+            listener?.onTelecomEvent("place", mapOf("purpose" to purpose, "label" to label.take(80)))
             null
         } catch (error: Exception) {
             "place_${error.javaClass.simpleName}"
@@ -126,7 +141,7 @@ class DevotaConnectionService : ConnectionService() {
         if (Build.VERSION.SDK_INT >= 26) c.setConnectionProperties(Connection.PROPERTY_SELF_MANAGED)
         c.setAudioModeIsVoip(true)
         c.setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
-        c.setCallerDisplayName(CarTelecom.pendingLabel, TelecomManager.PRESENTATION_ALLOWED)
+        c.setCallerDisplayName(CarTelecom.DISPLAY_NAME, TelecomManager.PRESENTATION_ALLOWED)
         c.setConnectionCapabilities(Connection.CAPABILITY_HOLD or Connection.CAPABILITY_SUPPORT_HOLD)
         c.setActive()
         CarTelecom.created(c)
