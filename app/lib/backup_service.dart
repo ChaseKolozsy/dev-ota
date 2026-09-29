@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'car/car_settings.dart';
 import 'voice_input_service.dart';
 
 class BackupService {
@@ -27,6 +28,7 @@ class BackupService {
     'macros_json',
     'macro_usage_counts_json',
     'terminal_pad_config_json',
+    ...CarSettings.stringKeys,
   ];
   static const _boolPreferenceKeys = [
     'agent_whole_device',
@@ -34,8 +36,11 @@ class BackupService {
     'terminal_fullscreen',
     'terminal_native_keyboard_locked',
     'terminal_tools_visible',
+    ...CarSettings.boolKeys,
   ];
   static const _doublePreferenceKeys = ['terminal_font_size'];
+  static List<String> get stringPreferenceKeys => _stringPreferenceKeys;
+  static List<String> get boolPreferenceKeys => _boolPreferenceKeys;
   static const _serverPath = '/backup/profile';
 
   static final FlutterSecureStorage _storage = const FlutterSecureStorage();
