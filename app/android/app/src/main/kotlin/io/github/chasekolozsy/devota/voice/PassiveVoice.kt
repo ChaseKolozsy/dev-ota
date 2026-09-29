@@ -35,7 +35,7 @@ internal object PassiveVoice {
     fun attach(context: Context, methodChannel: MethodChannel) {
         appContext = context.applicationContext
         channel = methodChannel
-        BeepQuieter.recover(context.applicationContext)
+        if (!running) BeepQuieter.recover(context.applicationContext)
         methodChannel.setMethodCallHandler { call, result ->
             val ctx = appContext
             if (ctx == null) {

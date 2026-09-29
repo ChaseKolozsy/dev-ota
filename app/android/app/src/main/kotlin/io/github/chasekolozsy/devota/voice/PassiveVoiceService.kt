@@ -27,6 +27,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import io.github.chasekolozsy.devota.TerminalActionReceiver
 
 /**
@@ -79,7 +80,7 @@ internal class PassiveVoiceService : Service(), LoopListener {
             context,
             24091,
             Intent(context, TerminalActionReceiver::class.java)
-                .setData(android.net.Uri.parse("devota-voice://stop"))
+                .setData("devota-voice://stop".toUri())
                 .putExtra("voiceAction", "stop"),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -97,6 +98,7 @@ internal class PassiveVoiceService : Service(), LoopListener {
     private var speaking = 0
     private var speechGeneration = 0
     private var focus: AudioFocusRequest? = null
+    private val tracks = mutableListOf<AudioTrack>()
     private var replyToken = 0
     private var statusText = "Listening"
     private var stateLabel = "Starting"
@@ -229,6 +231,9 @@ internal class PassiveVoiceService : Service(), LoopListener {
         stopSpeech()
         tts?.shutdown()
         tts = null
+        ttsReady = false
+        tracks.forEach { try { it.release() } catch (_: Exception) {} }
+        tracks.clear()
         quieter.off()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
@@ -279,7 +284,7 @@ internal class PassiveVoiceService : Service(), LoopListener {
     }
 
     override fun onState(state: LoopState, detail: String?) {
-        stateLabel = when (state) {
+        val label = when (state) {
             LoopState.OFF -> "Off"
             LoopState.LISTENING -> "Listening"
             LoopState.WAITING -> detail ?: "Waiting"
@@ -290,6 +295,8 @@ internal class PassiveVoiceService : Service(), LoopListener {
                 else -> "Listening"
             }
         }
+        if (label == stateLabel) return
+        stateLabel = label
         refreshNotification()
         PassiveVoice.onState(stateLabel)
     }
@@ -449,8 +456,12 @@ internal class PassiveVoiceService : Service(), LoopListener {
                 .build()
             track.write(pcm, 0, pcm.size)
             track.play()
+            tracks.add(track)
             val ms = pcm.size * 1000L / VoiceTones.SAMPLE_RATE
-            handler.postDelayed({ try { track.release() } catch (_: Exception) {} }, ms + 200)
+            handler.postDelayed({
+                tracks.remove(track)
+                try { track.release() } catch (_: Exception) {}
+            }, ms + 200)
             ms
         } catch (_: Exception) {
             0L
@@ -532,7 +543,6 @@ internal class PassiveVoiceService : Service(), LoopListener {
     // ---- Notification ------------------------------------------------------------
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Passive listening", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Shown while DevOTA listens for voice commands and dictation"
@@ -549,13 +559,7 @@ internal class PassiveVoiceService : Service(), LoopListener {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
         }
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return builder
+        return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(applicationInfo.icon)
             .setContentTitle("DevOTA · $stateLabel")
             .setContentText(statusText)
@@ -595,9 +599,12 @@ internal class BeepQuieter(private val context: Context, private val audio: Audi
     private var muted = false
 
     fun on() {
-        if (!enabled || muted || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (!enabled || muted) return
         try {
             if (audio.isStreamMute(AudioManager.STREAM_MUSIC) || audio.isMusicActive) return
+            // commit(), not apply(): the flag must be on disk before the mute,
+            // so a process killed right after can still be undone.
+            @Suppress("ApplySharedPref")
             prefs(context).edit().putBoolean(KEY, true).commit()
             audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
             muted = true
@@ -618,11 +625,9 @@ internal class BeepQuieter(private val context: Context, private val audio: Audi
             context.getSharedPreferences("devota_passive_voice", Context.MODE_PRIVATE)
 
         private fun unmute(context: Context, audio: AudioManager) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try {
-                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
-                } catch (_: Exception) {}
-            }
+            try {
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+            } catch (_: Exception) {}
             prefs(context).edit().remove(KEY).apply()
         }
 
