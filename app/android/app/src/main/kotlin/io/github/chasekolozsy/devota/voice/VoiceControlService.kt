@@ -37,6 +37,11 @@ import io.github.chasekolozsy.devota.TerminalActionReceiver
  * each final transcript to Dart. Dart decides whether it is a button name or
  * dictation and acts on the Terminal tab's current session.
  *
+ * "read screen" / "read reply" arrive as chunks in Dart's reply and are
+ * spoken by [ReadAloud] through the same speech path, so listening is paused
+ * (Speaking) while each chunk plays and reopens briefly between chunks to
+ * hear "stop reading".
+ *
  * It never sends anything itself. It pauses while DevOTA or the phone plays
  * speech and while the audio mode is not normal (calls), and it stops when
  * the toggle goes off, on "stop listening", on the notification's Stop, when
@@ -96,7 +101,10 @@ internal class VoiceControlService : Service(), LoopListener {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private val speechQueue = ArrayDeque<String>()
-    private var speaking = 0
+
+    /** Utterances handed to the engine and not yet done, by id. */
+    private val pendingUtterances = mutableSetOf<String>()
+    private var utteranceSeq = 0
     private var speechGeneration = 0
     private var focus: AudioFocusRequest? = null
     private val tracks = mutableListOf<AudioTrack>()
@@ -155,6 +163,27 @@ internal class VoiceControlService : Service(), LoopListener {
             try { recognizer?.destroy() } catch (_: Exception) {}
             recognizer = null
         }
+    }
+
+    /** "read screen" / "read reply", chunk by chunk through [speak]. */
+    private val reader by lazy {
+        ReadAloud(
+            object : ReaderPort {
+                override fun speakChunk(text: String) = speak(text)
+
+                override fun silence() {
+                    deferredSpeech.clear()
+                    handler.removeCallbacks(flushDeferred)
+                    stopSpeech()
+                    loop.release(ListeningLoop.SPEAK)
+                }
+
+                override val userSpeaking get() = loop.userSpeaking
+
+                override fun ended(reason: String) = VoiceControl.onReading(false, reason)
+            },
+            scheduler,
+        )
     }
 
     private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
@@ -224,6 +253,7 @@ internal class VoiceControlService : Service(), LoopListener {
         if (stopped) return
         stopped = true
         replyToken++
+        reader.cancel()
         loop.disable()
         handler.removeCallbacksAndMessages(null)
         try { audio.unregisterAudioPlaybackCallback(playbackCallback) } catch (_: Exception) {}
@@ -246,11 +276,13 @@ internal class VoiceControlService : Service(), LoopListener {
     // ---- LoopListener -------------------------------------------------------
 
     override fun onUtterance(text: String) {
+        reader.onUtterance()
         val token = ++replyToken
         handler.postDelayed({
             // Dart did not answer: listen again rather than hang.
             if (token == replyToken && !stopped) {
                 replyToken++
+                reader.onReply()
                 loop.release(ListeningLoop.REPLY)
             }
         }, REPLY_TIMEOUT_MS)
@@ -266,6 +298,13 @@ internal class VoiceControlService : Service(), LoopListener {
             stopWith("Voice control is off")
             return
         }
+        val read = (reply["read"] as? List<*>)
+            ?.mapNotNull { (it as? String)?.takeIf { text -> text.isNotBlank() } }
+            .orEmpty()
+        // Any command stops a reading before it does anything else. A new
+        // read replaces the old one below instead, so Dart's "reading …"
+        // status is not overwritten by the old reading's end.
+        if (read.isEmpty() && reply["stopReading"] == true) reader.stop()
         val tone = reply["tone"] as? String
         val deferred = deferredSpeech.joinToString(" ")
         deferredSpeech.clear()
@@ -279,11 +318,14 @@ internal class VoiceControlService : Service(), LoopListener {
         handler.postDelayed({
             if (stopped) return@postDelayed
             if (speech != null) speak(speech)
+            // Both hold listening (Speaking) before the reply hold goes.
+            if (read.isNotEmpty()) reader.start(read) else reader.onReply()
             loop.release(ListeningLoop.REPLY)
         }, toneMs + 60)
     }
 
     override fun onState(state: LoopState, detail: String?) {
+        if (state == LoopState.LISTENING) reader.onListening()
         val label = when (state) {
             LoopState.OFF -> "Off"
             LoopState.LISTENING -> "Listening"
@@ -361,18 +403,21 @@ internal class VoiceControlService : Service(), LoopListener {
                 ttsReady = status == TextToSpeech.SUCCESS
                 if (!ttsReady) {
                     speechQueue.clear()
+                    tts?.shutdown()
+                    tts = null
+                    reader.stop("failed")
                     finishSpeech()
                 } else {
                     tts?.setAudioAttributes(speechAttributes)
                     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                         override fun onStart(utteranceId: String?) = Unit
                         override fun onDone(utteranceId: String?) {
-                            handler.post { onUtteranceDone() }
+                            handler.post { onUtteranceDone(utteranceId) }
                         }
 
                         @Deprecated("Legacy TTS callback")
                         override fun onError(utteranceId: String?) {
-                            handler.post { onUtteranceDone() }
+                            handler.post { onUtteranceDone(utteranceId) }
                         }
                     })
                     pumpSpeech()
@@ -387,29 +432,37 @@ internal class VoiceControlService : Service(), LoopListener {
         while (speechQueue.isNotEmpty()) {
             val text = speechQueue.removeFirst()
             takeFocus()
-            speaking++
-            if (engine.speak(text, TextToSpeech.QUEUE_ADD, null, "voice:$speaking:${text.hashCode()}") ==
-                TextToSpeech.ERROR) {
-                speaking--
+            val id = "voice:${++utteranceSeq}"
+            pendingUtterances.add(id)
+            if (engine.speak(text, TextToSpeech.QUEUE_ADD, null, id) == TextToSpeech.ERROR) {
+                pendingUtterances.remove(id)
             }
         }
-        if (speaking == 0) finishSpeech()
+        if (pendingUtterances.isEmpty()) finishSpeech()
     }
 
-    private fun onUtteranceDone() {
-        if (speaking > 0) speaking--
-        if (speaking == 0 && speechQueue.isEmpty()) finishSpeech()
+    /** Only utterances still pending count: a stopped one's late callback is ignored. */
+    private fun onUtteranceDone(id: String?) {
+        if (id == null || !pendingUtterances.remove(id)) return
+        if (pendingUtterances.isEmpty() && speechQueue.isEmpty()) finishSpeech()
     }
+
+    private val speechIdle get() = pendingUtterances.isEmpty() && speechQueue.isEmpty()
 
     private fun finishSpeech() {
         abandonFocus()
         // Let the last syllable leave the speaker before the mic opens again.
-        handler.postDelayed({ if (!stopped && speaking == 0) loop.release(ListeningLoop.SPEAK) }, 300)
+        handler.postDelayed({
+            if (!stopped && speechIdle) {
+                loop.release(ListeningLoop.SPEAK)
+                reader.onSpeechDone()
+            }
+        }, 300)
     }
 
     private fun stopSpeech() {
         speechQueue.clear()
-        speaking = 0
+        pendingUtterances.clear()
         try { tts?.stop() } catch (_: Exception) {}
         abandonFocus()
     }
@@ -507,8 +560,13 @@ internal class VoiceControlService : Service(), LoopListener {
 
     private fun checkCallMode() {
         if (stopped) return
-        if (PlaybackPolicy.callActive(audio.mode)) loop.hold(ListeningLoop.CALL)
-        else loop.release(ListeningLoop.CALL)
+        if (PlaybackPolicy.callActive(audio.mode)) {
+            // Never read over a call.
+            reader.stop()
+            loop.hold(ListeningLoop.CALL)
+        } else {
+            loop.release(ListeningLoop.CALL)
+        }
     }
 
     private fun watchCallMode() {

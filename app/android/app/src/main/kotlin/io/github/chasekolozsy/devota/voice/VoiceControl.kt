@@ -116,7 +116,12 @@ internal object VoiceControl {
         channel?.invokeMethod("state", mapOf("state" to label))
     }
 
-    fun onServiceStopped(reason: String) {
+    /** A reading ended: finished | stopped | failed. */
+    fun onReading(active: Boolean, reason: String) {
+        channel?.invokeMethod("reading", mapOf("active" to active, "reason" to reason))
+    }
+
+        fun onServiceStopped(reason: String) {
         channel?.invokeMethod("stopped", mapOf("reason" to reason))
     }
 
