@@ -143,8 +143,10 @@ object CarProbeFormat {
                 "SCO_AUDIO_STATE" -> CarSpokenLine("Bluetooth voice link ${d["state"] ?: "changed"}.", "sco")
                 "HEADSET_CONNECTION_STATE" -> CarSpokenLine("Hands free ${d["state"] ?: "changed"}.")
                 "A2DP_CONNECTION_STATE" -> CarSpokenLine("Bluetooth media ${d["state"] ?: "changed"}.")
-                "A2DP_PLAYING_STATE" -> if (ownAudioRecent) null
-                    else CarSpokenLine("Bluetooth media ${d["state"] ?: "changed"}.", "a2dp_playing")
+                // Logged, never spoken: the probe's own voice toggles it. A Toyota
+                // Corolla reported "stopped" ~2.9 s after each line ended, past
+                // any own-audio window, and the probe narrated itself in a loop.
+                "A2DP_PLAYING_STATE" -> null
                 "VENDOR_SPECIFIC_HEADSET_EVENT" -> CarSpokenLine("Vendor headset event ${d["cmd"] ?: ""}.".replace(" .", "."))
                 else -> null
             }

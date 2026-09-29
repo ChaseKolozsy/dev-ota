@@ -186,7 +186,8 @@ class CarProbeFormatTest {
         assertNull(say("speaker", "speak_start"))
         // Its own voice must not narrate the side effects of its own voice.
         assertNull(say("bluetooth", "A2DP_PLAYING_STATE", mapOf("state" to "playing"), own = true))
-        assertEquals("Bluetooth media playing.", say("bluetooth", "A2DP_PLAYING_STATE", mapOf("state" to "playing")))
+        // Nor A2DP playing state at all: the car reports it seconds after the voice ends.
+        assertNull(say("bluetooth", "A2DP_PLAYING_STATE", mapOf("state" to "stopped")))
         assertNull(say("audio", "devices_added", mapOf("initial" to true)))
     }
 }
