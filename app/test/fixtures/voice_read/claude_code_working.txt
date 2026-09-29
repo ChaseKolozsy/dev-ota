@@ -1,0 +1,26 @@
+  ⎿  Updated app/lib/voice/screen_reader.dart with 4 additions
+
+❯ does it skip the footer?
+
+● Yes. The footer and the agent list under the input box are never read.
+  The rule lines around the box are skipped too.
+
+  Checking the Codex screen next.
+
+● Bash(tmux capture-pane -p -t %0 | tail -20)
+  ⎿  › Ask Codex to do anything
+     GPT-6-Sol high · ~/project
+     … +3 lines (ctrl+o to expand)
+
+● Read 2 files (ctrl+o to expand)
+
+✽ Channelling… (1m 12s · ↓ 3.1k tokens · esc to interrupt)
+
+──────────────────────────────────────────────────────────────────────────
+❯ also check the status bar
+──────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · ↓ to m…
+
+  ● main
+  ◯ general-purpose     Reading SshTerminalTes… 4m 22s · ↓ 154.9k tokens
+[authoring] 0:node- 1:claude*                           "neweyesiss" 04:42 29-Sep-26

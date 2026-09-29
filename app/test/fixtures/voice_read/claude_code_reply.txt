@@ -1,0 +1,30 @@
+
+● Yes, it will read Codex too. I've told the agent building it that "read
+  reply" and "read screen" must work for both.
+
+  - DevOTA will work out from the screen itself whether you're looking at
+    Claude or Codex, and apply that one's layout.
+  - Each one's input box and footer get skipped, and "read reply" picks
+    out the latest answer.
+  - The agent is building from real screens of your Codex session in
+    window 0 and this Claude session in window 1. It only reads them and
+    never types into either.
+  - If a screen is neither Claude nor Codex, "read reply" falls back to
+    reading the whole screen.
+
+  I'll tell you when the build is in the Builds tab.
+
+✻ Waiting for 5 background agents to finish
+
+──────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · ↓ to m…
+
+  ● main
+  ◯ title-audit-lane    Checking nose-sc in ge… 9m 58s · ↓ 160.7k tokens
+  ◯ title-audit-lane    Checking arm ratios in… 9m 48s · ↓ 176.1k tokens
+  ◯ title-audit-lane    Checking emulator-5556… 9m 40s · ↓ 123.5k tokens
+  ◯ title-audit-repair  Writing R54 toe-touch … 7m 17s · ↓ 207.6k tokens
+  ◯ general-purpose     Reading SshTerminalTes… 4m 22s · ↓ 154.9k tokens
+[authoring] 0:node- 1:claude*                           "neweyesiss" 04:40 29-Sep-26

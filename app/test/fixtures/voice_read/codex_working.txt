@@ -1,0 +1,18 @@
+› check the tmux status bar too
+
+• I'll look at how the status bar is drawn on the phone first.
+
+• Explored
+  └ Read ssh_terminal_tab.dart
+    Search status-left in lib
+
+• Ran tmux show -gv status-left
+  └ [#{session_name}]
+
+• Working (14s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  GPT-6-Sol high · ~/project · Voice read-aloud tests
+  ← for agents · ? for shortcuts

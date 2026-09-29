@@ -1,0 +1,9 @@
+chase@neweyesiss:~/dev-ota$ git log --oneline -2
+59a2235 Terminal tab: Voice control toggle acting on the current session
+20fc224 android: voice control service and channel for the Terminal tab toggle
+chase@neweyesiss:~/dev-ota$ ls
+app  docs  mcp  scripts  server
+chase@neweyesiss:~/dev-ota$
+
+
+[authoring] 0:bash* 1:claude-                           "neweyesiss" 04:43 29-Sep-26
