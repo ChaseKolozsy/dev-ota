@@ -2211,6 +2211,28 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void composerDeleteWords(int count) =>
       _setComposerText(deleteLastWords(_composerController.text, count));
 
+  @override
+  List<String> get terminalScreenLines {
+    final buffer = _terminal.buffer;
+    final rows = _terminal.viewHeight;
+    final scrollBack = buffer.height - rows;
+    var top = scrollBack < 0 ? 0 : scrollBack;
+    // Scrolled back through history: read the rows in view, not the bottom.
+    final scroll = _terminalScrollController;
+    if (top > 0 && scroll.hasClients && scroll.position.hasContentDimensions) {
+      final max = scroll.position.maxScrollExtent;
+      if (max > 0) {
+        final fraction = (scroll.position.pixels / max).clamp(0.0, 1.0);
+        top = (top * fraction).round();
+      }
+    }
+    final end = (top + rows).clamp(0, buffer.height);
+    return [
+      for (var i = top; i < end; i++)
+        buffer.lines[i].getText(0, _terminal.viewWidth),
+    ];
+  }
+
   void _setComposerText(String text) {
     _composerController.value = TextEditingValue(
       text: text,

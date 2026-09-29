@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:devota/ssh_terminal_tab.dart';
 import 'package:devota/terminal_macro.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xterm/xterm.dart';
 
 /// Drives the real Terminal tab through the devota/voice_control channel and
 /// asserts on the bytes its own button handlers write to the session.
@@ -69,13 +71,17 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  Future<void> pumpTab(WidgetTester tester, {bool connected = true}) async {
+  Future<void> pumpTab(
+    WidgetTester tester, {
+    bool connected = true,
+    Size size = const Size(900, 800),
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SizedBox(
-            width: 900,
-            height: 800,
+            width: size.width,
+            height: size.height,
             child: SshTerminalTab(
               dio: Dio(),
               serverUrl: 'http://127.0.0.1:8082',
@@ -273,6 +279,51 @@ void main() {
     expect(reply?['stop'], isTrue);
     expect(find.byTooltip('Voice control off'), findsOneWidget);
     expect(find.text('Voice: stopped by voice'), findsOneWidget);
+    await settle(tester);
+  });
+
+  testWidgets('read screen and read reply read the tab\'s own terminal', (
+    tester,
+  ) async {
+    // Wide and tall enough for the captured 74-column Claude pane, the way
+    // tmux lays it out for the phone's own size.
+    tester.view.physicalSize = const Size(1400, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await pumpTab(tester, size: const Size(1300, 1700));
+    await toggleOn(tester);
+    // What the SSH session would have drawn: a real Claude Code screen.
+    final terminal = tester
+        .widget<TerminalView>(find.byType(TerminalView))
+        .terminal;
+    final screen = File(
+      'test/fixtures/voice_read/claude_code_reply.txt',
+    ).readAsLinesSync();
+    terminal.write('\x1b[2J\x1b[H${screen.join('\r\n')}');
+    await tester.pump();
+    expect(terminal.viewWidth, greaterThanOrEqualTo(74));
+
+    final reply = await say(tester, 'read reply');
+    expect(reply?['tone'], 'command');
+    final chunks = (reply?['read'] as List).cast<String>();
+    expect(chunks.first, startsWith('Yes, it will read Codex too.'));
+    expect(chunks.last, endsWith('Builds tab.'));
+    expect(chunks.join(' '), isNot(contains('bypass permissions')));
+    expect(find.text('Voice: reading reply…'), findsOneWidget);
+
+    final all = await say(tester, 'read screen');
+    expect(
+      (all?['read'] as List).join(' '),
+      contains('Waiting for 5 background agents to finish'),
+    );
+    expect(find.text('Voice: reading screen…'), findsOneWidget);
+
+    final stop = await say(tester, 'stop reading');
+    expect(stop?['stopReading'], isTrue);
+    expect(find.text('Voice: stopped reading'), findsOneWidget);
+    // Nothing was sent to the session or typed into the composer.
+    expect(writes, isEmpty);
+    expect(composer(tester), isEmpty);
     await settle(tester);
   });
 }

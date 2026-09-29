@@ -224,6 +224,19 @@ class StopListeningMatch extends VoiceMatch {
   const StopListeningMatch();
 }
 
+enum ReadTarget { screen, reply }
+
+/// "read screen" / "read reply": speak the Terminal tab's visible text.
+class ReadMatch extends VoiceMatch {
+  const ReadMatch(this.target);
+  final ReadTarget target;
+}
+
+/// "stop reading".
+class StopReadingMatch extends VoiceMatch {
+  const StopReadingMatch();
+}
+
 class YesMatch extends VoiceMatch {
   const YesMatch();
 }
@@ -255,6 +268,9 @@ class VoiceCommandMatcher {
   static const _stop = {'stop listening', 'stop voice control'};
   static const _yes = {'yes', 'yeah', 'yep', 'confirm'};
   static const _no = {'no', 'nope', 'cancel'};
+  static const _readScreen = {'read screen', 'read the screen'};
+  static const _readReply = {'read reply', 'read the reply'};
+  static const _stopReading = {'stop reading'};
 
   /// The command each spoken phrase names. A phrase two buttons share at the
   /// same rank (tmux "Split |" and "Split -" are both "split") names neither;
@@ -285,6 +301,9 @@ class VoiceCommandMatcher {
     final spoken = normalizeSpoken(text);
     if (spoken.isEmpty) return DictationMatch(text);
     if (_stop.contains(spoken)) return const StopListeningMatch();
+    if (_stopReading.contains(spoken)) return const StopReadingMatch();
+    if (_readScreen.contains(spoken)) return const ReadMatch(ReadTarget.screen);
+    if (_readReply.contains(spoken)) return const ReadMatch(ReadTarget.reply);
     if (_yes.contains(spoken)) return const YesMatch();
     if (_no.contains(spoken)) return const NoMatch();
     if (_send.contains(spoken)) return const SendMatch();

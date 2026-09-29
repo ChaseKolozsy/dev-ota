@@ -135,6 +135,34 @@ void main() {
     expect(matcher.match('no', targets), isA<NoMatch>());
   });
 
+  test('read screen, read reply and stop reading', () {
+    ReadTarget? read(String said) {
+      final m = matcher.match(said, targets);
+      return m is ReadMatch ? m.target : null;
+    }
+
+    expect(read('Read screen'), ReadTarget.screen);
+    expect(read('read the screen.'), ReadTarget.screen);
+    expect(read('Read reply'), ReadTarget.reply);
+    expect(read('read the reply'), ReadTarget.reply);
+    expect(matcher.match('Stop reading.', targets), isA<StopReadingMatch>());
+    // Inside a longer sentence the same words are dictation.
+    for (final said in [
+      'read screen output into the log',
+      'please read the reply from the server',
+      'stop reading the config twice',
+      'can you read screen',
+    ]) {
+      expect(matcher.match(said, targets), isA<DictationMatch>(), reason: said);
+    }
+    // A button can never shadow them.
+    final shadow = [
+      ...targets,
+      t(VoiceTargetKind.command, 'read screen', 'read screen'),
+    ];
+    expect(matcher.match('read screen', shadow), isA<ReadMatch>());
+  });
+
   test('exit labels ask for confirmation', () {
     expect(isExitLabel('/exit'), isTrue);
     expect(isExitLabel('exit'), isTrue);

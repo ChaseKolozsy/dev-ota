@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:devota/voice/voice_commands.dart';
 import 'package:devota/voice/voice_control.dart';
@@ -11,6 +12,7 @@ class FakeSurface implements VoiceSurface {
   bool busy = false;
   bool canSend = true;
   String composer = '';
+  List<String> screen = const [];
   final ran = <String>[];
   int sends = 0;
   List<VoiceTarget> Function(FakeSurface) build = defaultTargets;
@@ -66,6 +68,8 @@ class FakeSurface implements VoiceSurface {
     return true;
   }
 
+  @override
+  List<String> get terminalScreenLines => screen;
   @override
   void clearComposer() => composer = '';
   @override
@@ -242,6 +246,92 @@ void main() {
     expect(reply.toJson()['stop'], isTrue);
   });
 
+  group('reading aloud', () {
+    List<String> fixture(String name) =>
+        File('test/fixtures/voice_read/$name').readAsLinesSync();
+
+    test('read screen reads the visible screen in chunks', () {
+      surface.screen = fixture('claude_code_reply.txt');
+      final reply = control.handle('read screen');
+      expect(control.statusLine, 'reading screen…');
+      expect(reply.tone, 'command');
+      expect(reply.read, isNotEmpty);
+      expect(reply.read!.first, startsWith('Yes, it will read Codex too.'));
+      expect(reply.read!.join(' '), contains('Waiting for 5 background'));
+      expect(reply.toJson()['read'], reply.read);
+      expect(surface.ran, isEmpty);
+      expect(surface.composer, isEmpty);
+    });
+
+    test('read reply reads only the latest answer', () {
+      surface.screen = fixture('codex_working.txt');
+      final reply = control.handle('Read reply.');
+      expect(control.statusLine, 'reading reply…');
+      expect(reply.read, [
+        "I'll look at how the status bar is drawn on the phone first.",
+      ]);
+    });
+
+    test('works while not connected or while a macro runs', () {
+      surface.screen = fixture('plain_shell.txt');
+      surface.connected = false;
+      expect(control.handle('read screen').read, isNotEmpty);
+      surface.connected = true;
+      surface.busy = true;
+      expect(control.handle('read reply').read, isNotEmpty);
+    });
+
+    test('nothing to read says so', () {
+      surface.screen = const ['', '──────', ''];
+      final reply = control.handle('read screen');
+      expect(reply.read, isNull);
+      expect(reply.speak, 'Nothing to read');
+      expect(reply.tone, 'error');
+      expect(control.statusLine, 'nothing to read');
+    });
+
+    test('stop reading stops, and so does any other command', () {
+      final stop = control.handle('stop reading');
+      expect(stop.stopReading, isTrue);
+      expect(stop.toJson()['stopReading'], isTrue);
+      expect(control.statusLine, 'stopped reading');
+      expect(control.handle('page up').stopReading, isTrue);
+      expect(surface.ran, ['page_up']);
+      surface.composer = 'x';
+      expect(control.handle('send').stopReading, isTrue);
+      expect(control.handle('clear').stopReading, isTrue);
+      expect(control.handle('control c').stopReading, isTrue);
+      expect(control.handle('no').stopReading, isTrue);
+      expect(control.handle('stop listening').stopReading, isTrue);
+      surface.screen = fixture('plain_shell.txt');
+      expect(control.handle('read screen').stopReading, isTrue);
+    });
+
+    test('dictation does not stop a reading', () {
+      final reply = control.handle('stop reading the config twice');
+      expect(reply.stopReading, isFalse);
+      expect(reply.toJson().containsKey('stopReading'), isFalse);
+      expect(surface.composer, 'stop reading the config twice');
+      // "yes" with no question waiting is a word, not a command.
+      expect(control.handle('yes').stopReading, isFalse);
+    });
+
+    test('the status line follows the phone to the end of the reading', () {
+      surface.screen = fixture('plain_shell.txt');
+      control.handle('read screen');
+      control.readingEnded('finished');
+      expect(control.statusLine, 'finished reading');
+      control.handle('read reply');
+      control.readingEnded('failed');
+      expect(control.statusLine, 'could not read aloud');
+      // A later outcome is not overwritten by a late end.
+      control.handle('read reply');
+      control.handle('page up');
+      control.readingEnded('stopped');
+      expect(control.statusLine, "heard 'page up' — Page Up");
+    });
+  });
+
   group('session', () {
     const channel = MethodChannel('devota/voice_control_test');
     late List<MethodCall> calls;
@@ -301,6 +391,37 @@ void main() {
       expect(await say('page up'), {'stop': true});
       expect(surface.ran, ['page_up']);
     });
+
+    test(
+      'a read reply carries the chunks; the end updates the status',
+      () async {
+        surface.screen = File(
+          'test/fixtures/voice_read/codex_reply.txt',
+        ).readAsLinesSync();
+        await session.setEnabled(true);
+        final reply = await say('read reply');
+        expect(reply?['tone'], 'command');
+        expect(reply?['stopReading'], isTrue);
+        expect((reply?['read'] as List).first, startsWith('All three suites'));
+        expect(session.statusLine, 'Voice: reading reply…');
+        const codec = StandardMethodCodec();
+        await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .handlePlatformMessage(
+              channel.name,
+              codec.encodeMethodCall(
+                const MethodCall('reading', {
+                  'active': false,
+                  'reason': 'finished',
+                }),
+              ),
+              (_) {},
+            );
+        expect(session.statusLine, 'Voice: finished reading');
+        final stop = await say('stop reading');
+        expect(stop?['stopReading'], isTrue);
+        expect(session.statusLine, 'Voice: stopped reading');
+      },
+    );
 
     test('"stop listening" turns the toggle off', () async {
       await session.setEnabled(true);

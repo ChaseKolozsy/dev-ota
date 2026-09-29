@@ -11,6 +11,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'screen_reader.dart';
 import 'voice_commands.dart';
 
 /// The Terminal tab, as voice control sees it.
@@ -37,21 +38,47 @@ abstract class VoiceSurface {
   void clearComposer();
   void composerBackspace(int count);
   void composerDeleteWords(int count);
+
+  /// The rows the terminal is showing right now, top to bottom, read from
+  /// the tab's own terminal buffer.
+  List<String> get terminalScreenLines;
 }
 
 /// What the Android service does after an utterance.
 class VoiceReply {
-  const VoiceReply({this.tone, this.speak, this.stop = false});
+  const VoiceReply({
+    this.tone,
+    this.speak,
+    this.stop = false,
+    this.read,
+    this.stopReading = false,
+  });
 
   /// command | dictation | error
   final String? tone;
   final String? speak;
   final bool stop;
 
+  /// Text to read aloud, in chunks; the recognizer listens between them.
+  final List<String>? read;
+
+  /// Stop reading aloud before doing anything else.
+  final bool stopReading;
+
+  VoiceReply _stoppingReading() => VoiceReply(
+    tone: tone,
+    speak: speak,
+    stop: stop,
+    read: read,
+    stopReading: true,
+  );
+
   Map<String, Object?> toJson() => {
     if (tone != null) 'tone': tone,
     if (speak != null) 'speak': speak,
     if (stop) 'stop': true,
+    if (read != null) 'read': read,
+    if (stopReading) 'stopReading': true,
   };
 }
 
@@ -88,7 +115,13 @@ class VoiceControl extends ChangeNotifier {
     final heard = utterance.trim();
     if (heard.isEmpty) return const VoiceReply();
     final match = matcher.match(heard, surface.voiceTargets);
+    final reply = _decide(heard, match);
+    // Any command stops a reading first; dictation lets it carry on.
+    final dictation = match is DictationMatch || reply.tone == 'dictation';
+    return dictation ? reply : reply._stoppingReading();
+  }
 
+  VoiceReply _decide(String heard, VoiceMatch match) {
     final waiting = _pending;
     if (waiting != null) {
       if (match is YesMatch) {
@@ -109,6 +142,12 @@ class VoiceControl extends ChangeNotifier {
     if (match is StopListeningMatch) {
       return _status('stopped', const VoiceReply(tone: 'command', stop: true));
     }
+    // Reading only looks at the tab's own screen: it needs no connection and
+    // sends nothing, so it works while a macro runs too.
+    if (match is StopReadingMatch) {
+      return _status('stopped reading', const VoiceReply(tone: 'command'));
+    }
+    if (match is ReadMatch) return _read(match.target);
     if (!surface.voiceConnected) {
       return _status(
         "heard '$heard' — not connected",
@@ -164,8 +203,44 @@ class VoiceControl extends ChangeNotifier {
           const VoiceReply(tone: 'dictation'),
         );
       case StopListeningMatch():
+      case StopReadingMatch():
+      case ReadMatch():
         return const VoiceReply();
     }
+  }
+
+  static const _readingScreen = 'reading screen…';
+  static const _readingReply = 'reading reply…';
+
+  VoiceReply _read(ReadTarget target) {
+    final lines = surface.terminalScreenLines;
+    final reading = switch (target) {
+      ReadTarget.screen => readScreen(lines),
+      ReadTarget.reply => readReply(lines),
+    };
+    final chunks = speechChunks(reading.text);
+    if (chunks.isEmpty) {
+      return _status(
+        'nothing to read',
+        const VoiceReply(tone: 'error', speak: 'Nothing to read'),
+      );
+    }
+    return _status(
+      target == ReadTarget.screen ? _readingScreen : _readingReply,
+      VoiceReply(tone: 'command', read: chunks),
+    );
+  }
+
+  /// The phone finished (or gave up) reading aloud: finished | stopped |
+  /// failed.
+  void readingEnded(String reason) {
+    if (statusLine != _readingScreen && statusLine != _readingReply) return;
+    statusLine = switch (reason) {
+      'finished' => 'finished reading',
+      'failed' => 'could not read aloud',
+      _ => 'stopped reading',
+    };
+    notifyListeners();
   }
 
   VoiceReply _runTarget(
@@ -360,6 +435,11 @@ class VoiceControlSession extends ChangeNotifier {
       case 'state':
         nativeState = args['state']?.toString();
         _changed();
+        return null;
+      case 'reading':
+        if (args['active'] != true) {
+          control.readingEnded(args['reason']?.toString() ?? 'stopped');
+        }
         return null;
       case 'stopped':
         if (_enabled) {
