@@ -30,11 +30,6 @@ TmuxWatchTransport sshWatchTransport(
       'python3 dev-ota/server/terminal_review.py',
       input: jsonEncode({'text': text}),
     ),
-    // Car dictation only; nothing calls it while car control is off.
-    transcriber: (wavBase64) => host.execute(
-      'python3 dev-ota/server/terminal_transcribe.py',
-      input: jsonEncode({'audio': wavBase64, 'language': 'en'}),
-    ),
   );
 }
 

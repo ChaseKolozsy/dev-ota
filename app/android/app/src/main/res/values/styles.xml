@@ -15,12 +15,4 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
-    <!-- The car voice-button trampoline: transparent, no title, no animation.
-         It finishes as soon as it has handed the press to car control. -->
-    <style name="CarTrampolineTheme" parent="@android:style/Theme.Translucent.NoTitleBar">
-        <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowIsFloating">false</item>
-        <item name="android:backgroundDimEnabled">false</item>
-    </style>
 </resources>
