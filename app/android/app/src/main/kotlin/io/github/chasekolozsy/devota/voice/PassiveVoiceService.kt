@@ -262,7 +262,13 @@ internal class PassiveVoiceService : Service(), LoopListener {
             return
         }
         val tone = reply["tone"] as? String
-        val speech = (reply["speak"] as? String)?.takeIf { it.isNotBlank() }
+        val deferred = deferredSpeech.joinToString(" ")
+        deferredSpeech.clear()
+        handler.removeCallbacks(flushDeferred)
+        val speech = listOf(deferred, reply["speak"] as? String ?: "")
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .takeIf { it.isNotBlank() }
         quieter.off()
         val toneMs = if (tone != null && VoiceTones.known(tone)) playTone(tone) else 0L
         handler.postDelayed({
@@ -307,8 +313,29 @@ internal class PassiveVoiceService : Service(), LoopListener {
         refreshNotification()
     }
 
+    private val deferredSpeech = ArrayDeque<String>()
+    private val flushDeferred = object : Runnable {
+        override fun run() {
+            if (stopped || deferredSpeech.isEmpty()) return
+            if (loop.userSpeaking) {
+                handler.postDelayed(this, 500)
+                return
+            }
+            val text = deferredSpeech.joinToString(" ")
+            deferredSpeech.clear()
+            speak(text)
+        }
+    }
+
     internal fun speak(text: String) {
         if (stopped || text.isBlank()) return
+        if (loop.userSpeaking) {
+            // Never talk over the owner: say it once their utterance ends.
+            deferredSpeech.addLast(text.take(1_000))
+            handler.removeCallbacks(flushDeferred)
+            handler.postDelayed(flushDeferred, 500)
+            return
+        }
         loop.hold(ListeningLoop.SPEAK)
         quieter.off()
         speechQueue.addLast(text.take(3_500))

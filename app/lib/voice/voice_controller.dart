@@ -77,7 +77,7 @@ class VoiceController extends ChangeNotifier {
     required this.terminal,
     required this.host,
     VoiceTimerFactory? timer,
-    this.confirmTimeout = const Duration(seconds: 10),
+    this.confirmTimeout = const Duration(seconds: 12),
   }) : _timer = timer ?? Timer.new;
 
   final VoiceTerminal terminal;

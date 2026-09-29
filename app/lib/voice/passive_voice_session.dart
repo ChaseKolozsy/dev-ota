@@ -108,10 +108,20 @@ class PassiveVoiceSession extends ChangeNotifier implements VoiceHost {
       // On before the call so the first transcript is not refused.
       _enabled = true;
       _publishedStatus = controller.statusLine;
-      await _channel.invokeMethod<bool>('start', {
-        'quietBeeps': quietBeeps,
-        'status': _publishedStatus,
-      });
+      final args = {'quietBeeps': quietBeeps, 'status': _publishedStatus};
+      try {
+        await _channel.invokeMethod<bool>('start', args);
+      } on PlatformException catch (error) {
+        // A permission dialog just closed: Android may resume the activity a
+        // moment after the grant arrives. Ask once more before giving up.
+        if (error.code != 'refused' ||
+            !(error.message ?? '').startsWith('Open DevOTA')) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        if (_disposed || !_enabled) return false;
+        await _channel.invokeMethod<bool>('start', args);
+      }
       nativeState = 'Starting';
       return true;
     } on PlatformException catch (error) {

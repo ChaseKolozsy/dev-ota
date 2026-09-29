@@ -64,6 +64,9 @@ internal class ListeningLoop(
     val held: Set<String> get() = holds
     val listening get() = sessionActive
 
+    /** The owner is mid-utterance: speaking now would cut them off. */
+    val userSpeaking get() = sessionActive && heardSpeech
+
     fun enable() {
         if (enabled) return
         enabled = true

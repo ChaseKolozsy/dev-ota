@@ -105,6 +105,17 @@ class PassiveVoiceTest {
     }
 
     @Test
+    fun `the owner speaking is visible so DevOTA never talks over them`() {
+        loop.enable()
+        scheduler.runAll()
+        assertFalse(loop.userSpeaking)
+        loop.onBeginningOfSpeech(port.lastSession)
+        assertTrue(loop.userSpeaking)
+        loop.onResults(port.lastSession, "hello")
+        assertFalse(loop.userSpeaking)
+    }
+
+    @Test
     fun `speech, playback and calls pause listening until every hold is released`() {
         loop.enable()
         scheduler.runAll()
