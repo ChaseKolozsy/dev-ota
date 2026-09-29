@@ -104,8 +104,13 @@ class TmuxWatchTransport {
 
   String _guard(WatchedPane pane) {
     if (!RegExp(r'^%\d+$').hasMatch(pane.id)) throw StateError('Invalid pane');
-    return 'test "\$(tmux display-message -p -t ${shellQuote(pane.id)} '
-        '${shellQuote(identityFormat)})" = ${shellQuote(pane.identity)} && ';
+    // Say WHY on failure: a bare `test` exits 1 silently, and the phone could
+    // only report "window unavailable (SSH command failed…)" for a binding
+    // that had gone stale when the tmux server or the pane restarted.
+    return '{ test "\$(tmux display-message -p -t ${shellQuote(pane.id)} '
+        '${shellQuote(identityFormat)})" = ${shellQuote(pane.identity)} || '
+        '{ echo "window changed since it was bound: bind it again" >&2; '
+        'exit 3; }; } && ';
   }
 
   Future<String> capture(WatchedPane pane) => command(
