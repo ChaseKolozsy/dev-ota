@@ -35,6 +35,28 @@ String? notificationMacroError(TerminalMacro macro) {
   return null;
 }
 
+/// Backspace read-back from two plain captures: when exactly one line
+/// changed and the new line is a prefix of the old one, the removed suffix;
+/// otherwise null (count-only read-back).
+String? carDeletedText(String before, String after) {
+  final a = before.split('\n');
+  final b = after.split('\n');
+  if (a.length != b.length) return null;
+  String? deleted;
+  for (var i = 0; i < a.length; i++) {
+    final x = a[i].trimRight();
+    final y = b[i].trimRight();
+    if (x == y) continue;
+    if (deleted != null || !x.startsWith(y) || x.length == y.length) {
+      return null;
+    }
+    // tmux trims trailing blanks, so a deleted word keeps its leading space.
+    deleted = a[i].substring(y.length).trim();
+    if (deleted.isEmpty) deleted = ' ';
+  }
+  return deleted;
+}
+
 class WatchedPane {
   const WatchedPane({
     required this.id,
@@ -78,9 +100,13 @@ class TerminalWatchBinding {
 /// No screen/widget dependency: captures and keystrokes use separate SSH exec
 /// channels, never the currently selected interactive terminal window.
 class TmuxWatchTransport {
-  TmuxWatchTransport(this.command, {this.reviewer});
+  TmuxWatchTransport(this.command, {this.reviewer, this.transcriber});
   final TerminalCommand command;
   final Future<String> Function(String text)? reviewer;
+
+  /// Home Whisper transcription over the same SSH route (car dictation
+  /// only). Takes a base64 16 kHz mono WAV; returns the helper's JSON reply.
+  final Future<String> Function(String wavBase64)? transcriber;
   static const identityFormat = '#{pid}:#{session_created}:#{pane_pid}';
 
   Future<List<WatchedPane>> panes() async {
@@ -142,6 +168,46 @@ class TmuxWatchTransport {
       '${_guard(pane)}tmux send-keys -H -t ${shellQuote(pane.id)} $bytes',
     );
   }
+
+  /// Car mode: raw key bytes (from the voice grammar) as hex send-keys.
+  Future<void> sendBytes(WatchedPane pane, String sequence) async {
+    if (sequence.isEmpty || sequence.length > 4096) {
+      throw StateError('Invalid key bytes');
+    }
+    final bytes = utf8
+        .encode(sequence)
+        .map((b) => b.toRadixString(16))
+        .join(' ');
+    await command(
+      '${_guard(pane)}tmux send-keys -H -t ${shellQuote(pane.id)} $bytes',
+    );
+  }
+
+  /// Leaves tmux copy mode so keys never land in it (proposal S5).
+  Future<void> leaveCopyMode(WatchedPane pane) => command(
+    '${_guard(pane)}if [ "\$(tmux display-message -p -t ${shellQuote(pane.id)} '
+    "'#{pane_in_mode}')\" = 1 ]; then tmux send-keys -t ${shellQuote(pane.id)} "
+    '-X cancel; fi',
+  );
+
+  /// Car mode: scroll the pane's history in tmux copy mode.
+  Future<void> scroll(WatchedPane pane, int lines, {required bool up}) {
+    final n = lines.clamp(1, 200);
+    final target = shellQuote(pane.id);
+    return command(
+      up
+          ? '${_guard(pane)}tmux copy-mode -t $target && '
+                'tmux send-keys -t $target -X -N $n scroll-up'
+          : '${_guard(pane)}if [ "\$(tmux display-message -p -t $target '
+                "'#{pane_in_mode}')\" = 1 ]; then tmux send-keys -t $target "
+                '-X -N $n scroll-down; fi',
+    );
+  }
+
+  /// Plain-text pane capture (no escapes) for backspace read-back.
+  Future<String> capturePlain(WatchedPane pane) => command(
+    '${_guard(pane)}tmux capture-pane -p -t ${shellQuote(pane.id)}',
+  );
 }
 
 class PaneObservation {
@@ -536,37 +602,14 @@ class TerminalWatchController extends ChangeNotifier {
         await transport.key(binding.pane, 'enter');
         _checkRun(generation);
       } else {
-        for (var i = 0; i < macro.steps.length; i++) {
-          _checkRun(generation);
-          final step = macro.steps[i];
-          progress = '${macro.name} · step ${i + 1}/${macro.steps.length}';
-          _notify();
-          switch (step.type) {
-            case TerminalMacroStepType.shell:
-              if (step.value.trim().isNotEmpty) {
-                inputAttempted = true;
-                await transport.paste(binding.pane, step.value);
-                await _delay(terminalPasteSettleTime, generation);
-                if (commandNeedsEnter(macro.steps, i)) {
-                  await transport.key(binding.pane, 'enter');
-                  state.submissionUnconfirmed = true;
-                }
-              }
-            case TerminalMacroStepType.terminalKey:
-              inputAttempted = true;
-              await transport.key(binding.pane, step.value);
-              if (step.value == 'enter') state.submissionUnconfirmed = true;
-            case TerminalMacroStepType.wait:
-            case TerminalMacroStepType.tmux:
-              break; // Initial selection is overridden by the bound pane ID.
-            case TerminalMacroStepType.device:
-              throw StateError('Device macro is not a terminal macro');
-          }
-          await _delay(
-            Duration(milliseconds: (step.delaySeconds * 1000).round()),
-            generation,
-          );
-        }
+        await _runMacroSteps(
+          macro,
+          binding.pane,
+          state,
+          transport,
+          generation,
+          () => inputAttempted = true,
+        );
       }
       state.error = null;
       if (action == 'run') state.macroSent = true;
@@ -586,6 +629,243 @@ class TerminalWatchController extends ChangeNotifier {
       progress = null;
       _notify();
     }
+  }
+
+  Future<void> _runMacroSteps(
+    TerminalMacro macro,
+    WatchedPane pane,
+    PaneObservation state,
+    TmuxWatchTransport transport,
+    int generation,
+    void Function() markInput,
+  ) async {
+    for (var i = 0; i < macro.steps.length; i++) {
+      _checkRun(generation);
+      final step = macro.steps[i];
+      progress = '${macro.name} · step ${i + 1}/${macro.steps.length}';
+      _notify();
+      switch (step.type) {
+        case TerminalMacroStepType.shell:
+          if (step.value.trim().isNotEmpty) {
+            markInput();
+            await transport.paste(pane, step.value);
+            await _delay(terminalPasteSettleTime, generation);
+            if (commandNeedsEnter(macro.steps, i)) {
+              await transport.key(pane, 'enter');
+              state.submissionUnconfirmed = true;
+            }
+          }
+        case TerminalMacroStepType.terminalKey:
+          markInput();
+          await transport.key(pane, step.value);
+          if (step.value == 'enter') state.submissionUnconfirmed = true;
+        case TerminalMacroStepType.wait:
+        case TerminalMacroStepType.tmux:
+          break; // Initial selection is overridden by the bound pane ID.
+        case TerminalMacroStepType.device:
+          throw StateError('Device macro is not a terminal macro');
+      }
+      await _delay(
+        Duration(milliseconds: (step.delaySeconds * 1000).round()),
+        generation,
+      );
+    }
+  }
+
+  /// Car-mode input to a bound pane (steering-wheel proposal §7, §8.9).
+  ///
+  /// Uses the same guards as notification actions: pane identity on every
+  /// tmux command, a fresh observation, the busy lock, and (for text and
+  /// macros) a settled screen that a fresh capture still matches. Keys such
+  /// as Escape or Ctrl-C only need a fresh, identified pane, because
+  /// interrupting a working agent is their purpose. Leaves tmux copy mode
+  /// before any input. Returns null on success, otherwise a short spoken
+  /// reason. Nothing is ever retried.
+  Future<String?> carInput(
+    String paneId,
+    Future<void> Function(
+      TmuxWatchTransport transport,
+      WatchedPane pane,
+      PaneObservation state,
+      int generation,
+    )
+    send, {
+    bool requireSettled = false,
+    bool leaveCopyMode = true,
+    bool submits = false,
+  }) async {
+    if (_disposed) return 'app closed';
+    if (busy || externalBusy) return 'window busy';
+    final matching = bindings.where((b) => b.pane.id == paneId);
+    if (matching.isEmpty) return 'window not bound';
+    final binding = matching.first;
+    final transport = _transport;
+    if (transport == null) return 'SSH disconnected';
+    final state = observations[paneId];
+    final fresh =
+        state != null &&
+        state.error == null &&
+        state.observedAt != null &&
+        now().difference(state.observedAt!) <= freshness;
+    if (!fresh) return 'window unavailable';
+    if (requireSettled && !state.settled(now(), quietPeriod, freshness)) {
+      return 'window still changing';
+    }
+    final generation = _generation;
+    _busy = true;
+    _stop = false;
+    runningPane = paneId;
+    progress = 'Car input';
+    state.runError = null;
+    _notify();
+    var inputAttempted = false;
+    String? failure;
+    try {
+      final seen = state.content;
+      final before = await transport.capture(binding.pane);
+      _checkRun(generation);
+      final changed = before != seen || state.content != seen;
+      state.observe(before, now(), freshness);
+      if (requireSettled && changed) {
+        throw StateError('window changed');
+      }
+      if (leaveCopyMode) await transport.leaveCopyMode(binding.pane);
+      _checkRun(generation);
+      inputAttempted = true;
+      if (submits) {
+        state.submittedScreen = before;
+        state.awaitingOutput = true;
+      }
+      await send(transport, binding.pane, state, generation);
+      state.error = null;
+    } catch (error) {
+      if (inputAttempted && submits) state.submissionUnconfirmed = true;
+      failure = error is StateError
+          ? error.message.toString()
+          : 'delivery uncertain';
+      state.runError = 'Car: $failure';
+    } finally {
+      state.changedAt = now();
+      state.revision++;
+      state.verdict = null;
+      _busy = false;
+      runningPane = null;
+      progress = null;
+      _notify();
+    }
+    return failure;
+  }
+
+  /// Car mode: paste text, let it settle, press Enter (dictation submit and
+  /// slash commands).
+  Future<String?> carSubmitText(String paneId, String text) => carInput(
+    paneId,
+    (transport, pane, state, generation) async {
+      await transport.paste(pane, text);
+      await _delay(terminalPasteSettleTime, generation);
+      await transport.key(pane, 'enter');
+      state.submissionUnconfirmed = true;
+    },
+    requireSettled: true,
+    submits: true,
+  );
+
+  /// Car mode: raw key bytes from the voice grammar.
+  Future<String?> carSendBytes(String paneId, String bytes) => carInput(
+    paneId,
+    (transport, pane, state, generation) async {
+      await transport.sendBytes(pane, bytes);
+      if (bytes.contains('\r')) state.submissionUnconfirmed = true;
+    },
+    submits: bytes.contains('\r'),
+  );
+
+  /// Car mode: run a Command/Key/Wait macro on the car's target pane (which
+  /// need not be the macro bound to that pane's notification).
+  Future<String?> carRunMacro(String paneId, TerminalMacro macro) {
+    final error = notificationMacroError(macro);
+    if (error != null) return Future.value(error);
+    return carInput(
+      paneId,
+      (transport, pane, state, generation) async {
+        state.macroSent = false;
+        await _runMacroSteps(
+          macro,
+          pane,
+          state,
+          transport,
+          generation,
+          () {},
+        );
+        state.macroSent = true;
+      },
+      requireSettled: true,
+      submits: true,
+    );
+  }
+
+  /// Car mode: scroll in tmux copy mode (does not leave it first).
+  Future<String?> carScroll(String paneId, int lines, {required bool up}) =>
+      carInput(
+        paneId,
+        (transport, pane, state, generation) =>
+            transport.scroll(pane, lines, up: up),
+        leaveCopyMode: false,
+      );
+
+  /// Car mode: leave copy mode (back to the live bottom).
+  Future<String?> carScrollBottom(String paneId) => carInput(
+    paneId,
+    (transport, pane, state, generation) async {},
+  );
+
+  /// Car mode: the pane's recent history, cleaned for speech. Read-only, so
+  /// unlike Listen it does not need a settled screen.
+  Future<String?> carConclusion(String paneId, {int lines = 120}) async {
+    final transport = _transport;
+    final matching = bindings.where((b) => b.pane.id == paneId);
+    if (transport == null || matching.isEmpty || _disposed) return null;
+    final clean = cleanTerminalConclusion(
+      await transport.history(matching.first.pane, lines: lines),
+    );
+    if (clean.length <= 6000) return clean;
+    final tail = clean.substring(clean.length - 6000);
+    final boundary = tail.indexOf('\n');
+    return boundary >= 0 ? tail.substring(boundary + 1) : tail;
+  }
+
+  /// Car dictation through the home Whisper helper. Null when unavailable.
+  Future<String?> carTranscribe(String wavBase64) async {
+    final transcriber = _transport?.transcriber;
+    if (transcriber == null || _disposed) return null;
+    final reply = jsonDecode(await transcriber(wavBase64));
+    if (reply is! Map || reply['text'] is! String) return null;
+    return reply['text'] as String;
+  }
+
+  /// Car mode: backspace N and report what visibly disappeared, when a
+  /// before/after capture shows exactly one shortened line (§8.7).
+  Future<(String?, String?)> carBackspace(String paneId, int count) async {
+    String? deleted;
+    final failure = await carInput(paneId, (
+      transport,
+      pane,
+      state,
+      generation,
+    ) async {
+      String? before;
+      try {
+        before = await transport.capturePlain(pane);
+      } catch (_) {}
+      await transport.sendBytes(pane, '\x7f' * count.clamp(1, 200));
+      await _delay(const Duration(milliseconds: 150), generation);
+      if (before != null) {
+        try {
+          deleted = carDeletedText(before, await transport.capturePlain(pane));
+        } catch (_) {}
+      }
+    });
+    return (failure, deleted);
   }
 
   void _checkRun(int generation) {
