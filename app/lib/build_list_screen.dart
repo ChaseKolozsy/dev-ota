@@ -44,6 +44,7 @@ class _BuildListScreenState extends State<BuildListScreen>
     'io.github.chasekolozsy.devota/control_agent',
   );
   static const int _macrosTabIndex = 5;
+  static const int _qaReplaysTabIndex = 6;
   late final TabController _tabController;
   List<String> _servers = [];
   String _activeServer = _defaultServerUrl;
@@ -124,7 +125,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       },
     );
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 9, vsync: this);
+    _tabController = TabController(length: 10, vsync: this);
     _tabController.addListener(_onTabControllerChanged);
     _macroController.addListener(_onMacroControllerChanged);
     _loadBuildUsePreferences();
@@ -183,7 +184,8 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   void _onTabControllerChanged() {
-    if (_tabController.index == _macrosTabIndex &&
+    if ((_tabController.index == _macrosTabIndex ||
+            _tabController.index == _qaReplaysTabIndex) &&
         !_tabController.indexIsChanging) {
       unawaited(_syncMacrosFromServerSilently());
     }
@@ -584,7 +586,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   /// Drops a dragged macro at [targetRankedIndex] of the ranked order shared by
-  /// the Macros tab and the terminal macro bar.
+  /// both macro tabs and the terminal macro bar.
   void _moveMacroToRank(String macroId, int targetRankedIndex) {
     final reordered = repositionTerminalMacro(
       _macros,
@@ -614,11 +616,15 @@ class _BuildListScreenState extends State<BuildListScreen>
     _moveMacroToRank(quick[fromIndex].id, targetRank);
   }
 
-  Future<void> _addMacro() async {
+  Future<void> _addMacro({bool qaReplay = false}) async {
     final macro = TerminalMacro(
       id: newTerminalMacroId('macro'),
-      name: 'New macro',
-      steps: [newTerminalMacroStep(TerminalMacroStepType.shell)],
+      name: qaReplay ? 'New QA replay' : 'New macro',
+      steps: [
+        newTerminalMacroStep(
+          qaReplay ? TerminalMacroStepType.device : TerminalMacroStepType.shell,
+        ),
+      ],
     );
     final edited = await _showMacroEditor(macro, isNew: true);
     if (edited == null) return;
@@ -1605,6 +1611,7 @@ class _BuildListScreenState extends State<BuildListScreen>
                       _CompactTab(icon: Icons.terminal, label: 'Terminal'),
                       _CompactTab(icon: Icons.terminal, label: 'Commands'),
                       _CompactTab(icon: Icons.playlist_play, label: 'Macros'),
+                      _CompactTab(icon: Icons.replay, label: 'QA replays'),
                       _CompactTab(icon: Icons.hub, label: 'Agent'),
                       _CompactTab(icon: Icons.sync, label: 'Backup'),
                       _CompactTab(
@@ -1738,6 +1745,7 @@ class _BuildListScreenState extends State<BuildListScreen>
         ),
         _buildCommandsTab(),
         _buildMacrosTab(),
+        _buildMacrosTab(qaReplay: true),
         _buildAgentTab(),
         BackupTab(
           dio: _dio,
@@ -2111,8 +2119,10 @@ class _BuildListScreenState extends State<BuildListScreen>
     );
   }
 
-  Widget _buildMacrosTab() {
-    final rankedMacros = _rankedMacros;
+  Widget _buildMacrosTab({bool qaReplay = false}) {
+    final rankedMacros = _rankedMacros
+        .where((macro) => macro.isDeviceMacro == qaReplay)
+        .toList();
     final progress = _visibleMacroProgress;
     final running = _anyMacroRunning;
     return Column(
@@ -2128,9 +2138,12 @@ class _BuildListScreenState extends State<BuildListScreen>
                             'it to the top or bottom.'
                       : progress != null
                       ? 'Running ${progress.macroName} — ${progress.stepLabel}'
-                      : _lastDeviceMacroRunId == null
-                      ? 'Hold a macro to reposition it. Create terminal '
-                            'sequences or visible device integration tests.'
+                      : !qaReplay || _lastDeviceMacroRunId == null
+                      ? qaReplay
+                            ? 'Hold a replay to reposition it. Run visible '
+                                  'device tests and collect evidence.'
+                            : 'Hold a macro to reposition it. Create terminal '
+                                  'authoring sequences.'
                       : 'Last device evidence: $_lastDeviceMacroRunId',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -2142,8 +2155,8 @@ class _BuildListScreenState extends State<BuildListScreen>
               const SizedBox(width: 8),
               FilledButton.icon(
                 icon: const Icon(Icons.add),
-                label: const Text('Macro'),
-                onPressed: _addMacro,
+                label: Text(qaReplay ? 'Replay' : 'Macro'),
+                onPressed: () => _addMacro(qaReplay: qaReplay),
               ),
             ],
           ),
@@ -2154,7 +2167,9 @@ class _BuildListScreenState extends State<BuildListScreen>
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'No macros yet.\nAdd terminal or visible device-test steps.',
+                      qaReplay
+                          ? 'No QA replays yet.\nAdd visible device-test steps.'
+                          : 'No authoring macros yet.\nAdd terminal authoring steps.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -2174,8 +2189,13 @@ class _BuildListScreenState extends State<BuildListScreen>
                   onRepositionEnd: (_) {
                     if (mounted) setState(() => _repositioningMacro = false);
                   },
-                  onReposition: (fromIndex, toIndex) =>
-                      _moveMacroToRank(rankedMacros[fromIndex].id, toIndex),
+                  onReposition: (fromIndex, toIndex) {
+                    final target = toIndex.clamp(0, rankedMacros.length - 1);
+                    final targetRank = _rankedMacros.indexWhere(
+                      (macro) => macro.id == rankedMacros[target].id,
+                    );
+                    _moveMacroToRank(rankedMacros[fromIndex].id, targetRank);
+                  },
                   itemBuilder: (context, index) {
                     final macro = rankedMacros[index];
                     final uses = _macroUseCounts[macro.id] ?? 0;
