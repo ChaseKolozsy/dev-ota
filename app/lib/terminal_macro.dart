@@ -187,6 +187,13 @@ class TerminalMacro {
   bool get isDeviceMacro =>
       steps.any((step) => step.type == TerminalMacroStepType.device);
 
+  bool get needsQueueRoster => steps.any(
+    (step) =>
+        step.type == TerminalMacroStepType.shell &&
+        (step.value.contains('{{devota:ceb-primer:') ||
+            step.value.contains('{{devota:cradle:')),
+  );
+
   TerminalMacro copyWith({
     String? id,
     String? name,

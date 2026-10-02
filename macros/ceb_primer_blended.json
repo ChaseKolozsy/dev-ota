@@ -1,0 +1,113 @@
+[
+  {
+    "id": "macro-cradlespeak-ceb-primer",
+    "name": "CEB -> BLD",
+    "priority": 230,
+    "steps": [
+      {
+        "id": "ceb-bld-forward-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:forward}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-forward-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-1788487758181681-4b28fdf1",
+    "name": "CEB --- BLD",
+    "priority": 229,
+    "steps": [
+      {
+        "id": "ceb-bld-middle-window",
+        "type": "tmux",
+        "value": "2",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:middle}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-middle-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-1788487758193655-a94d23a1",
+    "name": "CEB <-- BLD",
+    "priority": 228,
+    "steps": [
+      {
+        "id": "ceb-bld-reverse-window",
+        "type": "tmux",
+        "value": "3",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:reverse}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-reverse-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  }
+]

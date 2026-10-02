@@ -30,7 +30,7 @@ import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from PIL import Image, UnidentifiedImageError
 
@@ -75,6 +75,109 @@ MACRO_STEP_DEFAULT_VALUES = {
 }
 MACRO_STORE_FORMAT = "devota-terminal-macros"
 MACRO_STORE_VERSION = 3
+CEB_PRIMER_ROSTER = re.compile(r"\{\{devota:ceb-primer:(forward|middle|reverse)\}\}")
+CEB_PRIMER_QUEUE_URL = "http://localhost:8002/lessons/blended-definition-queue?lang=ceb&source=primer_first_1000"
+CEB_PRIMER_KITS_DIR = Path("/home/chase/Cradlespeak/batches/devota-ceb-primer")
+CRADLE_AUTHORING_ROSTER = re.compile(r"\{\{devota:cradle:(en|hu|ceb|tl):(creative-full|creative-rank|primer-commentary|ogden-commentary):(forward|middle|reverse)\}\}")
+CRADLE_AUTHORING_KITS_DIR = Path("/home/chase/Cradlespeak/batches/devota-authoring")
+
+
+def cradle_get(path: str) -> Any:
+    with urllib.request.urlopen("http://localhost:8002" + path, timeout=90) as response:
+        return json.load(response)
+
+
+def select_cradle_authoring(lang: str, family: str, order: str) -> list[dict[str, Any]]:
+    if family.endswith("commentary"):
+        style = family.replace("-", "_")
+        queue = cradle_get(f"/lessons/commentary-coverage?lang={lang}&approved=true&missing={style}&limit=0")
+        rows = queue.get("lessons")
+        if queue.get("lang") != lang or not isinstance(rows, list) or queue.get("filtered_total") != len(rows):
+            raise ValueError("Cradle returned an incomplete commentary queue")
+        candidates = [{"topic": row["topic"], "source_id": row["id"], "lesson_style": style}
+                      for row in rows if row.get("approved") is True and not row.get("has_" + style)]
+    else:
+        queue = cradle_get(f"/lessons/creative-vocabulary-queue?lang={lang}")
+        rows = queue.get("words")
+        if queue.get("lang") != lang or not isinstance(rows, list):
+            raise ValueError("Cradle returned an invalid creative queue")
+        if family == "creative-rank":
+            rows = sorted((row for row in rows if "primer" in row.get("sources", []) and isinstance(row.get("rank"), int)), key=lambda row: row["rank"])
+        else:
+            rows = [row for row in rows if "primer" not in row.get("sources", [])]
+            if lang == "ceb":
+                priority = ("ux", "booteye", "backstage")
+                rows.sort(key=lambda row: next((i for i, source in enumerate(priority) if source in row.get("sources", [])), len(priority)))
+            elif lang in ("en", "tl"):
+                # Keep the established 10 Backstage / 10 UX mix, deduplicated.
+                selected, seen = [], set()
+                for source in ("backstage", "ux"):
+                    for row in [r for r in rows if source in r.get("sources", []) and r["lemma"] not in seen][:10]:
+                        selected.append(row); seen.add(row["lemma"])
+                rows = selected + [row for row in rows if row["lemma"] not in seen and any(s in row.get("sources", []) for s in ("backstage", "ux"))]
+        candidates = [{"topic": row["lemma"], "rank": row.get("rank"), "sources": row.get("sources", []),
+                       "pool_mode": "rank_strict" if family == "creative-rank" else "full_pool",
+                       "lesson_style": "creative"} for row in rows]
+    size = min(20, len(candidates))
+    if order == "reverse":
+        return list(reversed(candidates[-size:])) if size else []
+    start = max(0, (len(candidates) - size) // 2) if order == "middle" else 0
+    return candidates[start:start + size]
+
+
+def prepare_cradle_authoring(lang: str, family: str, roster: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not roster:
+        return []
+    agent = ("draft-arachnomind-lesson" if family == "creative-rank" else
+             "draft-arachnomind-ux-creative" if family == "creative-full" else
+             "generate-arachnomind-" + family)
+    token = agent.replace("draft-arachnomind-", "").replace("generate-arachnomind-", "")
+    CRADLE_AUTHORING_KITS_DIR.mkdir(parents=True, exist_ok=True)
+    batch = Path(tempfile.mkdtemp(prefix=f"{lang}-{family}-", dir=CRADLE_AUTHORING_KITS_DIR))
+    assignments = []
+    try:
+        for index, word in enumerate(roster, start=1):
+            root = batch / f"topic-{index:02d}"
+            body = {"agent": agent, "lang": lang, "format": "codex", "topic": word["topic"], "path": str(root)}
+            request = urllib.request.Request("http://localhost:8002/agents/generate", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=60) as response:
+                generated = json.load(response)
+            skill = root / "skills" / f"{lang}-{token}" / "SKILL.md"
+            if generated.get("path") != str(root) or generated.get("agent") != agent or not skill.is_file() or not (root / "compile_one.py").is_file() or not (root / "submit_one.py").is_file():
+                raise ValueError("Cradle kit generation did not produce the assigned kit")
+            if family == "creative-rank":
+                pool = cradle_get(f"/conventions/allowed-lemmas/{lang}/for/" + quote(word["topic"], safe=""))
+                if pool.get("mode") != "rank_strict" or pool.get("topic_rank") != word["rank"]:
+                    raise ValueError("Cradle generated the wrong rank-strict vocabulary")
+                (root / "topic_pool.json").write_text(json.dumps({"lang": lang, "topic": word["topic"], **pool}, ensure_ascii=False), encoding="utf-8")
+            elif family.endswith("commentary"):
+                semantic_body = {**body, "agent": agent + "-semantic"}
+                request = urllib.request.Request("http://localhost:8002/agents/generate", data=json.dumps(semantic_body).encode(), headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    semantic = json.load(response)
+                semantic_skill = root / "skills" / f"{lang}-{token}-semantic" / "SKILL.md"
+                if semantic.get("path") != str(root) or not semantic_skill.is_file():
+                    raise ValueError("Cradle did not generate the semantic commentary kit")
+                sid = quote(word["source_id"], safe="")
+                meta = cradle_get(f"/lesson/{sid}?format=shorthand")
+                blocks = cradle_get(f"/lesson/{sid}/blocks?format=shorthand")
+                if not blocks.get("shorthand"):
+                    raise ValueError("Cradle did not return the assigned source shorthand")
+                packet = {"id": word["source_id"], "topic": word["topic"], "lang": lang,
+                          "lesson_style": meta.get("lesson_style"), "shorthand": blocks["shorthand"],
+                          "anchor_words": meta.get("anchor_words", [])}
+                if meta.get("wiki_id"):
+                    packet["wiki_parts"] = cradle_get("/wiki/" + quote(meta["wiki_id"], safe="")).get("parts", {})
+                (root / "source_packet.json").write_text(json.dumps(packet, ensure_ascii=False), encoding="utf-8")
+            assignment = {**word, "kit_path": str(skill), "draft_path": str(root / "draft.json")}
+            if family.endswith("commentary"):
+                assignment["semantic_kit_path"] = str(semantic_skill)
+                assignment["anchor_words"] = packet["anchor_words"]
+            assignments.append(assignment)
+        return assignments
+    except Exception:
+        shutil.rmtree(batch)
+        raise
 DEVICE_MACRO_ACTIONS = {
     "launchApp",
     "launchIntent",
@@ -2634,6 +2737,89 @@ def list_macros(repo_root: Path) -> dict[str, Any]:
     return public_macros_store(read_macros_store(repo_root))
 
 
+def prepare_ceb_primer_kits(roster: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Generate isolated, current kits before handing any assignment to Codex."""
+    if not roster:
+        return []
+    CEB_PRIMER_KITS_DIR.mkdir(parents=True, exist_ok=True)
+    batch = Path(tempfile.mkdtemp(prefix="run-", dir=CEB_PRIMER_KITS_DIR))
+    assignments = []
+    try:
+        for index, word in enumerate(roster, start=1):
+            root = batch / f"topic-{index:02d}"
+            payload = {"path": str(root), "agent": "draft-arachnomind-blended-definition",
+                       "lang": "ceb", "format": "codex", "topic": word["topic"],
+                       "symbolic_policy": "selected_register", "commentary_sources": ["primer"]}
+            request = urllib.request.Request(
+                "http://localhost:8002/agents/generate", data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result = json.load(response)
+            if result.get("path") != str(root) or result.get("agent") != payload["agent"] or result.get("lang") != "ceb":
+                raise ValueError("Cradle returned an invalid kit generation result")
+            skill = root / "skills" / "ceb-blended-definition" / "SKILL.md"
+            policy = json.loads((root / "definition_policy.json").read_text(encoding="utf-8"))
+            if (not skill.is_file() or not (root / "compile_blended.py").is_file()
+                    or policy.get("content_profile") != "mnemonic_v4"
+                    or policy.get("symbolic_policy") != "selected_register"
+                    or policy.get("commentary_sources") != ["primer"]):
+                raise ValueError("Cradle did not generate a current Primer mnemonic_v4 kit")
+            assignments.append({**word, "kit_path": str(skill), "draft_path": str(root / "draft.json")})
+        return assignments
+    except Exception:
+        shutil.rmtree(batch)
+        raise
+
+
+def resolve_macro(payload: dict[str, Any]) -> dict[str, Any]:
+    """Prepare a fresh roster and kits for this run without changing the store."""
+    macro = normalize_macro(payload.get("macro", payload))
+    routes = {match.groups() for step in macro["steps"] if step["type"] == "shell"
+              for match in CRADLE_AUTHORING_ROSTER.finditer(step["value"])}
+    if routes:
+        if len(routes) != 1 or any(CEB_PRIMER_ROSTER.search(step["value"]) for step in macro["steps"]):
+            raise ValueError("a macro must select one authoring workflow")
+        lang, family, order = routes.pop()
+        assignments = prepare_cradle_authoring(lang, family, select_cradle_authoring(lang, family, order))
+        replacement = json.dumps(assignments, ensure_ascii=False, separators=(",", ":"))
+        for step in macro["steps"]:
+            if step["type"] == "shell":
+                step["value"] = CRADLE_AUTHORING_ROSTER.sub(lambda _: replacement, step["value"])
+        return {"status": "ok", "item": macro}
+    matches = [CEB_PRIMER_ROSTER.search(step["value"])
+               for step in macro["steps"] if step["type"] == "shell"]
+    orders = {match.group(1) for match in matches if match}
+    if not orders:
+        return {"status": "ok", "item": macro}
+    if len(orders) != 1:
+        raise ValueError("a macro must select one queue direction")
+    order = orders.pop()
+    url = CEB_PRIMER_QUEUE_URL + ("&limit=20" if order == "forward" else "")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        queue = json.load(response)
+    words = queue.get("words")
+    if queue.get("lang") != "ceb" or queue.get("source") != "primer_first_1000" or not isinstance(words, list):
+        raise ValueError("Cradle returned an invalid Cebuano Primer queue")
+    if order != "forward" and queue.get("filtered_total") != len(words):
+        raise ValueError("middle/reverse selection requires the whole queue")
+    size = min(20, len(words))
+    start = max(0, (len(words) - size) // 2) if order == "middle" else 0
+    selected = (list(reversed(words[-size:])) if size else []) if order == "reverse" else words[start:start + size]
+    roster = []
+    for word in selected:
+        topic = word.get("topic") or word.get("lemma")
+        rank = word.get("rank")
+        if not isinstance(topic, str) or not topic.strip() or not isinstance(rank, int):
+            raise ValueError("Cradle queue word is missing its topic or rank")
+        roster.append({"topic": topic, "rank": rank})
+    assignments = prepare_ceb_primer_kits(roster)
+    replacement = json.dumps(assignments, ensure_ascii=False, separators=(",", ":"))
+    for step in macro["steps"]:
+        if step["type"] == "shell":
+            step["value"] = CEB_PRIMER_ROSTER.sub(lambda _: replacement, step["value"])
+    return {"status": "ok", "item": macro}
+
+
 def create_macro(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     store = read_macros_store(repo_root)
     raw_macro = payload.get("macro") if isinstance(payload.get("macro"), dict) else payload
@@ -3282,6 +3468,13 @@ def make_handler(repo_root: Path, manifest_path: Path, manifest: dict[str, Any])
 
         def do_POST(self):
             path = unquote(urlparse(self.path).path)
+            if path == "/macros/resolve":
+                try:
+                    payload = parse_json_request(self, max_bytes=512 * 1024)
+                    self.send_json(resolve_macro(payload))
+                except Exception as exc:
+                    self.send_error(400, f"Macro queue selection failed: {exc}")
+                return
             match = re.fullmatch(r"/macro-runs/([^/]+)/steps", path)
             if match:
                 try:

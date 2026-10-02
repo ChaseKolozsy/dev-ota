@@ -17,6 +17,7 @@ import 'package:xterm/xterm.dart';
 import 'backup_service.dart';
 import 'background_session_service.dart';
 import 'macro_reorder.dart';
+import 'macro_sync_service.dart';
 import 'openai_key_dialog.dart';
 import 'terminal_macro.dart';
 import 'terminal_submission.dart';
@@ -505,6 +506,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _watch.resolveMacro = (macro) =>
+        MacroSyncService.resolveForRun(widget.dio, widget.serverUrl, macro);
     _terminal.write('DevOTA SSH terminal\r\n');
     _terminal.onOutput = (data) {
       if (!_watch.busy) _writeSessionBytes(data);
@@ -1889,6 +1892,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _notifyMacroController();
     _focusTerminalInput();
     try {
+      macro = await MacroSyncService.resolveForRun(
+        widget.dio,
+        widget.serverUrl,
+        macro,
+      );
+      if (_macroStopRequested) return;
+      if (!_connected) throw StateError('SSH disconnected.');
       for (var i = 0; i < macro.steps.length; i++) {
         if (_macroStopRequested) break;
         if (!_connected) throw StateError('SSH disconnected.');

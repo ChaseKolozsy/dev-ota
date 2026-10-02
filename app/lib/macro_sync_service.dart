@@ -55,6 +55,36 @@ class MacroSyncService {
   static const _path = '/macros';
   static const _syncPath = '/macros/sync';
 
+  static Future<TerminalMacro> resolveForRun(
+    Dio dio,
+    String serverUrl,
+    TerminalMacro macro,
+  ) async {
+    if (!macro.needsQueueRoster) return macro;
+    final base = _baseUrl(serverUrl);
+    if (base.isEmpty) {
+      throw StateError('Set the DevOTA server before running this macro.');
+    }
+    final resp = await dio.post(
+      '$base/macros/resolve',
+      data: {'macro': macro.toJson()},
+      options: Options(
+        sendTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 120),
+      ),
+    );
+    final json = _asJsonMap(resp.data);
+    final item = json?['item'];
+    if (resp.statusCode != 200 || item is! Map) {
+      throw StateError('DevOTA could not select the queue roster.');
+    }
+    final resolved = TerminalMacro.fromJson(Map<String, dynamic>.from(item));
+    if (resolved.id != macro.id || resolved.needsQueueRoster) {
+      throw StateError('DevOTA returned an unresolved macro.');
+    }
+    return resolved;
+  }
+
   static String _baseUrl(String serverUrl) {
     return serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
   }

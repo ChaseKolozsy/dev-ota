@@ -1,0 +1,649 @@
+[
+  {
+    "id": "macro-cradlespeak-ceb-primer",
+    "name": "CEB -> BLD",
+    "priority": 230,
+    "steps": [
+      {
+        "id": "ceb-bld-forward-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-forward-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:forward}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-forward-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-1788487758181681-4b28fdf1",
+    "name": "CEB --- BLD",
+    "priority": 229,
+    "steps": [
+      {
+        "id": "ceb-bld-middle-window",
+        "type": "tmux",
+        "value": "2",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-middle-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:middle}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-middle-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-1788487758193655-a94d23a1",
+    "name": "CEB <-- BLD",
+    "priority": 228,
+    "steps": [
+      {
+        "id": "ceb-bld-reverse-window",
+        "type": "tmux",
+        "value": "3",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "ceb-bld-reverse-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano Blended Definition batch in /home/chase/Cradlespeak against http://localhost:8002. DevOTA has already selected the exact roster below from source=primer_first_1000. Trust it: parent and workers must not fetch/reselect the queue, search existing lessons, check duplicates, local drafts or active assignments, or reserve topics. If the roster still contains an unresolved DevOTA token, stop without tools and report that the DevOTA app needs updating. If the roster is empty, report done without tools. DevOTA has already generated fresh topic-specific standard Blended Definition kits with symbolic_policy=selected_register and commentary_sources=[primer]. Each assignment includes kit_path and draft_path. Parent and workers use these paths directly: do not call /agents/generate, refresh kits, or recheck generation. Workers save each draft to its supplied draft_path. Use mnemonic_v4: each sense has a mnemonic and natural Cebuano definition, followed by three examples; shared morphology only when applicable. Mnemonic and definition use the full selected Primer vocabulary; examples are freeform. Topic rank orders assignments only. The parent runs GPT-6.1 Sol MEDIUM. Dispatch 10 concurrent GPT-6.1 Sol MEDIUM drafters (model=gpt-6.1-sol, reasoning_effort=medium), 2 assigned topics each; for a shorter roster use only as many workers as needed, at most 2 topics each. Assign topics and kit paths only. Drafters independently choose materially distinct common senses from their own Cebuano knowledge. Neither parent nor workers research definitions, browse dictionaries, read dictionary files, commission researchers, or prepare supplied meaning packets. These instructions override research requirements in kits. Workers write draft JSON artifacts, compile exact disk drafts with compile_blended.py until passed=true and violations=[], and reread for accurate senses, natural Cebuano and clear teaching. Workers remain draft-only. When drafts return, the parent reads each artifact for assignment/shape and submits directly with POST /lesson/create-from-blocks, approved:false, force:false. Successful submission is the parent's compile check: no separate /lesson/compile calls or dry-compile preflights. Use compile_blended.py --submit only with the updated direct-submit helper; otherwise POST the draft directly. Review the created server-backed lesson by ID, repair concrete defects through compile-gated saves, and reread repaired content before approving. Use submission/save compiler errors to repair genuine rejections. Never force-save. Approve publishable lessons. Successful approval completes each topic; after the final approval make no further tool calls. No approval readback, queue/status query, campaign ledger, handoff document, report file or extra accounting. Report done from results already observed; include counts only if already known, never fetch logs or request counts. Recover only failed assigned targets, never resume the batch or rerun successful topics. This macro's lean publication contract supersedes conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:ceb-primer:reverse}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "ceb-bld-reverse-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-hu-creative-full",
+    "name": "Cradlespeak HU Creative full pool",
+    "priority": 15,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-hu-creative-full-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-full-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-full-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-full-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Hungarian creative full batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=full_pool and the shipped full Primer pool. Stage with the same local pool plus topic and anchor words; never widen or substitute vocabulary. Primer-ranked topics belong to rank-strict macros. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:hu:creative-full:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-full-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "step-1786674213795610",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.2
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-ceb-creative-full",
+    "name": "Cradlespeak CEB Creative full pool",
+    "priority": 14,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-ceb-creative-full-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-full-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-full-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-full-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano creative full batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=full_pool and the shipped full Primer pool. Stage with the same local pool plus topic and anchor words; never widen or substitute vocabulary. Primer-ranked topics belong to rank-strict macros. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:ceb:creative-full:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-full-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-en-creative-full",
+    "name": "Cradlespeak EN Creative full pool",
+    "priority": 13,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-en-creative-full-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-full-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-full-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-full-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end English creative full batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=full_pool and the shipped full Primer pool. Stage with the same local pool plus topic and anchor words; never widen or substitute vocabulary. Primer-ranked topics belong to rank-strict macros. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:en:creative-full:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-full-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "step-1786674272528656",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-en-creative-rank",
+    "name": "Cradlespeak EN Creative rank strict",
+    "priority": 12,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-en-creative-rank-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-rank-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-rank-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-rank-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end English creative rank batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=rank_strict and the supplied rank. pool_for_topic.py reads the macro-provided topic_pool.json locally. Require mode=rank_strict with the assigned topic_rank during worker compilation. Publish serially in ascending rank order. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:en:creative-rank:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-en-creative-rank-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "step-1786674239122079",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.2
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-hu-creative-rank",
+    "name": "Cradlespeak HU Creative rank strict",
+    "priority": 11,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-hu-creative-rank-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-rank-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-rank-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-rank-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Hungarian creative rank batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=rank_strict and the supplied rank. pool_for_topic.py reads the macro-provided topic_pool.json locally. Require mode=rank_strict with the assigned topic_rank during worker compilation. Publish serially in ascending rank order. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:hu:creative-rank:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-hu-creative-rank-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-tl-creative-full",
+    "name": "Cradlespeak TL Creative full pool",
+    "priority": 9,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-tl-creative-full-window",
+        "type": "tmux",
+        "value": "0",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-full-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-full-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-full-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Tagalog creative full batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=full_pool and the shipped full Primer pool. Stage with the same local pool plus topic and anchor words; never widen or substitute vocabulary. Primer-ranked topics belong to rank-strict macros. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:tl:creative-full:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-full-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-tl-creative-rank",
+    "name": "Cradlespeak TL Creative rank strict",
+    "priority": 8,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-tl-creative-rank-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-rank-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-rank-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-rank-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Tagalog creative rank batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=rank_strict and the supplied rank. pool_for_topic.py reads the macro-provided topic_pool.json locally. Require mode=rank_strict with the assigned topic_rank during worker compilation. Publish serially in ascending rank order. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:tl:creative-rank:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-tl-creative-rank-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-ceb-creative-rank",
+    "name": "Cradlespeak CEB Creative rank strict",
+    "priority": 7,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-ceb-creative-rank-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-rank-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-rank-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-rank-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Cebuano creative rank batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use pool_mode=rank_strict and the supplied rank. pool_for_topic.py reads the macro-provided topic_pool.json locally. Require mode=rank_strict with the assigned topic_rank during worker compilation. Publish serially in ascending rank order. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:ceb:creative-rank:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-ceb-creative-rank-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-en-ogden",
+    "name": "Cradlespeak EN Ogden commentary",
+    "priority": 6,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-en-ogden-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-ogden-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-ogden-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-ogden-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end English ogden commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=ogden_commentary, pool_mode=ogden_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:en:ogden-commentary:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-en-ogden-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-tl-primer",
+    "name": "Cradlespeak TL Primer commentary",
+    "priority": 5,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-tl-primer-window",
+        "type": "tmux",
+        "value": "0",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-primer-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-primer-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-primer-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Tagalog primer commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=primer_commentary, pool_mode=primer_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:tl:primer-commentary:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-tl-primer-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-en-primer",
+    "name": "Cradlespeak EN Primer commentary",
+    "priority": 4,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-en-primer-window",
+        "type": "tmux",
+        "value": "0",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-primer-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-primer-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-en-primer-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end English primer commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=primer_commentary, pool_mode=primer_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:en:primer-commentary:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-en-primer-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.2
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-hu-ogden",
+    "name": "Cradlespeak HU Ogden commentary",
+    "priority": 3,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-hu-ogden-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-ogden-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-ogden-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-hu-ogden-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Hungarian ogden commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=ogden_commentary, pool_mode=ogden_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:hu:ogden-commentary:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-hu-ogden-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-cradlespeak-tl-ogden",
+    "name": "Cradlespeak TL Ogden commentary",
+    "priority": 2,
+    "steps": [
+      {
+        "id": "macro-cradlespeak-tl-ogden-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-ogden-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-ogden-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "macro-cradlespeak-tl-ogden-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Tagalog ogden commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=ogden_commentary, pool_mode=ogden_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:tl:ogden-commentary:forward}}",
+        "delaySeconds": 0.1
+      },
+      {
+        "id": "macro-cradlespeak-tl-ogden-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  },
+  {
+    "id": "macro-1786854566261068",
+    "name": "Cradlespeak Hungarian Primer commentary",
+    "priority": 1,
+    "steps": [
+      {
+        "id": "hu-primer-commentary-window",
+        "type": "tmux",
+        "value": "1",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "hu-primer-commentary-clear",
+        "type": "shell",
+        "value": "/clear",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "hu-primer-commentary-clear-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.5
+      },
+      {
+        "id": "hu-primer-commentary-prompt",
+        "type": "shell",
+        "value": "Use the Cradlespeak authoring skill. Run one end-to-end Hungarian primer commentary batch against http://localhost:8002 in /home/chase/Cradlespeak. DevOTA has already selected the roster and generated fresh isolated kits. Each assignment supplies kit_path and draft_path; use them directly. Parent and workers must not select/reselect topics, call /agents/generate, refresh or recheck kits, fetch queues, search existing lessons, scan local drafts, check active assignments or repeat duplicate/eligibility checks. If an unresolved DevOTA token remains, stop without tools and report that the app needs updating. If the roster is empty, report done without tools. Use 10 concurrent GPT-5.6 Sol MEDIUM workers (model=gpt-5.6-sol, reasoning_effort=medium), 2 assigned artifacts each; for fewer than 20 assignments use only the workers needed, at most 2 topics each. Workers read the supplied matching skill and manifests, save to draft_path, compile exact disk artifacts with the supplied compile_one.py until passed=true and violations=[], and reread for accurate senses, natural language and clear teaching. Workers never submit or mutate the server. Preserve assignment metadata and vocabulary context. Use lesson_style=primer_commentary, pool_mode=primer_commentary, commentary_of=source_id, and extra_allowed=[]. Run the supplied fetch_source.py on source_id to read the macro-cached source packet locally; do not fetch commentaries or query source eligibility. Use semantic_kit_path instead of kit_path only for abstract, relational, grammatical or process-heavy sources. Preserve anchor_words and explain every source sense. The ethics/oath/manifesto and publishable-sentence gate remain binding. The parent reads returned artifacts for assignment and shape, then stages directly with the supplied submit_one.py --stage <draft_path> (or equivalent POST /lesson/create-from-blocks with approved:false and force:false). Successful creation is the parent's compile check; no separate /lesson/compile calls, dry-compile preflights or duplicate queries. Never use the helper's default immediate-approval mode. Review each created lesson by ID, repair concrete defects through compile-gated saves, reread repaired content, and approve only publishable lessons. Successful approval completes the topic. After final approval make no further tool calls: no approval/source-link readback, queue/status check, audit, ledger update, handoff document or report file. Report done using results already observed; never collect extra compiler/tool-call counts. Recover only failed assigned targets, never resume the batch or redo successful topics. These macro instructions supersede conflicting skill/kit instructions. Assigned topics in dispatch order: {{devota:cradle:hu:primer-commentary:forward}}",
+        "delaySeconds": 0.2
+      },
+      {
+        "id": "hu-primer-commentary-prompt-enter",
+        "type": "terminalKey",
+        "value": "enter",
+        "delaySeconds": 0.0
+      }
+    ]
+  }
+]

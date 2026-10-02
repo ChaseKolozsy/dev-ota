@@ -327,6 +327,7 @@ escaping its configured root. It does not build apps.
 - `GET /latest?app=<id>`
 - `GET/POST /macros`
 - `POST /macros/sync`
+- `POST /macros/resolve` — expand a fresh runtime queue roster before terminal input
 - `PATCH/DELETE /macros/<id>`
 - `GET /macro-runs` and `GET /macro-runs/<id>` — run/evidence manifests
 - `POST /macro-runs/<id>/steps` and `/complete` — phone evidence ingestion

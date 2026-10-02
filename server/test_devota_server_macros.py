@@ -3,6 +3,7 @@ import base64
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from io import BytesIO
 from pathlib import Path
 
@@ -17,6 +18,144 @@ SPEC.loader.exec_module(devota_server)
 
 
 class MacroStoreTests(unittest.TestCase):
+    @staticmethod
+    def queue_macro(order):
+        return {"id": "ceb", "name": "CEB", "steps": [
+            {"type": "shell", "value": "Roster: {{devota:ceb-primer:" + order + "}}"}]}
+
+    @patch.object(devota_server, "prepare_ceb_primer_kits", side_effect=lambda roster: roster)
+    def test_queue_selection_is_fresh_and_directional_without_mutations(self, prepare):
+        for order, expected in (("forward", range(1, 21)),
+                                ("middle", range(16, 36)),
+                                ("reverse", range(50, 30, -1))):
+            words = [{"topic": f"word{i}", "rank": i} for i in range(1, 51)]
+            queue = {"lang": "ceb", "source": "primer_first_1000",
+                     "filtered_total": 50, "words": words[:20] if order == "forward" else words}
+            macro = self.queue_macro(order)
+            with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+                fetch.return_value.__enter__.side_effect = lambda: BytesIO(json.dumps(queue).encode())
+                for _ in range(2):
+                    result = devota_server.resolve_macro({"macro": macro})
+                    roster = json.loads(result["item"]["steps"][0]["value"].removeprefix("Roster: "))
+                    self.assertEqual([w["rank"] for w in roster], list(expected))
+                self.assertEqual(fetch.call_count, 2)
+                url = fetch.call_args.args[0]
+                self.assertEqual("limit=20" in url, order == "forward")
+            self.assertIn("{{devota:", macro["steps"][0]["value"])
+        self.assertEqual(prepare.call_count, 6)
+
+    @patch.object(devota_server, "prepare_ceb_primer_kits", side_effect=lambda roster: roster)
+    def test_queue_empty_short_and_bad_response(self, prepare):
+        for order in ("forward", "middle", "reverse"):
+            for length in (0, 3):
+                queue = {"lang": "ceb", "source": "primer_first_1000", "filtered_total": length,
+                         "words": [{"topic": f"word{i}", "rank": i} for i in range(length)]}
+                with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+                    fetch.return_value.__enter__.return_value = BytesIO(json.dumps(queue).encode())
+                    result = devota_server.resolve_macro(self.queue_macro(order))
+                    roster = json.loads(result["item"]["steps"][0]["value"].removeprefix("Roster: "))
+                    self.assertEqual(len(roster), length)
+        with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+            fetch.return_value.__enter__.return_value = BytesIO(b'{"words": []}')
+            with self.assertRaisesRegex(ValueError, "invalid"):
+                devota_server.resolve_macro(self.queue_macro("middle"))
+        with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+            fetch.return_value.__enter__.return_value = BytesIO(json.dumps({
+                "lang": "ceb", "source": "primer_first_1000", "filtered_total": 100, "words": []}).encode())
+            with self.assertRaisesRegex(ValueError, "whole queue"):
+                devota_server.resolve_macro(self.queue_macro("reverse"))
+
+    def test_runtime_generates_current_isolated_kits_and_supplies_paths(self):
+        calls = []
+        def generate(request, timeout):
+            body = json.loads(request.data)
+            calls.append(body)
+            root = Path(body["path"])
+            skill = root / "skills" / "ceb-blended-definition" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("kit")
+            (root / "compile_blended.py").write_text("helper")
+            (root / "definition_policy.json").write_text(json.dumps({
+                "content_profile": "mnemonic_v4", "symbolic_policy": "selected_register",
+                "commentary_sources": ["primer"]}))
+            return BytesIO(json.dumps({"path": str(root), "agent": body["agent"], "lang": "ceb"}).encode())
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(devota_server, "CEB_PRIMER_KITS_DIR", Path(tmp)), \
+                patch.object(devota_server.urllib.request, "urlopen", side_effect=generate):
+            roster = [{"topic": "semana", "rank": 172}, {"topic": "bulan", "rank": 173}]
+            first = devota_server.prepare_ceb_primer_kits(roster)
+            second = devota_server.prepare_ceb_primer_kits(roster)
+            self.assertNotEqual(first[0]["kit_path"], second[0]["kit_path"])
+            self.assertEqual([x["topic"] for x in first], ["semana", "bulan"])
+            self.assertEqual(len(calls), 4)
+            for assignment, call in zip(first, calls):
+                self.assertTrue(Path(assignment["kit_path"]).is_file())
+                self.assertEqual(assignment["draft_path"], str(Path(call["path"]) / "draft.json"))
+                self.assertEqual(call["symbolic_policy"], "selected_register")
+                self.assertEqual(call["commentary_sources"], ["primer"])
+
+    def test_runtime_generation_failure_removes_partial_kits_and_never_returns_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(devota_server, "CEB_PRIMER_KITS_DIR", Path(tmp)), \
+                patch.object(devota_server.urllib.request, "urlopen", side_effect=OSError("generation failed")):
+            with self.assertRaisesRegex(OSError, "generation failed"):
+                devota_server.prepare_ceb_primer_kits([{"topic": "semana", "rank": 172}])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+        with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+            self.assertEqual(devota_server.prepare_ceb_primer_kits([]), [])
+            fetch.assert_not_called()
+
+    def test_generic_queue_directions_and_rank_source_precedence(self):
+        words = [{"lemma": f"word{i}", "rank": i, "sources": ["primer", "ux"]} for i in range(50, 0, -1)]
+        words.append({"lemma": "uxonly", "sources": ["ux"]})
+        with patch.object(devota_server, "cradle_get", return_value={"lang": "hu", "words": words}):
+            for order, expected in (("forward", range(1, 21)), ("middle", range(16, 36)), ("reverse", range(50, 30, -1))):
+                self.assertEqual([r["rank"] for r in devota_server.select_cradle_authoring("hu", "creative-rank", order)], list(expected))
+            self.assertEqual([r["topic"] for r in devota_server.select_cradle_authoring("hu", "creative-full", "forward")], ["uxonly"])
+
+    def test_generic_full_pool_mix_and_commentary_filter(self):
+        words = [{"lemma": f"back{i}", "sources": ["backstage"]} for i in range(30)] + [{"lemma": f"ux{i}", "sources": ["ux"]} for i in range(30)]
+        with patch.object(devota_server, "cradle_get", return_value={"lang": "en", "words": words}):
+            rows = devota_server.select_cradle_authoring("en", "creative-full", "forward")
+            self.assertEqual([r["topic"] for r in rows], [f"back{i}" for i in range(10)] + [f"ux{i}" for i in range(10)])
+        rows = [{"topic": "word", "id": "source", "approved": True, "has_ogden_commentary": False}]
+        with patch.object(devota_server, "cradle_get", return_value={"lang": "en", "filtered_total": 1, "lessons": rows}) as fetch:
+            self.assertEqual(devota_server.select_cradle_authoring("en", "ogden-commentary", "forward")[0]["source_id"], "source")
+            self.assertIn("missing=ogden_commentary", fetch.call_args.args[0])
+
+    def test_generic_preparation_caches_rank_pool_and_commentary_source(self):
+        def generate(request, timeout):
+            body = json.loads(request.data)
+            root = Path(body["path"])
+            token = body["agent"].replace("draft-arachnomind-", "").replace("generate-arachnomind-", "")
+            skill = root / "skills" / ("en-" + token) / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text("kit")
+            for helper in ("compile_one.py", "submit_one.py"):
+                (root / helper).write_text("helper")
+            return BytesIO(json.dumps({"path": str(root), "agent": body["agent"]}).encode())
+        def fetch(path):
+            if "/conventions/" in path:
+                return {"mode": "rank_strict", "topic_rank": 12, "lemmas": ["known"]}
+            if "/blocks?" in path:
+                return {"shorthand": "p example"}
+            return {"lesson_style": "creative", "anchor_words": ["anchor"]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(devota_server, "CRADLE_AUTHORING_KITS_DIR", Path(tmp)), patch.object(devota_server.urllib.request, "urlopen", side_effect=generate), patch.object(devota_server, "cradle_get", side_effect=fetch):
+            rank = devota_server.prepare_cradle_authoring("en", "creative-rank", [{"topic": "word", "rank": 12}])[0]
+            root = Path(rank["draft_path"]).parent
+            self.assertEqual(json.loads((root / "topic_pool.json").read_text())["lemmas"], ["known"])
+            commentary = devota_server.prepare_cradle_authoring("en", "primer-commentary", [{"topic": "word", "source_id": "source"}])[0]
+            self.assertTrue(Path(commentary["semantic_kit_path"]).is_file())
+            packet = json.loads((Path(commentary["draft_path"]).parent / "source_packet.json").read_text())
+            self.assertEqual(packet["id"], "source")
+            self.assertEqual(commentary["anchor_words"], ["anchor"])
+
+    def test_static_macro_needs_no_queue_request(self):
+        with patch.object(devota_server.urllib.request, "urlopen") as fetch:
+            result = devota_server.resolve_macro({"id": "static", "steps": [{"type": "shell", "value": "hello"}]})
+            self.assertEqual(result["item"]["steps"][0]["value"], "hello")
+            fetch.assert_not_called()
+
     def test_accepts_native_double_tap_and_path_device_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = devota_server.create_macro(

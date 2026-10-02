@@ -195,6 +195,7 @@ class TerminalWatchController extends ChangeNotifier {
   final Duration freshness;
   List<TerminalWatchBinding> bindings = [];
   List<TerminalMacro> macros = [];
+  Future<TerminalMacro> Function(TerminalMacro macro)? resolveMacro;
   final observations = <String, PaneObservation>{};
   TmuxWatchTransport? _transport;
   Timer? _timer;
@@ -500,7 +501,7 @@ class TerminalWatchController extends ChangeNotifier {
     if (action == 'enter' && !state.submissionUnconfirmed) return;
     final transport = _transport!;
     final generation = _generation;
-    final macro = macroFor(binding)!;
+    var macro = macroFor(binding)!;
     _busy = true; // Lock synchronously, before preflight network operations.
     _stop = false;
     state.runError = null;
@@ -514,6 +515,19 @@ class TerminalWatchController extends ChangeNotifier {
       if (action == 'run') {
         final compatibilityError = notificationMacroError(macro);
         if (compatibilityError != null) throw StateError(compatibilityError);
+        if (macro.needsQueueRoster) {
+          progress = 'Selecting queue roster';
+          _notify();
+          final resolver = resolveMacro;
+          if (resolver == null) {
+            throw StateError('Queue macro resolution is unavailable.');
+          }
+          macro = await resolver(macro);
+          _checkRun(generation);
+          if (macro.needsQueueRoster) {
+            throw StateError('Queue roster is unresolved.');
+          }
+        }
       }
       final tappedContent = state.content;
       final before = await transport.capture(binding.pane);
