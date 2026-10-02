@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backup_service.dart';
+import 'agent_profiles.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
 import 'device_macro_evidence_outbox.dart';
@@ -96,6 +97,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   final _githubRefController = TextEditingController();
   final _githubArtifactController = TextEditingController();
   bool _agentWholeDevice = false;
+  AgentProfiles? _agentProfiles;
   bool _agentBusy = false;
   Map<String, dynamic>? _agentStatus;
   bool _githubBusy = false;
@@ -974,9 +976,10 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Future<void> _loadAgentSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    _agentUrlController.text = prefs.getString('agent_ws_url') ?? '';
-    _agentTokenController.text = prefs.getString('agent_pair_token') ?? '';
-    _agentWholeDevice = prefs.getBool('agent_whole_device') ?? false;
+    final profiles = await AgentProfiles.load(prefs);
+    if (!mounted) return;
+    _agentProfiles = profiles;
+    _applyAgentProfile();
     if (mounted) setState(() {});
     _refreshAgentStatus();
   }
@@ -1125,14 +1128,90 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _saveAgentSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('agent_ws_url', _agentUrlController.text.trim());
-    await prefs.setString(
-      'agent_pair_token',
-      _agentTokenController.text.trim(),
+    final profiles = _agentProfiles;
+    if (profiles == null) return;
+    profiles.updateSelected(
+      url: _agentUrlController.text.trim(),
+      token: _agentTokenController.text.trim(),
+      wholeDevice: _agentWholeDevice,
     );
-    await prefs.setBool('agent_whole_device', _agentWholeDevice);
+    final prefs = await SharedPreferences.getInstance();
+    await profiles.save(prefs);
     _scheduleServerBackup();
+  }
+
+  void _applyAgentProfile() {
+    final profile = _agentProfiles!.selected;
+    _agentUrlController.text = profile.url;
+    _agentTokenController.text = profile.token;
+    _agentWholeDevice = profile.wholeDevice;
+  }
+
+  Future<void> _selectAgentProfile(String id) async {
+    await _saveAgentSettings();
+    if (!mounted) return;
+    setState(() {
+      _agentProfiles!.selectedId = id;
+      _applyAgentProfile();
+    });
+    await _saveAgentSettings();
+  }
+
+  Future<void> _nameAgentProfile({bool create = false}) async {
+    final profiles = _agentProfiles;
+    if (profiles == null) return;
+    final nameController = TextEditingController(
+      text: create ? '' : profiles.selected.name,
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(create ? 'New agent profile' : 'Rename profile'),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Profile name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) Navigator.pop(context, name);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    // The dialog's closing animation can still refer to its controller.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    nameController.dispose();
+    if (name == null || !mounted) return;
+    await _saveAgentSettings();
+    if (!mounted) return;
+    setState(() {
+      if (create) {
+        final profile = AgentProfile(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          name: name,
+        );
+        profiles.profiles.add(profile);
+        profiles.selectedId = profile.id;
+        _applyAgentProfile();
+      } else {
+        profiles.updateSelected(
+          url: profiles.selected.url,
+          token: profiles.selected.token,
+          wholeDevice: profiles.selected.wholeDevice,
+          name: name,
+        );
+      }
+    });
+    await _saveAgentSettings();
   }
 
   Future<void> _startAgent() async {
@@ -2333,6 +2412,48 @@ class _BuildListScreenState extends State<BuildListScreen>
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        if (_agentProfiles != null) ...[
+          DropdownButtonFormField<String>(
+            key: ValueKey(_agentProfiles!.selectedId),
+            initialValue: _agentProfiles!.selectedId,
+            decoration: const InputDecoration(
+              labelText: 'Agent profile',
+              border: OutlineInputBorder(),
+            ),
+            items: _agentProfiles!.profiles
+                .map(
+                  (profile) => DropdownMenuItem(
+                    value: profile.id,
+                    child: Text(profile.name),
+                  ),
+                )
+                .toList(),
+            onChanged: _agentBusy || running
+                ? null
+                : (id) {
+                    if (id != null) _selectAgentProfile(id);
+                  },
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                onPressed: _agentBusy || running
+                    ? null
+                    : () => _nameAgentProfile(create: true),
+                icon: const Icon(Icons.add),
+                label: const Text('New profile'),
+              ),
+              TextButton.icon(
+                onPressed: _agentBusy || running ? null : _nameAgentProfile,
+                icon: const Icon(Icons.edit),
+                label: const Text('Rename'),
+              ),
+            ],
+          ),
+          if (running) const Text('Stop the agent before switching profiles.'),
+          const SizedBox(height: 10),
+        ],
         TextField(
           controller: _agentUrlController,
           decoration: const InputDecoration(

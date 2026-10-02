@@ -12,6 +12,8 @@ class BackupService {
     'active_server',
     'agent_ws_url',
     'agent_pair_token',
+    'agent_profiles_json',
+    'agent_selected_profile_id',
     'ssh_host',
     'ssh_port',
     'ssh_username',
