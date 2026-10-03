@@ -92,11 +92,18 @@ class _ArrowKey {
 /// Test seams for the Terminal tab. Production code never sets these.
 @visibleForTesting
 class SshTerminalTestHooks {
-  const SshTerminalTestHooks({this.sessionSink, this.requestMicrophone});
+  const SshTerminalTestHooks({
+    this.sessionSink,
+    this.requestMicrophone,
+    this.voiceInput,
+  });
 
   /// Stands in for a connected SSH session: the tab counts as connected and
   /// every byte it would write to the session is passed here instead.
   final void Function(String data)? sessionSink;
+
+  /// Replaces the record-button service for deterministic error-path tests.
+  final VoiceInputService? voiceInput;
 
   /// Replaces the microphone permission request.
   final Future<bool> Function()? requestMicrophone;
@@ -427,7 +434,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     with WidgetsBindingObserver, AutomaticKeepAliveClientMixin<SshTerminalTab>
     implements VoiceSurface {
   final _storage = const FlutterSecureStorage();
-  late final _voice = VoiceInputService(widget.dio);
+  late final _voice =
+      widget.testHooks?.voiceInput ?? VoiceInputService(widget.dio);
   late final _terminal = Terminal(maxLines: 10000);
   final _terminalController = TerminalController(
     pointerInputs: const PointerInputs({PointerInput.tap, PointerInput.scroll}),
@@ -2042,45 +2050,70 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     }
   }
 
+  void _showVoiceInputError(Object error) {
+    if (!mounted) return;
+    final message = voiceInputErrorMessage(error);
+    setState(() => _status = message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 8)),
+    );
+  }
+
   Future<void> _startVoiceRecording() async {
-    var key = await _voice.loadApiKey();
-    if (key == null || key.isEmpty) {
-      key = await _promptApiKey();
-      if (key == null || key.isEmpty) return;
+    if (_transcribing || _recording) return;
+    setState(() => _transcribing = true);
+    try {
+      var key = await _voice.loadApiKey();
+      if (!mounted) return;
+      if (key == null || key.trim().isEmpty) {
+        key = await _promptApiKey();
+        if (!mounted) return;
+        if (key == null || key.trim().isEmpty) {
+          throw const VoiceInputException(missingVoiceApiKey);
+        }
+      }
+      final ok = await _voice.requestMicrophone();
+      if (!mounted) return;
+      if (!ok) {
+        throw const VoiceInputException(
+          'Microphone permission is required for voice input.',
+        );
+      }
+      await _voice.startRecording('terminal_voice.m4a');
+      if (!mounted) {
+        await VoiceInputService.deleteRecording(await _voice.stopRecording());
+        return;
+      }
+      setState(() {
+        _recording = true;
+        _status = 'Recording voice input...';
+      });
+    } catch (error) {
+      _showVoiceInputError(error);
+    } finally {
+      if (mounted) setState(() => _transcribing = false);
     }
-    final ok = await _voice.requestMicrophone();
-    if (!ok) {
-      setState(() => _status = 'Microphone permission required.');
-      return;
-    }
-    await _voice.startRecording('terminal_voice.m4a');
-    setState(() {
-      _recording = true;
-      _status = 'Recording voice input...';
-    });
   }
 
   Future<void> _finishVoiceRecording() async {
-    final path = await _voice.stopRecording();
-    if (!mounted) {
-      await VoiceInputService.deleteRecording(path);
-      return;
-    }
+    if (_transcribing) return;
     setState(() {
-      _recording = false;
       _transcribing = true;
       _status = 'Transcribing voice input...';
     });
+    String? path;
     try {
+      path = await _voice.stopRecording();
+      if (!mounted) return;
+      setState(() => _recording = false);
       final key = await _voice.loadApiKey();
-      if (key == null || key.isEmpty) return;
-      final text = path == null ? '' : await _voice.transcribe(path, key);
-      if (text.isEmpty) return;
+      final text = await _voice.transcribe(path, key);
+      if (!mounted) return;
       _appendComposerText(text);
       _composerFocusNode.requestFocus();
-      if (mounted) setState(() => _status = 'Transcript added.');
-    } catch (e) {
-      if (mounted) setState(() => _status = 'Transcription failed: $e');
+      setState(() => _status = 'Transcript added.');
+    } catch (error) {
+      _showVoiceInputError(error);
     } finally {
       await VoiceInputService.deleteRecording(path);
       if (mounted) setState(() => _transcribing = false);
