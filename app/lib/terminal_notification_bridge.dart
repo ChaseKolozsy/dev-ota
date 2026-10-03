@@ -5,45 +5,71 @@ import 'terminal_watch.dart';
 import 'terminal_conclusion.dart';
 
 class TerminalNotificationBridge {
-  TerminalNotificationBridge(this.watch, {this.onSessionAction}) {
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'sessionAction') {
-        final args = Map<String, dynamic>.from(call.arguments as Map);
-        final action = args['action']?.toString();
-        if (action != null) unawaited(onSessionAction?.call(action));
-        return;
-      }
-      if (call.method == 'actionRejected') {
-        final args = Map<String, dynamic>.from(call.arguments as Map);
-        watch.rejectAction(
-          args['id'] as String,
-          'Not sent: button expired or terminal changed. Use the current button once settled.',
-        );
-        return;
-      }
-      if (call.method == 'readerAction') {
-        final args = Map<String, dynamic>.from(call.arguments as Map);
-        unawaited(_readerAction(args['action'] as String));
-        return;
-      }
-      if (call.method != 'action') return;
-      final args = Map<String, dynamic>.from(call.arguments as Map);
-      if (args['action'] == 'listen') {
-        unawaited(_listen(args['id'] as String, args['token'] as String));
-      } else if (args['action'] == 'stop') {
-        if (watch.runningPane == args['id']) watch.stop();
-      } else {
-        unawaited(
-          watch.act(
-            args['id'] as String,
-            args['action'] as String,
-            args['token'] as String,
-          ),
-        );
-      }
-    });
+  TerminalNotificationBridge(
+    this.watch, {
+    this.onSessionAction,
+    bool active = true,
+  }) {
+    setActive(active);
     watch.addListener(publish);
   }
+
+  static TerminalNotificationBridge? _activeOwner;
+  bool _active = false;
+
+  void setActive(bool active) {
+    _active = active;
+    if (active) {
+      _activeOwner = this;
+      _channel.setMethodCallHandler(_handleNativeCall);
+      publish();
+    } else {
+      _publishTimer?.cancel();
+      if (_reading != null) _stopReading();
+      if (identical(_activeOwner, this)) {
+        _activeOwner = null;
+        _channel.setMethodCallHandler(null);
+      }
+    }
+  }
+
+  Future<void> _handleNativeCall(MethodCall call) async {
+    if (call.method == 'sessionAction') {
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      final action = args['action']?.toString();
+      if (action != null) unawaited(onSessionAction?.call(action));
+      return;
+    }
+    if (call.method == 'actionRejected') {
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      watch.rejectAction(
+        args['id'] as String,
+        'Not sent: button expired or terminal changed. Use the current button once settled.',
+      );
+      return;
+    }
+    if (call.method == 'readerAction') {
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      unawaited(_readerAction(args['action'] as String));
+      return;
+    }
+    if (call.method != 'action') return;
+    final args = Map<String, dynamic>.from(call.arguments as Map);
+    if (args['action'] == 'listen') {
+      unawaited(_listen(args['id'] as String, args['token'] as String));
+    } else if (args['action'] == 'stop') {
+      if (watch.runningPane == args['id']) watch.stop();
+    } else {
+      unawaited(
+        watch.act(
+          args['id'] as String,
+          args['action'] as String,
+          args['token'] as String,
+        ),
+      );
+    }
+  }
+
   static const _channel = MethodChannel('devota/terminal_notifications');
   final TerminalWatchController watch;
   final Future<void> Function(String action)? onSessionAction;
@@ -59,7 +85,7 @@ class TerminalNotificationBridge {
   String? _readerError;
   String? _errorPane;
   void publish() {
-    if (_disposed) return;
+    if (_disposed || !_active || !identical(_activeOwner, this)) return;
     final reading = _reading;
     if (reading != null) {
       final bindings = watch.bindings.where((b) => b.pane.id == reading.paneId);
@@ -170,6 +196,7 @@ class TerminalNotificationBridge {
   }
 
   Future<Map<Object?, Object?>?> _publish() async {
+    if (!_active || !identical(_activeOwner, this)) return null;
     final version = ++_publishVersion;
     try {
       await _channel.invokeMethod<void>('update', {
@@ -235,10 +262,17 @@ class TerminalNotificationBridge {
     enabled = false;
     _disposed = true;
     _publishTimer?.cancel();
-    _stopReading();
+    if (identical(_activeOwner, this)) {
+      _stopReading();
+      unawaited(
+        _channel
+            .invokeMethod<void>('update', {'cards': []})
+            .catchError((Object _) {}),
+      );
+      _activeOwner = null;
+      _channel.setMethodCallHandler(null);
+    }
     watch.removeListener(publish);
-    _channel.setMethodCallHandler(null);
-    unawaited(_publish());
     deliveryStatus.dispose();
   }
 }

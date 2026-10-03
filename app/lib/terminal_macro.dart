@@ -326,6 +326,7 @@ class MacroRunProgress {
 }
 
 class TerminalMacroController extends ChangeNotifier {
+  Object? _owner;
   Future<void> Function(TerminalMacro macro)? _runner;
   bool Function()? _canRun;
   bool Function()? _isRunning;
@@ -353,7 +354,9 @@ class TerminalMacroController extends ChangeNotifier {
     required bool Function() isRunning,
     MacroRunProgress? Function()? progress,
     VoidCallback? stop,
+    Object? owner,
   }) {
+    _owner = owner;
     _runner = runner;
     _canRun = canRun;
     _isRunning = isRunning;
@@ -362,7 +365,9 @@ class TerminalMacroController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void detach() {
+  void detach({Object? owner}) {
+    if (owner != null && !identical(owner, _owner)) return;
+    _owner = null;
     _runner = null;
     _canRun = null;
     _isRunning = null;

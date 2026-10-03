@@ -12,6 +12,69 @@ import 'package:permission_handler/permission_handler.dart';
 /// "stay connected in the background" permission; a foreground service is the
 /// supported way out, so this starts one for the lifetime of the session.
 class BackgroundSessionService {
+  static final _sessions =
+      <
+        Object,
+        ({
+          String label,
+          String action,
+          String actionLabel,
+          bool zeroTierRecovery,
+          bool active,
+          bool keepAlive,
+        })
+      >{};
+
+  static Future<void> _sessionUpdates = Future.value();
+
+  /// One Android foreground service protects all retained SSH connections.
+  static Future<void> updateSession(
+    Object owner, {
+    required bool keepAlive,
+    required bool active,
+    required String label,
+    required String action,
+    required String actionLabel,
+    required bool zeroTierRecovery,
+  }) async {
+    if (keepAlive || active) {
+      _sessions[owner] = (
+        label: label,
+        action: action,
+        actionLabel: actionLabel,
+        zeroTierRecovery: zeroTierRecovery,
+        active: active,
+        keepAlive: keepAlive,
+      );
+    } else {
+      _sessions.remove(owner);
+    }
+    final update = _sessionUpdates.then((_) => _applySessions());
+    _sessionUpdates = update.catchError((Object _) {});
+    await update;
+  }
+
+  static Future<void> _applySessions() async {
+    final keeping = _sessions.values
+        .where((session) => session.keepAlive)
+        .length;
+    if (keeping == 0) {
+      await stop();
+      return;
+    }
+    final selected =
+        _sessions.values.where((session) => session.active).firstOrNull ??
+        _sessions.values.first;
+    await start(
+      keeping == 1
+          ? selected.label
+          : '$keeping SSH sessions · ${selected.label}',
+      action: selected.action,
+      actionLabel: selected.actionLabel,
+      zeroTierRecovery: selected.zeroTierRecovery,
+    );
+  }
+
   static const MethodChannel _channel = MethodChannel(
     'io.github.chasekolozsy.devota/control_agent',
   );

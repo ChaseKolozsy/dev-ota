@@ -22,12 +22,14 @@ class ConnectTab extends StatefulWidget {
     required this.servers,
     required this.activeServer,
     required this.onServerSelected,
+    this.profileManager,
   });
 
   final MethodChannel channel;
   final List<String> servers;
   final String activeServer;
   final ValueChanged<String> onServerSelected;
+  final Widget? profileManager;
 
   @override
   State<ConnectTab> createState() => _ConnectTabState();
@@ -127,6 +129,7 @@ class _ConnectTabState extends State<ConnectTab> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        if (widget.profileManager != null) widget.profileManager!,
         Text('Server discovery', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         Card(

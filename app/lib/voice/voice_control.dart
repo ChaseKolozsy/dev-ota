@@ -321,13 +321,34 @@ class VoiceControlSession extends ChangeNotifier {
     MethodChannel? channel,
     this.requestMicrophone,
     VoiceTimerFactory? timer,
+    bool active = true,
   }) : _channel = channel ?? defaultChannel {
     control = VoiceControl(surface: surface, timer: timer, speak: _speak)
       ..addListener(_controlChanged);
-    _channel.setMethodCallHandler(_onNativeCall);
+    setActive(active);
   }
 
   static const defaultChannel = MethodChannel('devota/voice_control');
+  static final _owners = <String, VoiceControlSession>{};
+  bool _active = false;
+
+  void setActive(bool active) {
+    _active = active;
+    if (active) {
+      _owners[_channel.name] = this;
+      _channel.setMethodCallHandler(_onNativeCall);
+    } else {
+      if (_enabled) unawaited(_invoke('stop'));
+      _enabled = false;
+      _starting = false;
+      nativeState = null;
+      control.cancelPending();
+      if (identical(_owners[_channel.name], this)) {
+        _owners.remove(_channel.name);
+        _channel.setMethodCallHandler(null);
+      }
+    }
+  }
 
   final MethodChannel _channel;
   late final VoiceControl control;
@@ -359,7 +380,7 @@ class VoiceControlSession extends ChangeNotifier {
   }
 
   Future<bool> setEnabled(bool on) async {
-    if (_disposed) return false;
+    if (_disposed || (on && !_active)) return false;
     if (!on) {
       final wasOn = _enabled;
       _enabled = false;
@@ -486,7 +507,10 @@ class VoiceControlSession extends ChangeNotifier {
     if (_enabled) unawaited(_invoke('stop'));
     _enabled = false;
     _disposed = true;
-    _channel.setMethodCallHandler(null);
+    if (identical(_owners[_channel.name], this)) {
+      _owners.remove(_channel.name);
+      _channel.setMethodCallHandler(null);
+    }
     control.removeListener(_controlChanged);
     control.dispose();
     super.dispose();

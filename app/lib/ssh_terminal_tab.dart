@@ -27,6 +27,7 @@ import 'terminal_watch_screen.dart';
 import 'terminal_host_route.dart';
 import 'terminal_notification_bridge.dart';
 import 'terminal_pad_key.dart';
+import 'terminal_profiles.dart';
 import 'voice_input_service.dart';
 import 'voice/voice_commands.dart';
 import 'voice/voice_control.dart';
@@ -405,8 +406,23 @@ class SshTerminalTab extends StatefulWidget {
     this.onMacroReorder,
     this.onZeroTierRecovery,
     this.testHooks,
+    this.profileId,
+    this.profiles,
+    this.active = true,
+    this.onSelectProfile,
+    this.onConnectionChanged,
+    this.onProfilesChanged,
+    this.sessionSelector,
   });
 
+  final String? profileId;
+  final TerminalProfiles? profiles;
+  final bool active;
+  final Future<void> Function(String id, TerminalProfile? create)?
+  onSelectProfile;
+  final ValueChanged<bool>? onConnectionChanged;
+  final VoidCallback? onProfilesChanged;
+  final Widget? sessionSelector;
   final Dio dio;
   final String serverUrl;
   final List<String> quickCommands;
@@ -451,6 +467,9 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   final _passphraseController = TextEditingController();
   final _composerController = TextEditingController();
 
+  TerminalProfiles? _profiles;
+  Future<void>? _profileLoad;
+  bool _profileBusy = false;
   bool _usePrivateKey = false;
   bool _busy = false;
   bool _connected = false;
@@ -464,11 +483,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   TerminalHostRoute _watchRoute = const TerminalHostRoute();
   late final _voiceSession = VoiceControlSession(
     surface: this,
+    active: widget.active,
     requestMicrophone:
         widget.testHooks?.requestMicrophone ?? _voice.requestMicrophone,
   );
   late final _notificationBridge = TerminalNotificationBridge(
     _watch,
+    active: widget.active,
     onSessionAction: _onNotificationSessionAction,
   );
   bool get _inputLocked => _macroRunning || _watch.busy;
@@ -476,6 +497,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   int _macroStepIndex = 0;
   int _macroStepCount = 0;
   bool _macroStopRequested = false;
+  bool _sessionBarEnabled = true;
+  bool _sessionBarFolded = false;
   bool _tmuxBarEnabled = true;
   bool _macroBarEnabled = true;
   bool _commandBarEnabled = true;
@@ -509,6 +532,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   int _reconnectAttempts = 0;
   bool _sessionNotificationStarted = false;
   bool _repairingNetwork = false;
+  bool _disposing = false;
 
   @override
   void initState() {
@@ -524,7 +548,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _terminal.onResize = (width, height, pixelWidth, pixelHeight) {
       _session?.resizeTerminal(width, height, pixelWidth, pixelHeight);
     };
-    _loadProfile();
+    _profileLoad = _loadProfile();
     _loadTerminalKeyUsage();
     _loadTerminalToolVisibility();
     _loadNativeKeyboardLock();
@@ -540,12 +564,13 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   @override
   void dispose() {
+    _disposing = true;
     _voiceSession.removeListener(_onVoiceChanged);
     _voiceSession.dispose();
     _watch.removeListener(_onWatchChanged);
     _notificationBridge.dispose();
     _watch.dispose();
-    widget.macroController?.detach();
+    widget.macroController?.detach(owner: this);
     WidgetsBinding.instance.removeObserver(this);
     _reconnectTimer?.cancel();
     _sessionNotificationStarted = false;
@@ -569,8 +594,20 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   @override
   void didUpdateWidget(covariant SshTerminalTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.profiles != null && !identical(widget.profiles, _profiles)) {
+      _profiles = widget.profiles;
+    }
+    if (oldWidget.active != widget.active) {
+      _voiceSession.setActive(widget.active);
+      _notificationBridge.setActive(widget.active);
+      if (!widget.active) {
+        _terminalFocusNode.unfocus();
+        _composerFocusNode.unfocus();
+      }
+      unawaited(_syncBackgroundSession());
+    }
     if (oldWidget.macroController != widget.macroController) {
-      oldWidget.macroController?.detach();
+      oldWidget.macroController?.detach(owner: this);
       _attachMacroController();
     }
     _watch.updateMacros(widget.notificationMacros);
@@ -592,7 +629,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_connected) _terminalFocusNode.requestFocus();
+      if (widget.active && _connected) _terminalFocusNode.requestFocus();
     });
   }
 
@@ -602,9 +639,10 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   String get _profilePrefix =>
       'ssh_profile:${_host.isEmpty ? 'default' : _host}:$_port';
   String get _hostKeyStorageKey => '$_profilePrefix:host_key';
-  String get _passwordStorageKey => '$_profilePrefix:password';
-  String get _privateKeyStorageKey => '$_profilePrefix:private_key';
-  String get _passphraseStorageKey => '$_profilePrefix:passphrase';
+  TerminalProfile get _currentProfile => _profiles!.profiles.firstWhere(
+    (profile) => profile.id == (widget.profileId ?? _profiles!.selectedId),
+  );
+  String get _privateKeyStorageKey => _currentProfile.secretKey('private_key');
   String get _generatedPrivateKeyStorageKey =>
       'ssh_terminal_generated_private_key';
   String get _generatedPublicKeyStorageKey =>
@@ -625,6 +663,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   void _attachMacroController() {
     widget.macroController?.attach(
+      owner: this,
       runner: _runMacro,
       canRun: () => _connected && !_inputLocked,
       isRunning: () => _inputLocked,
@@ -671,6 +710,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   void _notifyMacroController() {
+    if (_disposing || !mounted) return;
     _watch.externalBusy = _macroRunning;
     _notificationBridge.publish();
     widget.macroController?.notifyStateChanged();
@@ -1040,40 +1080,175 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _loadProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    _hostController.text = prefs.getString('ssh_host') ?? '';
-    _portController.text = prefs.getString('ssh_port') ?? '22';
-    _usernameController.text = prefs.getString('ssh_username') ?? '';
-    _usePrivateKey = prefs.getBool('ssh_use_private_key') ?? false;
-    _privateKeyName = prefs.getString('ssh_private_key_name');
-    _generatedPublicKey = await _storage.read(
-      key: _generatedPublicKeyStorageKey,
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final profiles =
+          widget.profiles ?? await TerminalProfiles.load(prefs, _storage);
+      if (!mounted) return;
+      _profiles = profiles;
+      await _applyTerminalProfile();
+      if (mounted) {
+        setState(() {});
+        unawaited(_syncBackgroundSession());
+      }
+    } catch (error) {
+      _profiles = null;
+      _profileLoad = null;
+      if (mounted) {
+        setState(() => _status = 'Could not load terminal profiles: $error');
+      }
+    }
+  }
+
+  Future<void> _applyTerminalProfile([TerminalProfile? target]) async {
+    final profile = target ?? _currentProfile;
+    final password =
+        await _storage.read(key: profile.secretKey('password')) ?? '';
+    final passphrase =
+        await _storage.read(key: profile.secretKey('passphrase')) ?? '';
+    final privateKey = await _storage.read(
+      key: profile.secretKey('private_key'),
     );
-    _passwordController.text =
-        await _storage.read(key: _passwordStorageKey) ?? '';
-    _passphraseController.text =
-        await _storage.read(key: _passphraseStorageKey) ?? '';
-    if (mounted) setState(() {});
+    var publicKey = await _storage.read(key: profile.secretKey('public_key'));
+    if (privateKey != null && publicKey == null) {
+      try {
+        final keys = SSHKeyPair.fromPem(
+          privateKey,
+          passphrase.isEmpty ? null : passphrase,
+        );
+        if (keys.isNotEmpty) publicKey = _publicKeyLine(keys.first);
+      } catch (_) {
+        // An encrypted imported key may need its passphrase entered first.
+      }
+    } else if (privateKey == null) {
+      publicKey ??= await _storage.read(key: _generatedPublicKeyStorageKey);
+    }
+    if (!mounted) return;
+    _hostController.text = profile.host;
+    _portController.text = profile.port;
+    _usernameController.text = profile.username;
+    _usePrivateKey = profile.usePrivateKey;
+    _privateKeyName = profile.privateKeyName;
+    _passwordController.text = password;
+    _passphraseController.text = passphrase;
+    _generatedPublicKey = publicKey;
   }
 
   Future<void> _saveProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ssh_host', _host);
-    await prefs.setString('ssh_port', _port.toString());
-    await prefs.setString('ssh_username', _username);
-    await prefs.setBool('ssh_use_private_key', _usePrivateKey);
-    if (_privateKeyName != null) {
-      await prefs.setString('ssh_private_key_name', _privateKeyName!);
-    }
-    await _storage.write(
-      key: _passwordStorageKey,
-      value: _passwordController.text,
+    final profiles = _profiles;
+    if (profiles == null) return;
+    profiles.updateProfile(
+      _currentProfile.copyWith(
+        host: _host,
+        port: _port.toString(),
+        username: _username,
+        usePrivateKey: _usePrivateKey,
+        privateKeyName: _privateKeyName,
+      ),
     );
-    await _storage.write(
-      key: _passphraseStorageKey,
-      value: _passphraseController.text,
+    final password = _passwordController.text;
+    final passphrase = _passphraseController.text;
+    final prefs = await SharedPreferences.getInstance();
+    await profiles.save(
+      prefs,
+      _storage,
+      password: password,
+      passphrase: passphrase,
+      credentialProfileId: _currentProfile.id,
     );
     _scheduleServerBackup();
+  }
+
+  Future<void> _selectTerminalProfile(
+    String id, {
+    TerminalProfile? create,
+  }) async {
+    if (_profileBusy || _busy || _inputLocked) return;
+    if (create == null && id == _currentProfile.id) return;
+    if (widget.onSelectProfile != null) {
+      await _saveProfile();
+      await widget.onSelectProfile!(id, create);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    setState(() => _profileBusy = true);
+    try {
+      await _saveProfile();
+      await _disconnect();
+      if (!mounted) return;
+      final target =
+          create ??
+          _profiles!.profiles.firstWhere((profile) => profile.id == id);
+      await _applyTerminalProfile(target);
+      if (!mounted) return;
+      if (create != null) _profiles!.profiles.add(create);
+      _profiles!.selectedId = id;
+      await _saveProfile();
+      if (mounted) {
+        setState(
+          () => _status = 'Selected ${_profiles!.selected.name}. Tap Connect.',
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _status = 'Profile switch failed: $error');
+    } finally {
+      if (mounted) setState(() => _profileBusy = false);
+    }
+  }
+
+  Future<void> _nameTerminalProfile({bool create = false}) async {
+    if (_profiles == null || _busy || _profileBusy || _inputLocked) return;
+    final controller = TextEditingController(
+      text: create ? '' : _currentProfile.name,
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          create ? 'New terminal profile' : 'Rename terminal profile',
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Profile name'),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) Navigator.pop(ctx, value.trim());
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                Navigator.pop(ctx, controller.text.trim());
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    controller.dispose();
+    if (name == null || !mounted) return;
+    if (create) {
+      final profile = TerminalProfile(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        name: name,
+      );
+      await _selectTerminalProfile(profile.id, create: profile);
+    } else {
+      final profile = _currentProfile;
+      _profiles!.updateProfile(profile.copyWith(name: name));
+      await _saveProfile();
+      if (mounted) {
+        setState(() {});
+        widget.onProfilesChanged?.call();
+      }
+    }
   }
 
   Future<void> _loadBackgroundKeepAlive() async {
@@ -1103,15 +1278,18 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     _notificationBridge.enabled =
         _keepAliveInBackground && (_connected || _wantConnected);
     _notificationBridge.publish();
+    if (mounted) widget.onConnectionChanged?.call(_connected);
     if (!Platform.isAndroid) return;
-    if (!_keepAliveInBackground || !_sessionNotificationStarted) {
-      await BackgroundSessionService.stop();
-      return;
-    }
     final target = '$_username@$_host';
     final disconnected = !_connected && !_repairingNetwork;
-    await BackgroundSessionService.start(
-      _connected
+    await BackgroundSessionService.updateSession(
+      this,
+      keepAlive:
+          _keepAliveInBackground &&
+          _sessionNotificationStarted &&
+          (_connected || _wantConnected),
+      active: mounted && widget.active,
+      label: _connected
           ? 'Connected to $target'
           : _repairingNetwork
           ? 'Restarting ZeroTier before reconnecting to $target'
@@ -1226,15 +1404,17 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Future<void> _pickPrivateKey() async {
     final picked = await FilePicker.pickFiles(withData: true);
+    if (!mounted) return;
     final file = picked?.files.isNotEmpty == true ? picked!.files.first : null;
     final bytes = file?.bytes;
     if (file == null || bytes == null) return;
     final pem = utf8.decode(bytes);
     await _storage.write(key: _privateKeyStorageKey, value: pem);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ssh_private_key_name', file.name);
+    await _storage.delete(key: _currentProfile.secretKey('public_key'));
+    await _applyTerminalProfile();
+    if (!mounted) return;
     setState(() => _privateKeyName = file.name);
-    _scheduleServerBackup();
+    await _saveProfile();
   }
 
   String _publicKeyLine(SSHKeyPair keyPair) {
@@ -1266,16 +1446,17 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         value: publicKey,
       );
       await _storage.write(key: _privateKeyStorageKey, value: pem);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('ssh_use_private_key', true);
-      await prefs.setString('ssh_private_key_name', 'DevOTA phone key');
+      await _storage.write(
+        key: _currentProfile.secretKey('public_key'),
+        value: publicKey,
+      );
       setState(() {
         _usePrivateKey = true;
         _privateKeyName = 'DevOTA phone key';
         _generatedPublicKey = publicKey;
         _status = 'Generated DevOTA phone key.';
       });
-      _scheduleServerBackup();
+      await _saveProfile();
     } catch (e) {
       setState(() => _status = 'Key generation failed: $e');
     } finally {
@@ -1290,9 +1471,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _copyPublicKey() async {
-    final publicKey =
-        _generatedPublicKey ??
-        await _storage.read(key: _generatedPublicKeyStorageKey);
+    final publicKey = _generatedPublicKey;
     if (publicKey == null || publicKey.trim().isEmpty) {
       setState(() => _status = 'Generate a key first.');
       return;
@@ -1302,9 +1481,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _sendPublicKeyToServer() async {
-    final publicKey =
-        _generatedPublicKey ??
-        await _storage.read(key: _generatedPublicKeyStorageKey);
+    final publicKey = _generatedPublicKey;
     if (publicKey == null || publicKey.trim().isEmpty) {
       setState(() => _status = 'Generate a key first.');
       return;
@@ -1485,7 +1662,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
       setState(() => _status = 'Host and username are required.');
       return;
     }
-    if (_busy || _connected) return;
+    if (_busy || _profileBusy || _profiles == null || _connected) return;
     _reconnectTimer?.cancel();
     _sessionNotificationStarted = true;
     _wantConnected = true;
@@ -1643,7 +1820,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _disconnect({bool userInitiated = true}) async {
-    if (mounted) _watch.connect(null);
+    if (mounted && !_disposing) _watch.connect(null);
     if (userInitiated) {
       _wantConnected = false;
       _reconnectAttempts = 0;
@@ -1997,12 +2174,21 @@ class _SshTerminalTabState extends State<SshTerminalTab>
 
   Future<void> _attachFileToTerminal() async {
     if (_busy) return;
-    final baseUrl = widget.serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    await _profileLoad;
+    if (!mounted || _profiles == null) return;
+    final baseUrl =
+        (widget.profiles == null ? widget.serverUrl : _currentProfile.serverUrl)
+            .trim()
+            .replaceAll(RegExp(r'/+$'), '');
     if (baseUrl.isEmpty) {
-      setState(() => _status = 'Select a build server before attaching files.');
+      setState(
+        () => _status =
+            'Set this computer’s build server in Connect before attaching files.',
+      );
       return;
     }
     final picked = await FilePicker.pickFiles(withData: true);
+    if (!mounted) return;
     final file = picked?.files.isNotEmpty == true ? picked!.files.first : null;
     if (file == null) return;
     if (file.bytes == null && file.path == null) {
@@ -2365,6 +2551,12 @@ class _SshTerminalTabState extends State<SshTerminalTab>
           if (_inputLocked) _buildMacroRunBanner(theme),
           _buildTerminalToolsHeader(theme),
           if (_terminalToolsVisible) ...[
+            if (widget.sessionSelector != null && !_sessionBarFolded)
+              _macroLock(
+                _buildToolRow(theme, [
+                  _sessionToolBar(theme),
+                ], _sessionToolBar(theme)),
+              ),
             _macroLock(_buildTerminalControlPad(theme)),
             for (final row in _buildToolBarRows(theme)) _macroLock(row),
           ],
@@ -2665,6 +2857,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   }
 
   Future<void> _showConnectionSheet() async {
+    if (_profiles == null) {
+      await (_profileLoad ??= _loadProfile());
+      if (!mounted || _profiles == null) return;
+    }
+    var sheetBusy = false;
     final theme = Theme.of(context);
     final openNotificationControls = await showModalBottomSheet<bool>(
       context: context,
@@ -2674,6 +2871,17 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            final profileEnabled =
+                !sheetBusy && !_busy && !_profileBusy && !_inputLocked;
+            Future<void> sheetAction(Future<void> Function() action) async {
+              setSheetState(() => sheetBusy = true);
+              try {
+                await action();
+              } finally {
+                if (ctx.mounted) setSheetState(() => sheetBusy = false);
+              }
+            }
+
             return Padding(
               padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
               child: SingleChildScrollView(
@@ -2696,22 +2904,89 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (widget.onSelectProfile == null) ...[
+                      DropdownButtonFormField<String>(
+                        key: ValueKey(_currentProfile.id),
+                        initialValue: _currentProfile.id,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Terminal profile',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _profiles!.profiles
+                            .map(
+                              (profile) => DropdownMenuItem(
+                                value: profile.id,
+                                child: Text(
+                                  profile.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: profileEnabled
+                            ? (id) {
+                                if (id != null) {
+                                  sheetAction(() => _selectTerminalProfile(id));
+                                }
+                              }
+                            : null,
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          TextButton.icon(
+                            onPressed: profileEnabled
+                                ? () => sheetAction(
+                                    () => _nameTerminalProfile(create: true),
+                                  )
+                                : null,
+                            icon: const Icon(Icons.add),
+                            label: const Text('New profile'),
+                          ),
+                          TextButton.icon(
+                            onPressed: profileEnabled
+                                ? () => sheetAction(_nameTerminalProfile)
+                                : null,
+                            icon: const Icon(Icons.edit),
+                            label: const Text('Rename'),
+                          ),
+                        ],
+                      ),
+                    ],
+                    Text(
+                      widget.onSelectProfile == null
+                          ? 'Switching profiles saves settings and disconnects the current session. Tap Connect for the selected computer.'
+                          : 'Computer: ${_currentProfile.name}. Manage computers in Connect.',
+                    ),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
-                        Expanded(child: _field(_hostController, 'Host')),
+                        Expanded(
+                          child: _field(
+                            _hostController,
+                            'Host',
+                            enabled: profileEnabled && !_connected,
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         SizedBox(
                           width: 86,
                           child: _field(
                             _portController,
                             'Port',
+                            enabled: profileEnabled && !_connected,
                             keyboardType: TextInputType.number,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    _field(_usernameController, 'User'),
+                    _field(
+                      _usernameController,
+                      'User',
+                      enabled: profileEnabled && !_connected,
+                    ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -2719,6 +2994,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                           child: _usePrivateKey
                               ? TextField(
                                   controller: _passphraseController,
+                                  enabled: profileEnabled && !_connected,
                                   obscureText: true,
                                   decoration: const InputDecoration(
                                     labelText: 'Key passphrase',
@@ -2729,6 +3005,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                                 )
                               : TextField(
                                   controller: _passwordController,
+                                  enabled: profileEnabled && !_connected,
                                   obscureText: true,
                                   decoration: const InputDecoration(
                                     labelText: 'Password',
@@ -2742,19 +3019,23 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         FilterChip(
                           label: const Text('Key'),
                           selected: _usePrivateKey,
-                          onSelected: (v) {
-                            // Drive the sheet only; the parent repaints once the
-                            // sheet closes (avoids a cross-tree setState during
-                            // teardown — see _showControlPadSettingsSheet).
-                            setSheetState(() => _usePrivateKey = v);
-                            _saveProfile();
-                          },
+                          onSelected: profileEnabled && !_connected
+                              ? (v) {
+                                  // Drive the sheet only; the parent repaints once the
+                                  // sheet closes (avoids a cross-tree setState during
+                                  // teardown — see _showControlPadSettingsSheet).
+                                  setSheetState(() => _usePrivateKey = v);
+                                  _saveProfile();
+                                }
+                              : null,
                         ),
                         const SizedBox(width: 4),
                         IconButton.filledTonal(
                           icon: const Icon(Icons.key),
                           tooltip: _privateKeyName ?? 'Import private key',
-                          onPressed: _pickPrivateKey,
+                          onPressed: profileEnabled && !_connected
+                              ? () => sheetAction(_pickPrivateKey)
+                              : null,
                         ),
                       ],
                     ),
@@ -2766,19 +3047,25 @@ class _SshTerminalTabState extends State<SshTerminalTab>
                         FilledButton.icon(
                           icon: Icon(_connected ? Icons.link_off : Icons.link),
                           label: Text(_connected ? 'Disconnect' : 'Connect'),
-                          onPressed: _busy
+                          onPressed: sheetBusy || _busy || _profileBusy
                               ? null
-                              : () => _connected ? _disconnect() : _connect(),
+                              : () => sheetAction(
+                                  () => _connected ? _disconnect() : _connect(),
+                                ),
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.network_ping),
                           label: const Text('Ping'),
-                          onPressed: _busy ? null : _ping,
+                          onPressed: sheetBusy || _busy || _profileBusy
+                              ? null
+                              : () => sheetAction(_ping),
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.add),
                           label: const Text('Key'),
-                          onPressed: _busy ? null : _generateTerminalKey,
+                          onPressed: profileEnabled && !_connected
+                              ? () => sheetAction(_generateTerminalKey)
+                              : null,
                         ),
                         IconButton.filledTonal(
                           icon: const Icon(Icons.copy),
@@ -2972,7 +3259,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
         child: Row(
           children: [
-            _buildArrowCluster(),
+            _buildArrowCluster(theme),
             const SizedBox(width: 6),
             Expanded(
               child: SizedBox(
@@ -3260,12 +3547,33 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     ),
   ];
 
-  Widget _buildArrowCluster() {
+  Widget _buildArrowCluster(ThemeData theme) {
     return SizedBox(
       width: 94,
       height: 64,
       child: Stack(
         children: [
+          if (widget.sessionSelector != null && _sessionBarFolded)
+            Align(
+              alignment: Alignment.topLeft,
+              child: Tooltip(
+                message: 'Sessions',
+                child: InkWell(
+                  onTap: () => _toggleBarFold('sessions'),
+                  onLongPress: () => _toggleBarFold('sessions'),
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: Icon(
+                      Icons.computer,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           for (final arrow in _arrowKeys)
             Align(alignment: arrow.align, child: _terminalArrowButton(arrow)),
         ],
@@ -3667,6 +3975,8 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   void _toggleBarFold(String id) {
     setState(() {
       switch (id) {
+        case 'sessions':
+          _sessionBarFolded = !_sessionBarFolded;
         case 'tmux':
           _tmuxBarFolded = !_tmuxBarFolded;
         case 'macros':
@@ -3681,6 +3991,26 @@ class _SshTerminalTabState extends State<SshTerminalTab>
   // folded bars contribute only their (stacked) label to the next visible bar's
   // row; a trailing folded group with no visible bar after it becomes a
   // label-only row. See the fold behaviour in the terminal tools.
+  _ToolBar _sessionToolBar(ThemeData theme) => _ToolBar(
+    id: 'sessions',
+    label: 'sessions',
+    background: theme.colorScheme.surfaceContainerLow,
+    enabled: _sessionBarEnabled,
+    folded: _sessionBarFolded,
+    onToggle: () => setState(() => _sessionBarEnabled = !_sessionBarEnabled),
+    onToggleFold: () => _toggleBarFold('sessions'),
+    buildContent: () => Align(
+      alignment: Alignment.centerLeft,
+      child: IgnorePointer(
+        ignoring: !_sessionBarEnabled,
+        child: Opacity(
+          opacity: _sessionBarEnabled ? 1 : 0.4,
+          child: widget.sessionSelector!,
+        ),
+      ),
+    ),
+  );
+
   List<Widget> _buildToolBarRows(ThemeData theme) {
     final bars = <_ToolBar>[
       _ToolBar(
@@ -4172,9 +4502,11 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     TextEditingController controller,
     String label, {
     TextInputType? keyboardType,
+    bool enabled = true,
   }) {
     return TextField(
       controller: controller,
+      enabled: enabled && !_busy && !_profileBusy && !_connected,
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),

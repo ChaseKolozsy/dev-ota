@@ -9,7 +9,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backup_service.dart';
-import 'agent_profiles.dart';
+import 'terminal_profiles.dart';
+import 'computer_profiles_panel.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'backup_tab.dart';
 import 'connect_tab.dart';
 import 'device_macro_evidence_outbox.dart';
@@ -22,6 +24,7 @@ import 'macro_sync_service.dart';
 import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
 import 'ssh_terminal_tab.dart';
+import 'ssh_terminal_sessions.dart';
 import 'terminal_macro.dart';
 import 'zero_tier_recovery.dart';
 import 'voice_input_service.dart';
@@ -98,7 +101,10 @@ class _BuildListScreenState extends State<BuildListScreen>
   final _githubRefController = TextEditingController();
   final _githubArtifactController = TextEditingController();
   bool _agentWholeDevice = false;
-  AgentProfiles? _agentProfiles;
+  TerminalProfiles? _computerProfiles;
+  Future<void>? _connectionsLoad;
+  bool _computerBusy = false;
+  final _profileStorage = const FlutterSecureStorage();
   bool _agentBusy = false;
   Map<String, dynamic>? _agentStatus;
   bool _githubBusy = false;
@@ -183,7 +189,9 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   void _onMacroControllerChanged() {
-    if (mounted) setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _onTabControllerChanged() {
@@ -779,13 +787,14 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Future<bool> _runDeviceMacro(TerminalMacro macro) async {
     if (macro.name == zeroTierRecoveryMacroName) {
-      final status = await _controlAgentChannel.invokeMapMethod<String, dynamic>(
-        'getAgentStatus',
-      );
+      final status = await _controlAgentChannel
+          .invokeMapMethod<String, dynamic>('getAgentStatus');
       final problem = zeroTierRecoveryReadiness(status ?? {});
       if (problem != null) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(problem)));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(problem)));
         }
         return false;
       }
@@ -870,7 +879,9 @@ class _BuildListScreenState extends State<BuildListScreen>
     final problem = zeroTierRecoveryReadiness(status ?? {});
     if (problem != null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(problem)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(problem)));
       }
       throw StateError(problem);
     }
@@ -883,7 +894,9 @@ class _BuildListScreenState extends State<BuildListScreen>
       }
     }
     if (recovery == null) {
-      throw StateError('ZeroTier recovery macro is unavailable. Sync Macros while online first.');
+      throw StateError(
+        'ZeroTier recovery macro is unavailable. Sync Macros while online first.',
+      );
     }
     return _runDeviceMacro(recovery);
   }
@@ -998,13 +1011,9 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _loadAgentSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    final profiles = await AgentProfiles.load(prefs);
-    if (!mounted) return;
-    _agentProfiles = profiles;
-    _applyAgentProfile();
-    if (mounted) setState(() {});
-    _refreshAgentStatus();
+    await _loadServers();
+    await _applyAgentProfile();
+    await _refreshAgentStatus();
   }
 
   Future<void> _loadGithubSettings() async {
@@ -1151,90 +1160,90 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _saveAgentSettings() async {
-    final profiles = _agentProfiles;
+    final profiles = _computerProfiles;
     if (profiles == null) return;
-    profiles.updateSelected(
-      url: _agentUrlController.text.trim(),
-      token: _agentTokenController.text.trim(),
-      wholeDevice: _agentWholeDevice,
+    final current = profiles.selected;
+    final updated = current.copyWith(
+      agentUrl: _agentUrlController.text.trim(),
+      agentWholeDevice: _agentWholeDevice,
+    );
+    final token = _agentTokenController.text.trim();
+    profiles.updateProfile(updated);
+    await _profileStorage.write(
+      key: current.secretKey('agent_token'),
+      value: token,
     );
     final prefs = await SharedPreferences.getInstance();
-    await profiles.save(prefs);
+    await profiles.save(prefs, _profileStorage);
     _scheduleServerBackup();
   }
 
-  void _applyAgentProfile() {
-    final profile = _agentProfiles!.selected;
-    _agentUrlController.text = profile.url;
-    _agentTokenController.text = profile.token;
-    _agentWholeDevice = profile.wholeDevice;
-  }
-
-  Future<void> _selectAgentProfile(String id) async {
-    await _saveAgentSettings();
-    if (!mounted) return;
-    setState(() {
-      _agentProfiles!.selectedId = id;
-      _applyAgentProfile();
-    });
-    await _saveAgentSettings();
-  }
-
-  Future<void> _nameAgentProfile({bool create = false}) async {
-    final profiles = _agentProfiles;
+  Future<void> _applyAgentProfile() async {
+    final profiles = _computerProfiles;
     if (profiles == null) return;
-    final nameController = TextEditingController(
-      text: create ? '' : profiles.selected.name,
-    );
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(create ? 'New agent profile' : 'Rename profile'),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Profile name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              if (name.isNotEmpty) Navigator.pop(context, name);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    // The dialog's closing animation can still refer to its controller.
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    nameController.dispose();
-    if (name == null || !mounted) return;
-    await _saveAgentSettings();
+    final profile = profiles.selected;
+    final token =
+        await _profileStorage.read(key: profile.secretKey('agent_token')) ?? '';
     if (!mounted) return;
-    setState(() {
-      if (create) {
-        final profile = AgentProfile(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          name: name,
-        );
-        profiles.profiles.add(profile);
-        profiles.selectedId = profile.id;
-        _applyAgentProfile();
-      } else {
-        profiles.updateSelected(
-          url: profiles.selected.url,
-          token: profiles.selected.token,
-          wholeDevice: profiles.selected.wholeDevice,
-          name: name,
+    _agentUrlController.text = profile.agentUrl;
+    _agentTokenController.text = token;
+    _agentWholeDevice = profile.agentWholeDevice;
+    setState(() {});
+  }
+
+  Future<void> _selectComputerProfile(String id) async {
+    final profiles = _computerProfiles;
+    if (profiles == null || _computerBusy || id == profiles.selectedId) return;
+    setState(() => _computerBusy = true);
+    try {
+      await _saveAgentSettings();
+      profiles.selectedId = id;
+      await profiles.save(
+        await SharedPreferences.getInstance(),
+        _profileStorage,
+      );
+      await _applyAgentProfile();
+      if (!mounted) return;
+      setState(() => _activeServer = profiles.selected.serverUrl);
+      _fetchBuilds();
+      unawaited(_syncMacrosFromServerSilently());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not select computer: $error')),
         );
       }
-    });
+    } finally {
+      if (mounted) setState(() => _computerBusy = false);
+    }
+  }
+
+  Future<void> _saveComputerProfile(
+    TerminalProfile profile,
+    bool create,
+  ) async {
+    final profiles = _computerProfiles;
+    if (profiles == null || _computerBusy) return;
     await _saveAgentSettings();
+    if (create) {
+      profiles.profiles.add(profile);
+      await _selectComputerProfile(profile.id);
+    } else {
+      // Agent fields may have just been saved; preserve them when editing the name/server.
+      profiles.updateProfile(
+        profiles.selected.copyWith(
+          name: profile.name,
+          serverUrl: profile.serverUrl,
+        ),
+      );
+      await profiles.save(
+        await SharedPreferences.getInstance(),
+        _profileStorage,
+      );
+      if (mounted) setState(() => _activeServer = profiles.selected.serverUrl);
+      _fetchBuilds();
+    }
+    _scheduleServerBackup();
   }
 
   Future<void> _startAgent() async {
@@ -1377,82 +1386,59 @@ class _BuildListScreenState extends State<BuildListScreen>
     }
   }
 
-  Future<void> _loadServers() async {
+  Future<void> _loadServers() =>
+      _connectionsLoad ??= _loadComputerConnections();
+
+  Future<void> _loadComputerConnections() async {
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getStringList('servers') ?? [];
-    if (saved.isEmpty) {
-      // First run on this install: seed with the default so the UI has at
-      // least one entry. Saved immediately so subsequent launches skip this.
-      saved.add(_defaultServerUrl);
-    }
-    final active = prefs.getString('active_server') ?? saved.first;
+    final profiles = await TerminalProfiles.loadComputers(
+      prefs,
+      _profileStorage,
+      defaultServerUrl: _defaultServerUrl,
+    );
     if (!mounted) return;
     setState(() {
-      _servers = saved;
-      _activeServer = saved.contains(active) ? active : saved.first;
+      _computerProfiles = profiles;
+      _servers = prefs.getStringList('servers') ?? [];
+      _activeServer = profiles.selected.serverUrl;
     });
-    await _saveServers();
-    _fetchBuilds();
-    _restoreBackupFromServerIfEmpty();
-    unawaited(_syncMacrosFromServerSilently());
-  }
-
-  Future<void> _saveServers() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('servers', _servers);
-    await prefs.setString('active_server', _activeServer);
-    _scheduleServerBackup();
-  }
-
-  void _setActiveServer(String url) {
-    if (!_servers.contains(url) || url == _activeServer) return;
-    setState(() => _activeServer = url);
-    _saveServers();
+    await _applyAgentProfile();
     _fetchBuilds();
     _restoreBackupFromServerIfEmpty();
     unawaited(_syncMacrosFromServerSilently());
   }
 
   void _addAndSelectServer(String url) {
+    final profiles = _computerProfiles;
+    if (profiles == null) return;
     final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
-    if (clean.isEmpty) return;
-    setState(() {
-      if (!_servers.contains(clean)) _servers.add(clean);
-      _activeServer = clean;
-    });
-    _saveServers();
-    _fetchBuilds();
-    _restoreBackupFromServerIfEmpty();
-    unawaited(_syncMacrosFromServerSilently());
-  }
-
-  Future<void> _showManageServersDialog() async {
-    final originalActive = _activeServer;
-    final result = await showDialog<_ManageServersResult>(
-      context: context,
-      builder: (ctx) => _ManageServersDialog(
-        initialServers: List<String>.from(_servers),
-        initialActive: _activeServer,
-        defaultServerUrl: _defaultServerUrl,
-      ),
-    );
-    if (result == null || !mounted) return;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() {
-        _servers = result.servers;
-        _activeServer = result.servers.contains(result.active)
-            ? result.active
-            : result.servers.first;
-      });
-      _saveServers();
-      if (_activeServer != originalActive) {
-        _fetchBuilds();
-        _restoreBackupFromServerIfEmpty();
-        unawaited(_syncMacrosFromServerSilently());
+    final host = Uri.tryParse(clean)?.host ?? '';
+    if (host.isEmpty) return;
+    final existing = profiles.profiles
+        .where(
+          (profile) =>
+              profile.serverUrl == clean ||
+              profile.host.toLowerCase() == host.toLowerCase(),
+        )
+        .firstOrNull;
+    if (existing != null) {
+      profiles.updateProfile(existing.copyWith(serverUrl: clean));
+      if (existing.id == profiles.selectedId) {
+        _saveComputerProfile(existing.copyWith(serverUrl: clean), false);
+      } else {
+        _selectComputerProfile(existing.id);
       }
-    });
+    } else {
+      _saveComputerProfile(
+        TerminalProfile(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          name: host,
+          host: host,
+          serverUrl: clean,
+        ),
+        true,
+      );
+    }
   }
 
   Future<void> _fetchBuilds() async {
@@ -1818,32 +1804,50 @@ class _BuildListScreenState extends State<BuildListScreen>
           servers: _servers,
           activeServer: _activeServer,
           onServerSelected: _addAndSelectServer,
+          profileManager: _computerProfiles == null
+              ? null
+              : ComputerProfilesPanel(
+                  profiles: _computerProfiles!,
+                  busy: _computerBusy,
+                  onSelect: _selectComputerProfile,
+                  onSave: _saveComputerProfile,
+                ),
         ),
         _buildBuildsTab(),
         ProjectsTab(dio: _dio, serverUrl: _baseUrl),
-        SshTerminalTab(
+        SshTerminalSessions(
           key: const PageStorageKey('ssh-terminal-tab'),
-          dio: _dio,
-          serverUrl: _baseUrl,
-          fullscreen: _terminalFullscreen,
-          quickCommands: _quickCommands,
-          quickMacros: _quickMacros,
-          notificationMacros: _rankedMacros
-              .where((m) => !m.isDeviceMacro)
-              .toList(),
-          macroController: _macroController,
-          onFullscreenChanged: _setTerminalFullscreen,
-          onCommandUsed: _recordCommandUse,
-          onMacroUsed: _recordMacroUse,
-          onMacroReorder: _repositionQuickMacro,
-          onZeroTierRecovery:
-              _macros.any(
-                (macro) =>
-                    macro.name == zeroTierRecoveryMacroName &&
-                    macro.isDeviceMacro,
-              )
-              ? _runZeroTierRecoveryMacro
-              : null,
+          terminal: SshTerminalTab(
+            dio: _dio,
+            serverUrl: _baseUrl,
+            profiles: _computerProfiles,
+            onSelectProfile: (id, create) async {
+              if (create != null) {
+                await _saveComputerProfile(create, true);
+              } else {
+                await _selectComputerProfile(id);
+              }
+            },
+            fullscreen: _terminalFullscreen,
+            quickCommands: _quickCommands,
+            quickMacros: _quickMacros,
+            notificationMacros: _rankedMacros
+                .where((m) => !m.isDeviceMacro)
+                .toList(),
+            macroController: _macroController,
+            onFullscreenChanged: _setTerminalFullscreen,
+            onCommandUsed: _recordCommandUse,
+            onMacroUsed: _recordMacroUse,
+            onMacroReorder: _repositionQuickMacro,
+            onZeroTierRecovery:
+                _macros.any(
+                  (macro) =>
+                      macro.name == zeroTierRecoveryMacroName &&
+                      macro.isDeviceMacro,
+                )
+                ? _runZeroTierRecoveryMacro
+                : null,
+          ),
         ),
         _buildCommandsTab(),
         _buildMacrosTab(),
@@ -1860,6 +1864,7 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<void> _reloadImportedSettings() async {
+    _connectionsLoad = null;
     await _loadServers();
     await _loadIssues();
     await _loadCommands();
@@ -1879,7 +1884,7 @@ class _BuildListScreenState extends State<BuildListScreen>
               Expanded(
                 child: InputDecorator(
                   decoration: const InputDecoration(
-                    labelText: 'Server',
+                    labelText: 'Computer',
                     border: OutlineInputBorder(),
                     isDense: true,
                     contentPadding: EdgeInsets.symmetric(
@@ -1889,25 +1894,24 @@ class _BuildListScreenState extends State<BuildListScreen>
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
-                      value: _servers.contains(_activeServer)
-                          ? _activeServer
-                          : null,
+                      value: _computerProfiles?.selectedId,
                       isExpanded: true,
                       isDense: true,
-                      items: _servers
-                          .map(
-                            (s) => DropdownMenuItem(
-                              value: s,
-                              child: Text(
-                                s,
-                                overflow: TextOverflow.ellipsis,
-                                maxLines: 1,
-                              ),
-                            ),
-                          )
-                          .toList(),
+                      items:
+                          (_computerProfiles?.profiles ?? <TerminalProfile>[])
+                              .map(
+                                (profile) => DropdownMenuItem(
+                                  value: profile.id,
+                                  child: Text(
+                                    profile.name,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                ),
+                              )
+                              .toList(),
                       onChanged: (v) {
-                        if (v != null) _setActiveServer(v);
+                        if (v != null) _selectComputerProfile(v);
                       },
                     ),
                   ),
@@ -1922,8 +1926,8 @@ class _BuildListScreenState extends State<BuildListScreen>
               const SizedBox(width: 8),
               IconButton.filled(
                 icon: const Icon(Icons.dns),
-                tooltip: 'Manage servers',
-                onPressed: _showManageServersDialog,
+                tooltip: 'Manage computers',
+                onPressed: () => _tabController.animateTo(0),
               ),
             ],
           ),
@@ -2435,48 +2439,12 @@ class _BuildListScreenState extends State<BuildListScreen>
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        if (_agentProfiles != null) ...[
-          DropdownButtonFormField<String>(
-            key: ValueKey(_agentProfiles!.selectedId),
-            initialValue: _agentProfiles!.selectedId,
-            decoration: const InputDecoration(
-              labelText: 'Agent profile',
-              border: OutlineInputBorder(),
-            ),
-            items: _agentProfiles!.profiles
-                .map(
-                  (profile) => DropdownMenuItem(
-                    value: profile.id,
-                    child: Text(profile.name),
-                  ),
-                )
-                .toList(),
-            onChanged: _agentBusy || running
-                ? null
-                : (id) {
-                    if (id != null) _selectAgentProfile(id);
-                  },
-          ),
-          Wrap(
-            spacing: 8,
-            children: [
-              TextButton.icon(
-                onPressed: _agentBusy || running
-                    ? null
-                    : () => _nameAgentProfile(create: true),
-                icon: const Icon(Icons.add),
-                label: const Text('New profile'),
-              ),
-              TextButton.icon(
-                onPressed: _agentBusy || running ? null : _nameAgentProfile,
-                icon: const Icon(Icons.edit),
-                label: const Text('Rename'),
-              ),
-            ],
-          ),
-          if (running) const Text('Stop the agent before switching profiles.'),
-          const SizedBox(height: 10),
-        ],
+        Text('Computer: ${_computerProfiles?.selected.name ?? 'Loading…'}'),
+        TextButton(
+          onPressed: () => _tabController.animateTo(0),
+          child: const Text('Manage computers in Connect'),
+        ),
+        const SizedBox(height: 10),
         TextField(
           controller: _agentUrlController,
           decoration: const InputDecoration(
@@ -2995,203 +2963,6 @@ class _CompactTab extends StatelessWidget {
           const SizedBox(width: 4),
           Text(label, maxLines: 1, overflow: TextOverflow.fade),
         ],
-      ),
-    );
-  }
-}
-
-class _ManageServersResult {
-  const _ManageServersResult({required this.servers, required this.active});
-  final List<String> servers;
-  final String active;
-}
-
-/// Self-contained dialog for managing the saved server list.
-///
-/// The dialog has its own State class (not StatefulBuilder), keeps a private
-/// copy of the server list, and returns the final state via Navigator.pop.
-/// The parent applies the result post-frame. This separation avoids the
-/// cross-tree setState pattern that previously tripped Flutter's
-/// `dependents.isEmpty` assertion on dialog dismount.
-class _ManageServersDialog extends StatefulWidget {
-  const _ManageServersDialog({
-    required this.initialServers,
-    required this.initialActive,
-    required this.defaultServerUrl,
-  });
-
-  final List<String> initialServers;
-  final String initialActive;
-  final String defaultServerUrl;
-
-  @override
-  State<_ManageServersDialog> createState() => _ManageServersDialogState();
-}
-
-class _ManageServersDialogState extends State<_ManageServersDialog> {
-  late List<String> _servers;
-  late String _active;
-  late final String _originalActive;
-  late final List<String> _originalServers;
-  final _addController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _servers = List<String>.from(widget.initialServers);
-    _active = widget.initialActive;
-    _originalActive = widget.initialActive;
-    _originalServers = List<String>.from(widget.initialServers);
-  }
-
-  @override
-  void dispose() {
-    _addController.dispose();
-    super.dispose();
-  }
-
-  bool get _changed =>
-      _active != _originalActive ||
-      _servers.length != _originalServers.length ||
-      !_servers.every(_originalServers.contains);
-
-  void _doAdd() {
-    final url = _addController.text.trim().replaceAll(RegExp(r'/+$'), '');
-    if (url.isEmpty || _servers.contains(url)) return;
-    setState(() {
-      _servers.add(url);
-      _addController.clear();
-    });
-  }
-
-  void _doActivate(String url) {
-    if (!_servers.contains(url) || url == _active) return;
-    setState(() => _active = url);
-  }
-
-  void _doRemove(String url) {
-    if (_servers.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot remove the only saved server')),
-      );
-      return;
-    }
-    setState(() {
-      _servers.remove(url);
-      if (_active == url) _active = _servers.first;
-    });
-  }
-
-  void _doReset() {
-    setState(() {
-      _servers
-        ..clear()
-        ..add(widget.defaultServerUrl);
-      _active = widget.defaultServerUrl;
-    });
-  }
-
-  void _close() {
-    Navigator.of(context).pop(
-      _changed
-          ? _ManageServersResult(
-              servers: List<String>.from(_servers),
-              active: _active,
-            )
-          : null,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Manage servers', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _addController,
-                      decoration: const InputDecoration(
-                        hintText: 'http://host:port',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      keyboardType: TextInputType.url,
-                      autocorrect: false,
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _doAdd(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    icon: const Icon(Icons.add),
-                    tooltip: 'Add',
-                    onPressed: _doAdd,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _servers.length,
-                  itemBuilder: (context, index) {
-                    final url = _servers[index];
-                    final isActive = url == _active;
-                    return ListTile(
-                      leading: Icon(
-                        isActive ? Icons.check_circle : Icons.dns_outlined,
-                        color: isActive ? theme.colorScheme.primary : null,
-                      ),
-                      title: Text(
-                        url,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: isActive
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                      ),
-                      onTap: () => _doActivate(url),
-                      trailing: IconButton.filledTonal(
-                        icon: const Icon(Icons.delete_outline),
-                        tooltip: _servers.length > 1
-                            ? 'Remove this server'
-                            : 'Cannot remove the only server',
-                        color: theme.colorScheme.error,
-                        onPressed: _servers.length > 1
-                            ? () => _doRemove(url)
-                            : null,
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  TextButton(
-                    onPressed: _doReset,
-                    child: const Text('Reset to default'),
-                  ),
-                  TextButton(onPressed: _close, child: const Text('Done')),
-                ],
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

@@ -134,4 +134,35 @@ void main() {
       },
     );
   }
+  testWidgets(
+    'inactive session disposal preserves the selected notification handler',
+    (tester) async {
+      final firstWatch = TerminalWatchController();
+      final secondWatch = TerminalWatchController();
+      String? recipient;
+      final first = TerminalNotificationBridge(
+        firstWatch,
+        onSessionAction: (_) async => recipient = 'first',
+      );
+      first.setActive(false);
+      final second = TerminalNotificationBridge(
+        secondWatch,
+        onSessionAction: (_) async => recipient = 'second',
+      );
+      first.dispose();
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        channel.name,
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('sessionAction', {'action': 'disconnect'}),
+        ),
+        (_) {},
+      );
+      await tester.pump();
+      expect(recipient, 'second');
+      second.dispose();
+      firstWatch.dispose();
+      secondWatch.dispose();
+      await tester.pump(const Duration(milliseconds: 350));
+    },
+  );
 }

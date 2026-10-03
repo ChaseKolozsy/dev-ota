@@ -89,20 +89,33 @@ you introduce ZeroTier, Tailscale, WireGuard, or another private network.
 
 - **Connect**: discovers `_devota._tcp.local.` LAN servers and opens or installs
   ZeroTier, Tailscale, or WireGuard without making one provider mandatory.
+  Manage computers here: each profile owns its build server, SSH credentials,
+  agent URL and pair token. Selecting a computer in Connect, Builds or Terminal
+  updates the other tabs together. Existing profiles migrate automatically.
 - **Builds**: groups APKs by app from `devota.yaml`, downloads gzip-compressed
   APKs, opens Android's package installer, and keeps cached APKs for retry.
 - **Projects**: local-first client/project Kanban board with phase templates,
   cards, card comments, Postmark email drafts, manual send confirmation, and
   inbound replies imported as card comments.
-- **Terminal**: SSH terminal using password or private-key auth, secure
-  credential storage, generated phone-owned Ed25519 keys, public-key install
+- **Terminal**: SSH terminal with named computer profiles, password or
+  private-key auth, secure credentials saved separately for each profile,
+  generated phone-owned Ed25519 keys, public-key install
   through the build server, trust-on-first-use host-key verification, a
   lightweight TCP ping, and voice-to-terminal command submission. While a
   session is live the app runs an ongoing notification so Android 12+ cannot
   freeze the process (and drop SSH) when you switch apps; dropped sessions
   reconnect on their own with a backoff and immediately when you return. Turn
   it off under the terminal's SSH settings if you would rather not have the
-  notification.
+  notification. Use New computer or Edit computer in Connect to manage
+  profiles, and SSH Settings to configure the selected computer’s login.
+  The compact sessions dropdown inside Tools switches between
+  computers while keeping each opened SSH session and its scrollback alive.
+  The selector sits above the arrow keys. Long-press the sessions label to fold
+  it into a small icon left of the up arrow; tap or long-press that icon to restore
+  it. Collapse Tools to hide all controls.
+  Tap Connect the first time you open a computer; Disconnect affects only that
+  session. Live sessions are retained while DevOTA is running; saved profiles
+  and their credentials survive restarts and are included in backups.
 - **Files**: download files an agent has staged on the build server (in the
   file-transfer directory, or via `POST /files/upload`) straight into the
   phone's public Downloads folder for re-upload elsewhere. Staged **folders**

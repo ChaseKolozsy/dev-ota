@@ -18,6 +18,8 @@ class BackupService {
     'ssh_port',
     'ssh_username',
     'ssh_private_key_name',
+    'ssh_profiles_json',
+    'ssh_selected_profile_id',
     'command_usage_counts_json',
     'terminal_key_usage_counts_json',
     'github_repo',
@@ -32,6 +34,7 @@ class BackupService {
   ];
   static const _boolPreferenceKeys = [
     'agent_whole_device',
+    'computer_profiles_migrated',
     'ssh_use_private_key',
     'terminal_fullscreen',
     'terminal_native_keyboard_locked',
@@ -101,6 +104,22 @@ class BackupService {
     final prefs = await SharedPreferences.getInstance();
     final shared = backup['sharedPreferences'];
     if (shared is Map) {
+      // Older exports need another merge into the unified computer model.
+      if (!shared.containsKey('computer_profiles_migrated') &&
+          [
+            'ssh_profiles_json',
+            'ssh_host',
+            'agent_profiles_json',
+            'agent_ws_url',
+            'servers',
+          ].any(shared.containsKey)) {
+        await prefs.remove('computer_profiles_migrated');
+        if (shared.containsKey('ssh_host') &&
+            !shared.containsKey('ssh_profiles_json')) {
+          await prefs.remove('ssh_profiles_json');
+          await prefs.remove('ssh_selected_profile_id');
+        }
+      }
       for (final entry in shared.entries) {
         final key = entry.key.toString();
         final value = entry.value;
