@@ -666,7 +666,9 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Future<void> _runMacroFromMacrosTab(TerminalMacro macro) async {
     if (_anyMacroRunning) return;
-    await _syncMacrosFromServerSilently();
+    if (macro.name != zeroTierRecoveryMacroName) {
+      await _syncMacrosFromServerSilently();
+    }
     if (!mounted || _anyMacroRunning) return;
     TerminalMacro? currentMacro;
     for (final item in _macros) {
