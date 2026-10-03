@@ -41,6 +41,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        LocalTerminalReview.attach(MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_review"))
         TerminalNotifications.attach(this, MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "devota/terminal_notifications"))
         VoiceControl.attach(this, MethodChannel(

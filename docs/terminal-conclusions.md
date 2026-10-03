@@ -1,5 +1,9 @@
 # Listen to terminal conclusions and review reported completion
 
+Current builds use [phone-local OCR and text rules](terminal-local-review.md).
+The home-model review description below documents the previous implementation;
+the listening controls remain current.
+
 Each configured terminal notification now offers **Listen** when its pane has
 settled. Android reads recent text with an installed offline voice. A separate
 reading notification has **Earlier**, **Replay**, and **Stop**; these work while

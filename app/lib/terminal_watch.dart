@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'terminal_macro.dart';
 import 'terminal_submission.dart';
 import 'terminal_conclusion.dart';
+import 'local_terminal_review.dart';
 
 typedef TerminalCommand = Future<String> Function(String command);
 String shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
@@ -379,6 +380,7 @@ class TerminalWatchController extends ChangeNotifier {
     String paneId,
     String expectedToken, {
     int lines = 120,
+    bool reviewSnapshot = false,
   }) async {
     final binding = bindings.firstWhere((b) => b.pane.id == paneId);
     if (token(binding) != expectedToken || !canAct(binding)) {
@@ -397,6 +399,7 @@ class TerminalWatchController extends ChangeNotifier {
         after != before) {
       throw StateError('Terminal changed');
     }
+    if (reviewSnapshot) return terminalReviewExcerpt(raw);
     final clean = cleanTerminalConclusion(raw);
     if (clean.length <= 24000) return clean;
     final tail = clean.substring(clean.length - 24000);
@@ -436,7 +439,12 @@ class TerminalWatchController extends ChangeNotifier {
       _reviewing = true;
       _notify();
       try {
-        var source = await conclusion(binding.pane.id, token(binding));
+        var source = await conclusion(
+          binding.pane.id,
+          token(binding),
+          lines: 40,
+          reviewSnapshot: true,
+        );
         if (source.length > 10000) {
           source = source.substring(source.length - 10000);
           final boundary = source.indexOf('\n');

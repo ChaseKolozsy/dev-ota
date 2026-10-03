@@ -1,0 +1,67 @@
+{
+  "id": "macro-1790060508099855-de5d08ae",
+  "name": "Restart ZeroTier and reconnect",
+  "priority": 32,
+  "steps": [
+    {
+      "id": "zt-profile",
+      "type": "device",
+      "value": "{\"action\":\"assertDeviceProfile\",\"args\":{\"profile\":\"revvl5-android31-720x1640\",\"models\":[\"REVVL V+ 5G\"],\"androidSdk\":31,\"shortSidePx\":720,\"longSidePx\":1640,\"densityDpi\":320},\"capture\":true,\"label\":\"Verify REVVL V+ 5G target\"}",
+      "delaySeconds": 0.0
+    },
+    {
+      "id": "zt-close-shade",
+      "type": "device",
+      "value": "{\"action\":\"back\",\"args\":{},\"capture\":true,\"label\":\"Close notification shade before opening ZeroTier\"}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "zt-launch",
+      "type": "device",
+      "value": "{\"action\":\"launchApp\",\"args\":{\"packageName\":\"com.zerotier.one\"},\"expect\":{\"activePackage\":\"com.zerotier.one\"},\"capture\":true,\"label\":\"Open ZeroTier\"}",
+      "delaySeconds": 2.0
+    },
+    {
+      "id": "zt-off",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"resourceIdExact\":\"com.zerotier.one:id/network_start_network_switch\",\"checkable\":true,\"checked\":true},\"packageName\":\"com.zerotier.one\"},\"expect\":{\"activePackage\":\"com.zerotier.one\"},\"allowError\":true,\"capture\":true,\"label\":\"Turn ZeroTier off if it is on\"}",
+      "delaySeconds": 3.0
+    },
+    {
+      "id": "zt-offline",
+      "type": "device",
+      "value": "{\"action\":\"waitUi\",\"args\":{\"packageName\":\"com.zerotier.one\",\"timeoutSeconds\":15,\"intervalMs\":500},\"expect\":{\"activePackage\":\"com.zerotier.one\",\"textIncludes\":[\"OFFLINE\"]},\"capture\":true,\"label\":\"Wait until ZeroTier is offline\"}",
+      "delaySeconds": 0
+    },
+    {
+      "id": "zt-on",
+      "type": "device",
+      "value": "{\"action\":\"tapUi\",\"args\":{\"selector\":{\"resourceIdExact\":\"com.zerotier.one:id/network_start_network_switch\",\"checkable\":true,\"checked\":false},\"packageName\":\"com.zerotier.one\"},\"capture\":true,\"label\":\"Turn ZeroTier on\"}",
+      "delaySeconds": 0
+    },
+    {
+      "id": "zt-reopen",
+      "type": "device",
+      "value": "{\"action\":\"launchApp\",\"args\":{\"packageName\":\"com.zerotier.one\"},\"capture\":true,\"label\":\"Reopen ZeroTier to verify network state\"}",
+      "delaySeconds": 1
+    },
+    {
+      "id": "zt-online",
+      "type": "device",
+      "value": "{\"action\":\"waitUi\",\"args\":{\"packageName\":\"com.zerotier.one\",\"timeoutSeconds\":60,\"intervalMs\":500},\"expect\":{\"activePackage\":\"com.zerotier.one\",\"textIncludes\":[\"ONLINE\"],\"textExcludes\":[\"OFFLINE\"]},\"capture\":true,\"label\":\"Wait until ZeroTier is online\"}",
+      "delaySeconds": 0
+    },
+    {
+      "id": "zt-back",
+      "type": "device",
+      "value": "{\"action\":\"back\",\"args\":{\"packageName\":\"com.zerotier.one\"},\"capture\":true,\"label\":\"Return to DevOTA\"}",
+      "delaySeconds": 1.0
+    },
+    {
+      "id": "zt-show-terminal-notification",
+      "type": "device",
+      "value": "{\"action\":\"swipe\",\"args\":{\"x1Normalized\":0.5,\"y1Normalized\":0.01,\"x2Normalized\":0.5,\"y2Normalized\":0.75,\"durationMs\":500},\"expect\":{\"activePackage\":\"com.android.systemui\"},\"capture\":true,\"label\":\"Open notification shade to show terminal reconnect status\"}",
+      "delaySeconds": 0.0
+    }
+  ]
+}

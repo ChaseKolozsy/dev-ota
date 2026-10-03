@@ -23,6 +23,7 @@ import 'openai_key_dialog.dart';
 import 'projects_tab.dart';
 import 'ssh_terminal_tab.dart';
 import 'terminal_macro.dart';
+import 'zero_tier_recovery.dart';
 import 'voice_input_service.dart';
 
 class BuildListScreen extends StatefulWidget {
@@ -681,7 +682,7 @@ class _BuildListScreenState extends State<BuildListScreen>
       return;
     }
     if (currentMacro.isDeviceMacro) {
-      await _runDeviceMacro(currentMacro);
+      await _runDeviceMacro(repairZeroTierRecoveryMacro(currentMacro));
       return;
     }
     _tabController.animateTo(3);
@@ -775,6 +776,19 @@ class _BuildListScreenState extends State<BuildListScreen>
   }
 
   Future<bool> _runDeviceMacro(TerminalMacro macro) async {
+    if (macro.name == zeroTierRecoveryMacroName) {
+      final status = await _controlAgentChannel.invokeMapMethod<String, dynamic>(
+        'getAgentStatus',
+      );
+      final problem = zeroTierRecoveryReadiness(status ?? {});
+      if (problem != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(problem)));
+        }
+        return false;
+      }
+      macro = repairZeroTierRecoveryMacro(macro);
+    }
     final runId = _newDeviceMacroRunId(macro);
     final startedAt = DateTime.now();
     Object? failure;
@@ -847,20 +861,27 @@ class _BuildListScreenState extends State<BuildListScreen>
 
   Future<bool> _runZeroTierRecoveryMacro() async {
     if (_anyMacroRunning) return false;
-    await _syncMacrosFromServerSilently();
+    // Recovery must work without the network it is repairing.
+    final status = await _controlAgentChannel.invokeMapMethod<String, dynamic>(
+      'getAgentStatus',
+    );
+    final problem = zeroTierRecoveryReadiness(status ?? {});
+    if (problem != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(problem)));
+      }
+      throw StateError(problem);
+    }
     if (!mounted || _anyMacroRunning) return false;
     TerminalMacro? recovery;
     for (final macro in _macros) {
       if (macro.name == zeroTierRecoveryMacroName && macro.isDeviceMacro) {
-        recovery = macro;
+        recovery = repairZeroTierRecoveryMacro(macro);
         break;
       }
     }
     if (recovery == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ZeroTier recovery macro is unavailable')),
-      );
-      return false;
+      throw StateError('ZeroTier recovery macro is unavailable. Sync Macros while online first.');
     }
     return _runDeviceMacro(recovery);
   }

@@ -1137,8 +1137,7 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     final recover = widget.onZeroTierRecovery;
     if (recover == null || _repairingNetwork) return;
     _repairingNetwork = true;
-    await _disconnect();
-    if (mounted) setState(() => _status = 'Restarting ZeroTier...');
+    if (mounted) setState(() => _status = 'Checking ZeroTier recovery...');
     await _syncBackgroundSession();
     var repaired = false;
     try {
@@ -1150,9 +1149,14 @@ class _SshTerminalTabState extends State<SshTerminalTab>
     }
     if (!mounted) return;
     if (repaired) {
+      await _disconnect();
       await _connect();
     } else {
-      setState(() => _status ??= 'ZeroTier restart failed; tap Reconnect.');
+      setState(() {
+        if (_status == 'Checking ZeroTier recovery...') {
+          _status = 'ZeroTier recovery stopped. See the macro failure details.';
+        }
+      });
       await _syncBackgroundSession();
     }
   }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:dartssh2/dartssh2.dart';
 import 'terminal_watch.dart';
 import 'terminal_host_route.dart';
+import 'local_terminal_review.dart';
 
 TerminalHostRouter sshHostRouter(
   SSHClient client, {
@@ -26,10 +27,7 @@ TmuxWatchTransport sshWatchTransport(
   final host = router ?? sshHostRouter(client, isCurrent: isCurrent);
   return TmuxWatchTransport(
     (command) => host.execute(command),
-    reviewer: (text) => host.execute(
-      'python3 dev-ota/server/terminal_review.py',
-      input: jsonEncode({'text': text}),
-    ),
+    reviewer: reviewTerminalLocally,
   );
 }
 

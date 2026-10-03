@@ -237,10 +237,10 @@ class _TerminalWatchScreenState extends State<TerminalWatchScreen> {
       const SizedBox(height: 16),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('Check conclusions with the home model'),
+        title: const Text('Check conclusions locally on this phone'),
         subtitle: const Text(
           'Reported success, needs attention, or uncertain. '
-          'Checks the final message, not the underlying work. Listen uses Android speech.',
+          'OCR and conservative text rules check the bottom terminal snapshot. No cloud or home model.',
         ),
         value: review,
         onChanged: (value) => setState(() => review = value),
